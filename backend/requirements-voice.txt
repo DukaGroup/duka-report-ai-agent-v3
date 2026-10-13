@@ -1,0 +1,4 @@
+-c constraints.txt
+faster-whisper==1.2.1
+# PyAV 19 removed metadata_errors, which this Whisper release still passes.
+av==15.1.0

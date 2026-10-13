@@ -1,0 +1,6 @@
+{
+  "name": "Connection check",
+  "description": "Connectivity check with no business data. Deploy business query scripts before requesting business reports.",
+  "parameters_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "columns_schema": [{"name": "connected", "type": "integer"}]
+}

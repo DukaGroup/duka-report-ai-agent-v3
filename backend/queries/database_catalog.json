@@ -1,0 +1,6 @@
+{
+  "name": "Database table and column catalog",
+  "description": "Discover accessible tables/views, column types, and nullability. Contains schema metadata. Grant only to users allowed to inspect this schema.",
+  "parameters_schema": {"type": "object", "properties": {"schema_name": {"type": "string", "minLength": 1, "maxLength": 128}}, "required": ["schema_name"], "additionalProperties": false},
+  "columns_schema": [{"name": "table_name", "type": "string"}, {"name": "column_name", "type": "string"}, {"name": "data_type", "type": "string"}]
+}

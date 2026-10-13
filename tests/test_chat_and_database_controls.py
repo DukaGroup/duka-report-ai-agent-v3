@@ -1,0 +1,124 @@
+import asyncio
+import json
+import time
+
+from conftest import HEADERS
+from test_application import create_member, sign_in_member
+
+
+def test_delete_conversation_is_owned_and_cascades_messages_only(client, admin):
+    create_member(client)
+    chat = client.post("/api/conversations", json={}, headers=HEADERS).json()
+    db = client.app.state.db
+    db.execute("INSERT INTO messages VALUES('m',?,'user','hello','completed','now')", (chat["id"],))
+    db.execute(
+        "INSERT INTO reports(id,user_id,conversation_id,template_id,title,instructions,status,created_at) VALUES('r',?,?,'executive','Keep me','','blocked','now')",
+        (admin["id"], chat["id"]),
+    )
+    token = client.cookies.get("duka_session")
+    sign_in_member(client)
+    assert client.delete(f"/api/conversations/{chat['id']}", headers=HEADERS).status_code == 404
+    client.cookies.set("duka_session", token)
+    assert client.delete(f"/api/conversations/{chat['id']}").status_code == 403
+    assert client.delete(f"/api/conversations/{chat['id']}", headers=HEADERS).status_code == 200
+    assert client.get(f"/api/conversations/{chat['id']}").status_code == 404
+    assert not db.one("SELECT * FROM messages WHERE id='m'")
+    assert db.one("SELECT * FROM reports WHERE id='r'")["conversation_id"] is None
+
+
+def test_deletion_rejects_active_conversation(client, admin):
+    chat = client.post("/api/conversations", json={}, headers=HEADERS).json()
+    lock = asyncio.Lock()
+    client.app.state.locks[chat["id"]] = lock
+    client.portal.call(lock.acquire)
+    try:
+        assert client.delete(f"/api/conversations/{chat['id']}", headers=HEADERS).status_code == 409
+    finally:
+        client.portal.call(asyncio.sleep, 0)
+        lock.release()
+
+
+def test_sqlserver_missing_configuration_status_and_dataset_enable_controls(client, admin):
+    source = client.post(
+        "/api/admin/sources", json={"name": "SQL reporting", "kind": "sqlserver"}, headers=HEADERS
+    ).json()
+    assert source["status"] == "not_configured"
+    checked = client.post(f"/api/admin/sources/{source['id']}/check", headers=HEADERS).json()
+    assert "SQLSERVER_HOST" in checked["last_error"] and checked["checked_at"]
+    config = client.get("/api/admin/database").json()
+    assert all(isinstance(v, bool) for v in config["environment"].values())
+    assert config["environment"]["SQLSERVER_PASSWORD"] is False
+    assert {q["query_key"] for q in config["queries"]} == {"connection_check", "database_catalog"}
+    dataset = client.post(
+        "/api/admin/datasets",
+        json={"name": "Schema", "source_id": source["id"], "query_key": "database_catalog"},
+        headers=HEADERS,
+    ).json()
+    assert "schema_name" in json.loads(dataset["parameters_schema_json"])["required"]
+    response = client.patch(f"/api/admin/datasets/{dataset['id']}", json={"active": True}, headers=HEADERS)
+    assert response.status_code == 200 and response.json()["enabled"] == 1
+    unknown = client.post(
+        "/api/admin/datasets",
+        json={"name": "Unknown", "source_id": source["id"], "query_key": "missing"},
+        headers=HEADERS,
+    ).json()
+    assert (
+        client.patch(f"/api/admin/datasets/{unknown['id']}", json={"active": True}, headers=HEADERS).status_code == 422
+    )
+    create_member(client)
+    sign_in_member(client)
+    assert client.get("/api/admin/database").status_code == 403
+    assert client.post(f"/api/admin/sources/{source['id']}/check", headers=HEADERS).status_code == 403
+
+
+def test_model_tools_can_read_and_save_reports_only_from_granted_datasets(client, admin):
+    class FixtureConnector:
+        async def fetch(self, key, parameters):
+            return [{"revenue": 42}]
+
+    source = client.post("/api/admin/sources", json={"name": "Fixture", "kind": "sqlserver"}, headers=HEADERS).json()
+    dataset = client.post(
+        "/api/admin/datasets",
+        json={"name": "Fixture sales", "source_id": source["id"], "query_key": "connection_check"},
+        headers=HEADERS,
+    ).json()
+    client.patch(f"/api/admin/datasets/{dataset['id']}", json={"active": True}, headers=HEADERS)
+    client.app.state.connectors.register(source["id"], FixtureConnector())
+    manager = client.app.state.manager
+
+    def tool(name, arguments):
+        response = client.portal.call(
+            manager.tool_call, admin["id"], {"namespace": "duka_reporting", "tool": name, "arguments": arguments}
+        )
+        return json.loads(response["contentItems"][0]["text"])
+
+    args = {
+        "dataset_id": dataset["id"],
+        "parameters": {},
+        "title": "Tool report",
+        "instructions": "Summarize",
+        "template_id": "sales",
+    }
+    assert "error" in tool("fetch_dataset", {"dataset_id": dataset["id"], "parameters": {}})
+    assert "error" in tool("create_report", args)
+    client.put(f"/api/admin/datasets/{dataset['id']}/grants/{admin['id']}", headers=HEADERS)
+    listing = tool("list_datasets", {})["datasets"][0]
+    assert "parameters_schema" in listing and "columns_schema" in listing
+    assert "query_key" not in listing and "password" not in json.dumps(listing)
+    assert tool("fetch_dataset", {"dataset_id": dataset["id"], "parameters": {}})["rows"] == [{"revenue": 42}]
+    client.post("/api/subscription/login", headers=HEADERS)
+    for _ in range(100):
+        if client.get("/api/subscription").json()["connected"]:
+            break
+        time.sleep(0.01)
+    created = tool("create_report", args)
+    assert created["status"] == "queued"
+    for _ in range(100):
+        report = client.get(f"/api/reports/{created['report_id']}").json()
+        if report["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.01)
+    assert report["status"] == "completed"
+    snapshot = client.app.state.db.one("SELECT rows_json FROM dataset_snapshots WHERE id=?", (report["snapshot_id"],))
+    assert json.loads(snapshot["rows_json"]) == [{"revenue": 42}]
+    assert "42" in client.get(f"/api/reports/{created['report_id']}/export/csv").text

@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    environment:
+      DATA_DIR: /data
+      FRONTEND_DIR: /app/frontend
+      ENV_FILE: /run/duka.env
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      SESSION_HOURS: ${SESSION_HOURS:-24}
+      VOICE_ENABLED: ${VOICE_ENABLED:-true}
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
+      MAX_CODEX_RUNTIMES: ${MAX_CODEX_RUNTIMES:-8}
+      TURN_TIMEOUT_SECONDS: ${TURN_TIMEOUT_SECONDS:-300}
+      SQLSERVER_HOST: ${SQLSERVER_HOST:-}
+      SQLSERVER_PORT: ${SQLSERVER_PORT:-1433}
+      SQLSERVER_USER: ${SQLSERVER_USER:-}
+      SQLSERVER_PASSWORD: ${SQLSERVER_PASSWORD:-}
+      SQLSERVER_DATABASE: ${SQLSERVER_DATABASE:-}
+      SQLSERVER_ENCRYPTION: ${SQLSERVER_ENCRYPTION:-require}
+      SQLSERVER_TIMEOUT_SECONDS: ${SQLSERVER_TIMEOUT_SECONDS:-15}
+    volumes:
+      - workspace-data:/data
+      - ./backend/queries:/app/queries:ro
+      - type: bind
+        source: ./.env
+        target: /run/duka.env
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+volumes:
+  workspace-data:
