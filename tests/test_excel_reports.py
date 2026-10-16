@@ -1,3 +1,4 @@
+from app.provider import CodexRuntime
 import asyncio
 import io
 import json
@@ -194,7 +195,6 @@ def test_multi_analysis_report_links_to_chat_and_excel_is_owner_only(client, adm
 
 def test_report_locks_chat_until_explicit_interrupt_and_cancels_job(client, admin, monkeypatch):
     subscribe(client)
-    runtime = client.app.state.manager.for_user(admin["id"])
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -203,7 +203,7 @@ def test_report_locks_chat_until_explicit_interrupt_and_cancels_job(client, admi
         await release.wait()
         yield {"type": "done", "status": "completed", "text": "unused"}
 
-    monkeypatch.setattr(runtime, "stream", held_stream)
+    monkeypatch.setattr(CodexRuntime, "stream", held_stream)
     conversation = client.post("/api/conversations", headers=HEADERS, json={}).json()
     created = client.post(
         "/api/reports",
@@ -229,10 +229,10 @@ def test_extra_analyses_require_authorized_database_source(client, admin):
     assert client.post("/api/reports", headers=HEADERS, json=request.model_dump()).status_code == 422
 
 
-def test_background_additional_analysis_cannot_save_truncated_preview(client, admin):
+def test_incomplete_export_cannot_publish_a_partial_workbook(client, admin):
     source, connector = fixture_source(client)
     subscribe(client)
-    original = connector.query
+    original = connector.report_query
 
     async def query(query):
         result = await original(query)
@@ -240,7 +240,7 @@ def test_background_additional_analysis_cannot_save_truncated_preview(client, ad
             result["truncated"] = True
         return result
 
-    connector.query = query
+    connector.report_query = query
     result = call_tool(
         client,
         admin,
@@ -257,17 +257,17 @@ def test_background_additional_analysis_cannot_save_truncated_preview(client, ad
     assert client.get(f"/api/reports/{report['id']}/export/xlsx").status_code == 409
 
 
-def test_failed_optional_view_keeps_good_analyses_and_discloses_missing_data(client, admin):
+def test_unavailable_requested_view_stops_report_instead_of_omitting_it(client, admin):
     source, connector = fixture_source(client)
     subscribe(client)
-    original = connector.query
+    original = connector.report_query
 
     async def query(query):
         if query["tables"][0]["name"] == "BrokenView":
             raise DatabaseUnavailable("A referenced object is unavailable.", category="query", code=208)
         return await original(query)
 
-    connector.query = query
+    connector.report_query = query
     broken = query_plan(tables=[{"schema": "dbo", "name": "BrokenView", "alias": "s"}])
     result = call_tool(
         client,
@@ -285,27 +285,21 @@ def test_failed_optional_view_keeps_good_analyses_and_discloses_missing_data(cli
     )
     assert "error" not in result, result
     report = wait_report(client, result["report_id"])
-    assert report["status"] == "completed", report
-    assert any("POS summary" in note and "208" in note for note in report["document"]["limitations"])
-    snapshot = client.app.state.db.one("SELECT * FROM dataset_snapshots WHERE id=?", (report["snapshot_id"],))
-    provenance = json.loads(snapshot["provenance_json"])
-    assert len(provenance["analyses"]) == 1 and len(provenance["analysis_errors"]) == 1
-    download = client.get(f"/api/reports/{report['id']}/export/xlsx")
-    assert download.status_code == 200
-    assert b"POS summary" in zipfile.ZipFile(io.BytesIO(download.content)).read("xl/sharedStrings.xml")
+    assert report["status"] == "failed"
+    assert client.get(f"/api/reports/{report['id']}/export/xlsx").status_code == 409
 
 
 def test_required_or_connection_failure_never_becomes_optional_missing_data(client, admin):
     source, connector = fixture_source(client)
     subscribe(client)
-    original = connector.query
+    original = connector.report_query
 
     async def query(query):
         if query["tables"][0]["name"] == "BrokenView":
             raise DatabaseUnavailable("An object is unavailable.", category="query", code=208)
         return await original(query)
 
-    connector.query = query
+    connector.report_query = query
     broken = query_plan(tables=[{"name": "BrokenView", "alias": "s"}])
     result = call_tool(
         client,

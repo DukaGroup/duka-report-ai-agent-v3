@@ -4,6 +4,8 @@
 import json
 import os
 import sys
+import time
+import threading
 import tomllib
 from pathlib import Path
 
@@ -13,8 +15,11 @@ account_path = Path(os.environ["CODEX_HOME"]) / "fixture-account.json"
 config = tomllib.loads((account_path.parent / "config.toml").read_text())
 assert "sandbox_mode" not in config
 assert config["default_permissions"] == "duka_read_only"
+assert config["project_doc_max_bytes"] == 0
 profile = config["permissions"]["duka_read_only"]
-assert profile["filesystem"] == {str(Path.cwd()): "read"}
+assert len(profile["filesystem"]) == 1
+root, access = next(iter(profile["filesystem"].items()))
+assert access == "read" and Path.cwd().is_relative_to(Path(root))
 assert profile["network"]["enabled"] is False
 threads = set()
 turn = 0
@@ -32,6 +37,9 @@ for line in sys.stdin:
         continue
     result = {}
     if method == "account/read":
+        if (account_path.parent / "network-offline").exists():
+            emit({"id": identifier, "error": {"code": -32603, "message": "workspace routing discovery failed"}})
+            continue
         result = {
             "account": json.loads(account_path.read_text()) if account_path.exists() else None,
             "requiresOpenaiAuth": True,
@@ -57,11 +65,23 @@ for line in sys.stdin:
         account_path.unlink(missing_ok=True)
     elif method == "model/list":
         result = {
-            "data": [{"id": "fixture", "model": "fixture", "displayName": "Test fixture", "isDefault": True}],
+            "data": [{"id": "fixture", "model": "fixture", "displayName": "Test fixture", "isDefault": True, "supportedReasoningEfforts": [{"reasoningEffort": e, "description": e} for e in ["low", "medium", "high", "xhigh"]], "defaultReasoningEffort": "medium"}],
             "nextCursor": None,
         }
     elif method in ("thread/start", "thread/resume"):
-        thread_id = params.get("threadId", f"thread-{len(threads)}")
+        (account_path.parent / "last-thread-input.json").write_text(json.dumps(params))
+        thread_id = params.get("threadId", f"thread-{os.getpid()}-{len(threads)}")
+        if method == "thread/resume" and thread_id == "sandbox-blocked":
+            emit(
+                {
+                    "id": identifier,
+                    "error": {
+                        "code": -32603,
+                        "message": "error resuming thread: failed to load AGENTS.md instructions for environment `local`: fs sandbox helper failed with status exit status: 1: bwrap: No permissions to create a new namespace",
+                    },
+                }
+            )
+            continue
         if method == "thread/resume" and thread_id == "missing-rollout":
             emit(
                 {
@@ -73,9 +93,15 @@ for line in sys.stdin:
         assert params["permissions"] == "duka_read_only"
         assert "sandbox" not in params
         assert params["config"]["features.shell_tool"] is False
+        assert params["config"]["project_doc_max_bytes"] == 0
         threads.add(thread_id)
         result = {"thread": {"id": thread_id}}
     elif method == "turn/start":
+        if params["input"][-1]["text"] == "Hold this process":
+            (account_path.parent / "process-held").touch()
+            while (account_path.parent / "hold-process").exists():
+                time.sleep(0.01)
+        (account_path.parent / "last-turn-input.json").write_text(json.dumps(params["input"]))
         turn += 1
         turn_id, thread_id = f"turn-{turn}", params["threadId"]
         assert params["permissions"] == "duka_read_only"
@@ -86,18 +112,84 @@ for line in sys.stdin:
             held_turns[thread_id] = turn_id
             continue
         text = "Protocol fixture reply."
-        content = params["input"][0]["text"]
+        content = params["input"][-1]["text"]
+        slow = account_path.parent / "long-investigation.json"
+        if content.startswith("Long investigation fixture") and slow.exists():
+            delay = json.loads(slow.read_text())["seconds"]
+            held_turns[thread_id] = turn_id
+
+            def finish_long_response(tid=thread_id, turnid=turn_id):
+                if held_turns.get(tid) != turnid:
+                    return
+                held_turns.pop(tid)
+                answer = "Investigation completed automatically after the long wait."
+                emit({"method": "item/completed", "params": {"threadId": tid, "turnId": turnid,
+                      "item": {"id": "assistant", "type": "agentMessage", "text": answer}}})
+                emit({"method": "turn/completed", "params": {"threadId": tid,
+                      "turn": {"id": turnid, "status": "completed", "error": None}}})
+
+            timer = threading.Timer(delay, finish_long_response)
+            timer.daemon = True
+            timer.start()
+            continue
         if content.startswith('{"previous_messages":'):
             history = json.loads(content)
             text = "Recovered context: " + history["previous_messages"][0]["content"]
-        if params.get("outputSchema"):
+        if (params.get("outputSchema") or {}).get("properties", {}).keys() == {"python_script"}:
+            text = json.dumps({"python_script": "def build(report):\n    report.default_layout()\n"})
+        elif params.get("outputSchema"):
+            payload = json.loads(content)
+            request_text = (payload.get("user_request") or payload.get("instructions") or "").lower()
+            albanian = (
+                any(w in request_text for w in ("më ", "për ", "raportin", "shitjeve"))
+                and "reply in english" not in request_text
+            )
+            datasets = [payload["provenance"]] + payload.get("additional_analyses", [])
+            translated = {
+                "revenue": "Të ardhurat",
+                "cost": "Kosto",
+                "month": "Muaji",
+                "period": "Periudha",
+                "text": "Teksti",
+                "segment": "Pjesa",
+            }
+            workbook = {
+                "python_script": "def build(report):\n    report.default_layout()\n",
+                "language": "sq" if albanian else "en",
+                "labels": [],
+                "analyses": [
+                    {
+                        "index": i,
+                        "name": f"Analiza {i + 1}" if albanian else f"Analysis {i + 1}",
+                        "columns": [
+                            {
+                                "column": c["name"],
+                                "label": translated.get(c["name"], c["name"]) if albanian else c["name"],
+                            }
+                            for c in d.get("columns", [])
+                        ],
+                        "column_order": [],
+                        "scope": "Të gjithë rreshtat e përzgjedhur" if albanian else "All selected rows",
+                        "query_explanation": "Filtrat e kërkesës së raportit" if albanian else "Report request filters",
+                    }
+                    for i, d in enumerate(datasets)
+                ],
+            }
             text = json.dumps(
                 {
-                    "title": "Fixture report",
-                    "summary": "Based on provided rows.",
-                    "sections": [{"heading": "Findings", "body": "The supplied data was used."}],
+                    "title": "Raport testimi" if albanian else "Fixture report",
+                    "summary": "Nga të dhënat e ofruara." if albanian else "Based on provided rows.",
+                    "sections": [
+                        {
+                            "heading": "Gjetjet" if albanian else "Findings",
+                            "body": "U përdorën të dhënat e ofruara." if albanian else "The supplied data was used.",
+                        }
+                    ],
                     "metrics": [],
-                    "limitations": ["Fixture output; not live inference."],
+                    "limitations": [
+                        "Dalje testimi; nuk është analizë reale." if albanian else "Fixture output; not live inference."
+                    ],
+                    "workbook": workbook,
                 }
             )
         # A stray event from another turn must not leak into this stream.

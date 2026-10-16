@@ -1,0 +1,34 @@
+{
+  "test_environment": "Isolated real frontend with protocol fixtures; no live model inference or vendor login",
+  "configured_response_limit_seconds": 0,
+  "requests": [
+    {
+      "provider": "chatgpt",
+      "user_messages": 1,
+      "assistant_status": "completed",
+      "elapsed_seconds": 310.027,
+      "test": "automatic completion"
+    },
+    {
+      "provider": "claude",
+      "user_messages": 1,
+      "assistant_status": "completed",
+      "elapsed_seconds": 310.01,
+      "test": "automatic completion"
+    },
+    {
+      "provider": "claude",
+      "user_messages": 1,
+      "assistant_status": "interrupted",
+      "elapsed_seconds": 5.452,
+      "test": "stop"
+    },
+    {
+      "provider": "chatgpt",
+      "user_messages": 1,
+      "assistant_status": "interrupted",
+      "elapsed_seconds": 2.624,
+      "test": "stop"
+    }
+  ]
+}

@@ -2,16 +2,19 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "member";
+  role: "devs" | "president" | "manager";
   active: number;
   created_at: string;
 }
+export type Provider = "chatgpt" | "claude";
 export interface Login {
   loginId: string;
   status: string;
   verificationUrl?: string;
   userCode?: string;
   error?: string;
+  provider?: Provider;
+  requiresCode?: boolean;
 }
 export interface Subscription {
   connected: boolean;
@@ -19,26 +22,42 @@ export interface Subscription {
   error?: string;
   account?: { email?: string; planType?: string };
   login?: Login;
+  provider_id?: Provider;
 }
 export interface Model {
+  supported_reasoning_efforts?: string[];
+  default_reasoning_effort?: string | null;
   id: string;
   model: string;
   displayName: string;
   isDefault: boolean;
 }
 export interface Conversation {
+  reasoning_effort?: string | null;
   id: string;
   title: string;
   model: string | null;
   updated_at: string;
+  running?: boolean;
   message_count?: number;
   preview?: string | null;
 }
 export interface Message {
   id: string;
+  created_at: string;
   role: "user" | "assistant";
   content: string;
   status: string;
+  attachments?: Attachment[];
+}
+export interface Attachment {
+  id: string;
+  name: string;
+  size: number;
+  kind: string;
+  purpose: "analysis" | "template";
+  tables: { id: string; name: string; row_count: number }[];
+  format: Record<string, unknown>;
 }
 export interface Report {
   id: string;
@@ -75,6 +94,16 @@ export interface Source {
   configuration_origin?: "saved" | "environment";
   error_scope?: "query" | "connection";
   connection_fields?: Record<string, boolean>;
+  enabled?: number;
+  database_scope?: "all" | "default";
+  credential_storage?: string;
+  env_prefix?: string;
+  tls?: {
+    encrypt: boolean;
+    validate_certificate: boolean;
+    custom_ca: boolean;
+    server_name_configured: boolean;
+  };
 }
 export interface Dataset {
   id: string;

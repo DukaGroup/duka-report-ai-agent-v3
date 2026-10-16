@@ -124,6 +124,9 @@ class FixtureDatabase(SQLServerConnector):
     """Schema and query result fixture: no remote database, credentials or inference."""
 
     def __init__(self, settings, catalog, truncated=False):
+        from dataclasses import replace
+
+        settings = replace(settings, sqlserver_database=settings.sqlserver_database or "Fixture")
         super().__init__(settings, catalog)
         self.truncated = truncated
         self.calls = []
@@ -141,6 +144,11 @@ class FixtureDatabase(SQLServerConnector):
         self.calls.append((sql, parameters))
         return [{"revenue": "123.45"}] * (2 if self.truncated else 1)
 
+    def _run_full(self, sql, parameters):
+        assert sql.startswith("SELECT ") and "SELECT TOP" not in sql
+        self.calls.append((sql, parameters))
+        return [{"revenue": "123.45"}] * (2 if self.truncated else 1)
+
 
 def fixture_source(client, truncated=False):
     source = client.post(
@@ -153,10 +161,17 @@ def fixture_source(client, truncated=False):
 
 
 def call_tool(client, user, name, arguments):
+    params = {"namespace": "duka_reporting", "tool": name, "arguments": arguments}
+    if name in ("create_report", "create_database_report"):
+        # Real dynamic tool calls always carry the originating chat thread.
+        chat = client.post("/api/conversations", headers=HEADERS, json={}).json()
+        thread_id = "fixture-" + chat["id"]
+        client.app.state.db.execute("UPDATE conversations SET provider_thread_id=? WHERE id=?", (thread_id, chat["id"]))
+        params["threadId"] = thread_id
     response = client.portal.call(
         client.app.state.manager.tool_call,
         user["id"],
-        {"namespace": "duka_reporting", "tool": name, "arguments": arguments},
+        params,
     )
     return json.loads(response["contentItems"][0]["text"])
 
@@ -219,16 +234,25 @@ def test_source_grants_are_required_for_members_and_revocation_is_immediate(clie
     assert "error" in call_tool(client, member, "list_tables", {"source_id": source["id"]})
 
 
-def test_limited_preview_cannot_be_presented_as_complete_report(client, admin):
+def test_limited_preview_is_replaced_by_complete_report_export(client, admin):
     source, _ = fixture_source(client, truncated=True)
     plan = query_plan(limit=1)
     preview = call_tool(client, admin, "query_database", {"source_id": source["id"], "query": plan})
     assert preview["truncated"] and len(preview["rows"]) == 1
+    client.post("/api/subscription/login", headers=HEADERS)
+    for _ in range(100):
+        if client.get("/api/subscription").json()["connected"]:
+            break
+        time.sleep(0.01)
     report = call_tool(
         client,
         admin,
         "create_database_report",
         {"source_id": source["id"], "query": plan, "title": "Limited", "instructions": "", "template_id": "sales"},
     )
-    assert "row limit" in report["error"]
-    assert client.get("/api/reports").json() == []
+    assert report["status"] == "queued" and "error" not in report
+    snapshot = client.app.state.db.one(
+        "SELECT * FROM dataset_snapshots WHERE id=(SELECT snapshot_id FROM reports WHERE id=?)", (report["report_id"],)
+    )
+    assert len(json.loads(snapshot["rows_json"])) == 2
+    assert len(client.get("/api/reports").json()) == 1

@@ -8,6 +8,7 @@ import asyncio
 import json
 import math
 import re
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from dataclasses import replace
@@ -113,13 +114,15 @@ def json_value(value):
 
 
 class SQLServerConnector:
+    dialect = "sqlserver"
+    error_message = staticmethod(safe_database_error)
     def __init__(self, settings, catalog, driver=None):
         self.settings, self.catalog, self.driver = settings, catalog, driver
 
     def missing(self):
         return [
             f"SQLSERVER_{key.upper()}"
-            for key in ("host", "port", "user", "password", "database")
+            for key in ("host", "port", "user", "password")
             if not getattr(self.settings, f"sqlserver_{key}")
         ]
 
@@ -144,7 +147,7 @@ class SQLServerConnector:
             port=str(port),
             user=self.settings.sqlserver_user,
             password=self.settings.sqlserver_password,
-            database=self.settings.sqlserver_database,
+            database=self.settings.sqlserver_database or "master",
             as_dict=True,
             login_timeout=self.settings.sqlserver_timeout,
             timeout=self.settings.sqlserver_timeout,
@@ -156,31 +159,57 @@ class SQLServerConnector:
         )
 
     def _run(self, sql, parameters, max_rows=500):
+        return self._execute(sql, parameters, max_rows, 100000)
+
+    def _run_full(self, sql, parameters):
+        return self._execute(sql, parameters, self.settings.report_max_rows, self.settings.report_max_bytes)
+
+    def _execute(self, sql, parameters, max_rows, max_bytes):
         connection = None
+        traffic = getattr(self, "traffic", None)
+        correlation, started, outcome, row_count, code = None, time.perf_counter(), "error", None, None
+        failure = None
+        if traffic:
+            from .db import uid
+
+            correlation = uid()
+            traffic.record("backend-database", "sql/select", "started", correlation_id=correlation,
+                           size=len(sql.encode()), detail={"bound_parameters": len(parameters)},payload={"sql":sql,"parameters":parameters})
         try:
             connection = self._connect()
             cursor = connection.cursor()
             cursor.execute(sql, parameters)
-            rows = cursor.fetchmany(max_rows + 1)
-            if len(rows) > max_rows:
-                raise DatabaseUnavailable(
-                    "The query returned more than 500 rows. Narrow the parameters or use an aggregate query; no partial report was generated."
-                )
-            result = [{key: json_value(value) for key, value in row.items()} for row in rows]
-            if any(len(row) > 100 or any(len(key) > 100 for key in row) for row in result):
-                raise DatabaseUnavailable(
-                    "The query returned too many columns or long column names. Select at most 100 columns with short aliases."
-                )
-            if len(json.dumps(result).encode()) > 100000:
-                raise DatabaseUnavailable(
-                    "The query returned more than 100 KB. Narrow the parameters or use an aggregate query."
-                )
+            result, size = [], 2
+            while batch := cursor.fetchmany(1000):
+                if len(result) + len(batch) > max_rows:
+                    raise DatabaseUnavailable(
+                        "The complete result exceeds the configured row limit. Ask an administrator to increase it; no partial report was generated.",
+                        "limit",
+                    )
+                for row in batch:
+                    converted = {key: json_value(value) for key, value in row.items()}
+                    if len(converted) > 100 or any(len(key) > 100 for key in converted):
+                        raise DatabaseUnavailable(
+                            "The query returned too many columns or long column names. Select at most 100 columns with short aliases."
+                        )
+                    # Count compact UTF-8 JSON, matching immutable snapshot storage.
+                    # Escaped unicode/repeated formatting must not consume capacity.
+                    size += len(json.dumps(converted, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode()) + 1
+                    if size > max_bytes:
+                        raise DatabaseUnavailable(
+                            "The complete result exceeds the configured size limit. Ask an administrator to increase it; no partial report was generated.",
+                            "limit",
+                        )
+                    result.append(converted)
+            outcome, row_count = "ok", len(result)
             return result
-        except SourceNotConfigured:
+        except SourceNotConfigured as exc:
+            failure = str(exc)
             raise
         except Exception as exc:
             code = exc.args[0] if exc.args and isinstance(exc.args[0], int) else None
-            raise DatabaseUnavailable(safe_database_error(exc), "query" if connection else "connection", code) from None
+            failure = self.error_message(exc)
+            raise DatabaseUnavailable(failure, "query" if connection else "connection", code) from None
         finally:
             if connection:
                 try:
@@ -191,20 +220,95 @@ class SQLServerConnector:
                     connection.close()
                 except Exception:
                     pass
+            if traffic:
+                traffic.record("database-backend", "sql/select", outcome, correlation_id=correlation,
+                               duration_ms=round((time.perf_counter()-started)*1000, 2),
+                               detail={"row_count": row_count, "database_error_code": code},
+                               payload={"rows":result} if outcome=='ok' else {"error":failure,"database_error_code":code})
 
     async def check(self):
-        await asyncio.to_thread(self._run, "SELECT 1 AS connected", {})
+        if self.settings.sqlserver_database:
+            await asyncio.to_thread(self._run, "SELECT 1 AS connected", {})
+        else:
+            await self.databases(limit=1)
+
+    def _catalog_run(self, sql, parameters):
+        # Discover from master, so an offline/default business database cannot
+        # block discovery of the other databases. No system-data query is exposed.
+        catalog = SQLServerConnector(replace(self.settings, sqlserver_database="master"), self.catalog, self.driver)
+        catalog.traffic = getattr(self, "traffic", None)
+        try:
+            return catalog._run(sql, parameters)
+        except DatabaseUnavailable:
+            # Some restricted logins can inspect the catalog only via their DB.
+            return self._run(sql, parameters)
+
+    async def databases(self, offset=0, limit=100):
+        """Inventory online business databases accessible to this reporting login."""
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid database catalog page. Use offset >= 0 and limit 1–200.")
+        rows = await asyncio.to_thread(
+            self._catalog_run,
+            """SELECT name, CASE WHEN name=DB_NAME() THEN 1 ELSE 0 END AS is_default
+            FROM sys.databases WHERE database_id>4 AND state=0 AND HAS_DBACCESS(name)=1
+            ORDER BY name OFFSET %(offset)s ROWS FETCH NEXT %(size)s ROWS ONLY""",
+            {"offset": offset, "size": limit + 1},
+        )
+        for row in rows:
+            row["is_default"] = int(row["name"] == self.settings.sqlserver_database)
+        return {"databases": rows[:limit], "next_offset": offset + limit if len(rows) > limit else None}
+
+    async def in_database(self, database):
+        # Names are bound catalog values and passed to the driver, never SQL fragments.
+        # Use a separate connector: concurrent chats cannot mutate each other's target.
+        if not isinstance(database, str) or not 1 <= len(database) <= 128 or "\x00" in database:
+            raise ValueError("Choose a database name returned by list_databases.")
+        if database == self.settings.sqlserver_database:
+            return self
+        allowed = await asyncio.to_thread(
+            self._catalog_run,
+            """SELECT name FROM sys.databases WHERE name=%(database)s
+            AND database_id>4 AND state=0 AND HAS_DBACCESS(name)=1""",
+            {"database": database},
+        )
+        if not allowed:
+            raise SourceNotConfigured("Database is unavailable or the reporting login cannot access it.")
+        connector = SQLServerConnector(replace(self.settings, sqlserver_database=allowed[0]["name"]), self.catalog, self.driver)
+        connector.traffic = getattr(self, "traffic", None)
+        return connector
 
     async def fetch(self, query_key, parameters):
+        if not self.settings.sqlserver_database:
+            raise SourceNotConfigured("Select a database from discover_databases before reading business data.")
         manifest, sql = self.catalog.load(query_key)
         Draft202012Validator(manifest["parameters_schema"]).validate(parameters)
         return await asyncio.to_thread(self._run, sql, parameters)
 
-    async def tables(self, offset=0, limit=100, kind="all", name_contains=""):
+    async def fetch_report(self, query_key, parameters):
+        if not self.settings.sqlserver_database:
+            raise SourceNotConfigured("Select a database from discover_databases before reading business data.")
+        manifest, sql = self.catalog.load(query_key)
+        Draft202012Validator(manifest["parameters_schema"]).validate(parameters)
+        return await asyncio.to_thread(self._run_full, sql, parameters)
+
+    async def schemas(self, offset=0, limit=100):
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Invalid catalog page. Use a nonnegative offset and limit 1–200.")
+        rows = await asyncio.to_thread(self._run, """SELECT TABLE_SCHEMA AS schema_name,
+            SUM(CASE WHEN TABLE_TYPE='BASE TABLE' THEN 1 ELSE 0 END) AS table_count,
+            SUM(CASE WHEN TABLE_TYPE='VIEW' THEN 1 ELSE 0 END) AS view_count
+            FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA NOT IN ('sys','INFORMATION_SCHEMA')
+            GROUP BY TABLE_SCHEMA ORDER BY TABLE_SCHEMA
+            OFFSET %(offset)s ROWS FETCH NEXT %(size)s ROWS ONLY""", {"offset":offset,"size":limit+1})
+        return {"schemas":rows[:limit], "next_offset":offset+limit if len(rows)>limit else None}
+
+    async def tables(self, offset=0, limit=100, kind="all", name_contains="", schema=None):
         if not isinstance(offset, int) or offset < 0 or not isinstance(limit, int) or not 1 <= limit <= 200:
             raise ValueError("Invalid catalog page. Use a nonnegative offset and limit 1–200.")
         if kind not in ("all", "table", "view") or not isinstance(name_contains, str) or len(name_contains) > 128:
             raise ValueError("Invalid table filter. Choose all/table/view and a short name fragment.")
+        if schema is not None and (not isinstance(schema, str) or not 1 <= len(schema) <= 128):
+            raise ValueError("Choose a schema name returned by list_schemas.")
         predicates, params = [], {"offset": offset, "size": limit + 1}
         if kind != "all":
             predicates.append("TABLE_TYPE=%(kind)s")
@@ -212,6 +316,9 @@ class SQLServerConnector:
         if name_contains:
             predicates.append("TABLE_NAME LIKE %(name)s")
             params["name"] = "%" + name_contains.replace("[", "[[]").replace("%", "[%]").replace("_", "[_]") + "%"
+        if schema is not None:
+            predicates.append("TABLE_SCHEMA=%(schema)s")
+            params["schema"] = schema
         where = " WHERE " + " AND ".join(predicates) if predicates else ""
         rows = await asyncio.to_thread(
             self._run,
@@ -265,7 +372,7 @@ class SQLServerConnector:
     async def query(self, query):
         query = DatabaseQuery.model_validate(query)
         descriptions = {table.alias: await self.describe(table.schema_name, table.name) for table in query.tables}
-        sql, params, columns = compile_select(query, descriptions)
+        sql, params, columns = compile_select(query, descriptions, dialect=self.dialect)
         rows = await asyncio.to_thread(self._run, sql, params, 501)
         truncated = len(rows) > query.limit
         return {
@@ -279,14 +386,62 @@ class SQLServerConnector:
             else "All matching rows within the result limit.",
         }
 
+    async def report_query(self, query):
+        """One cursor reads the entire filtered/grouped result; no TOP or OFFSET.
+
+        Batching limits fetch memory without changing query membership or risking
+        duplicate/missing rows from offset pagination on a changing database.
+        """
+        plan = DatabaseQuery.model_validate(query)
+        descriptions = {table.alias: await self.describe(table.schema_name, table.name) for table in plan.tables}
+        sql, params, columns = compile_select(plan, descriptions, complete=True, dialect=self.dialect)
+        rows = await asyncio.to_thread(self._run_full, sql, params)
+        return {
+            "rows": rows,
+            "columns": columns,
+            "row_count": len(rows),
+            "truncated": False,
+            "query": plan.model_dump(by_alias=True, exclude={"limit"}),
+            "scope": "All matching result rows; the chat preview limit does not apply to this Excel export.",
+        }
+
+
+    async def sap_context(self, schema):
+        from .sap_context import inspect_context
+        return await inspect_context(self, schema)
+
+    async def balance_reconciliation(self, options):
+        raise SourceNotConfigured(
+            "Fixed backend accounting calculators are retired. Use model-authored calculate_data code over authorized queries."
+        )
+
+    async def sales_catalog(self, company=None):
+        from .sales_discovery import discover_sales
+
+        return await discover_sales(self, company)
+
 
 class ConnectorRegistry:
+    @staticmethod
+    def connector_class(kind):
+        if kind == "saphana":
+            from .hana import HanaConnector
+            return HanaConnector
+        return SQLServerConnector
+
     def __init__(self, settings=None, db=None):
         self.connectors: dict[str, ReportConnector] = {}
         self.db, self.settings = db, settings
         self.secrets = SourceSecrets(settings, db) if db and settings else None
         self.catalog = QueryCatalog(settings.query_dir) if settings else None
         if db and settings:
+            for saved in db.all("SELECT source_id FROM source_credentials WHERE ciphertext<>'env'"):
+                try:
+                    self.secrets.load(saved["source_id"])
+                except SecretsUnavailable:
+                    # The owning source reports its recovery error below; other
+                    # configured sources can still be used independently.
+                    pass
             for source in db.all("SELECT * FROM data_sources"):
                 self.attach(source)
 
@@ -294,28 +449,44 @@ class ConnectorRegistry:
         self.connectors[source_id] = connector
 
     def resolve_connector(self, source_id):
+        if self.db:
+            source = self.db.one("SELECT enabled FROM data_sources WHERE id=?", (source_id,))
+            if not source or not source["enabled"]:
+                self.connectors.pop(source_id, None)
+                raise SourceNotConfigured("This connection is disconnected or has been removed. Ask an administrator to reconnect it.")
         connector = self.connectors.get(source_id)
-        if type(connector) is SQLServerConnector:
+        if type(connector) in (SQLServerConnector, self.connector_class("saphana")):
             effective = self.source_settings(source_id)
-            fields = ("host", "port", "user", "password", "database", "encryption", "timeout")
+            prefix = "hana_" if connector.dialect == "hana" else "sqlserver_"
+            fields = ("host", "port", "user", "password", "database", "encrypt", "validate_certificate", "tls_ca_certificate", "tls_server_name") if prefix == "hana_" else ("host", "port", "user", "password", "database", "encryption", "timeout")
             if any(
-                getattr(effective, "sqlserver_" + key) != getattr(connector.settings, "sqlserver_" + key)
+                getattr(effective, prefix + key) != getattr(connector.settings, prefix + key)
                 for key in fields
             ):
-                connector = SQLServerConnector(effective, self.catalog, connector.driver)
+                connector = type(connector)(effective, self.catalog, connector.driver)
                 self.register(source_id, connector)
                 self.status(source_id, "not_configured" if connector.missing() else "not_checked", checked=False)
+        if isinstance(connector, SQLServerConnector):
+            connector.traffic = getattr(self, "traffic", None)
+            if connector.traffic:
+                connector.traffic.protect_settings(connector.settings)
         return connector
 
     def attach(self, source):
-        if source["kind"] == "sqlserver":
+        if not source.get("enabled", 1):
+            self.connectors.pop(source["id"], None)
+            self.status(source["id"], "disconnected", checked=False)
+            return
+        if source["kind"] in ("sqlserver", "saphana"):
             try:
-                connector = SQLServerConnector(self.source_settings(source["id"]), self.catalog)
+                connector = self.connector_class(source["kind"])(self.source_settings(source["id"]), self.catalog)
             except SecretsUnavailable as exc:
                 self.connectors.pop(source["id"], None)
                 self.status(source["id"], "error", str(exc))
                 return
             self.register(source["id"], connector)
+            if getattr(self,'traffic',None):
+                self.traffic.protect_settings(connector.settings)
             missing = connector.missing()
             self.status(
                 source["id"],
@@ -325,41 +496,97 @@ class ConnectorRegistry:
             )
 
     def source_settings(self, source_id):
-        environment = self.settings.database_environment()
+        environment = self.source_environment(source_id)
         # An explicitly configured environment is authoritative, even when partial.
         # Never mix credentials from .env with stale settings saved in the form.
-        if any(getattr(environment, f"sqlserver_{key}") for key in ("host", "user", "password", "database")):
+        profile = self.db.one("SELECT credential_profile FROM data_sources WHERE id=?", (source_id,))
+        if profile and profile["credential_profile"] != "saved":
             return environment
         values = self.secrets.load(source_id)
-        if values is None:
-            return self.settings
-        return replace(self.settings, **{key.lower(): value for key, value in values.items()})
+        updates = {key.lower(): value for key, value in (values or {}).items()}
+        for key in ("hana_encrypt", "hana_validate_certificate"):
+            if key in updates:
+                if updates[key] not in ("true", "false"):
+                    raise SecretsUnavailable("HANA TLS options must be true or false.")
+                updates[key] = updates[key] == "true"
+        return replace(self.empty_connection_settings(), **updates)
+
+    def empty_connection_settings(self):
+        return replace(self.settings, sqlserver_host="", sqlserver_user="", sqlserver_password="", sqlserver_database="", sqlserver_port="1433", hana_host="", hana_user="", hana_password="", hana_database="", hana_port="30015", hana_encrypt=True, hana_validate_certificate=True, hana_tls_ca_certificate="", hana_tls_server_name="")
+
+    def source_environment(self, source_id):
+        source = self.db.one("SELECT name,kind,credential_profile FROM data_sources WHERE id=?", (source_id,))
+        if source and source["kind"] == "saphana":
+            if source["credential_profile"] == "legacy":
+                self.db.execute("UPDATE data_sources SET credential_profile='HANA' WHERE id=?", (source_id,))
+            if source["credential_profile"] == "saved":
+                return self.empty_connection_settings()
+            try:
+                return self.empty_connection_settings().hana_environment()
+            except (OSError, ValueError):
+                raise SecretsUnavailable("The SAP HANA .env configuration could not be read. Check field values and backend file permissions.") from None
+        if source and source["credential_profile"] == "legacy":
+            prefix = re.sub(r"[^A-Z0-9]+", "_", source["name"].upper()).strip("_")
+            named = self.settings.database_environment(prefix + "_SQLSERVER") if prefix else None
+            saved = self.db.one("SELECT source_id FROM source_credentials WHERE source_id=?", (source_id,))
+            first = self.db.one("SELECT id FROM data_sources WHERE kind='sqlserver' ORDER BY created_at,rowid LIMIT 1")
+            generic = self.settings.database_environment()
+            generic_configured = any(getattr(generic, "sqlserver_" + key) for key in ("host", "user", "password", "database"))
+            if named is not None:
+                profile = prefix + "_SQLSERVER"
+            elif saved and (not generic_configured or first and first["id"] != source_id):
+                profile = "saved"
+            else:
+                profile = "SQLSERVER"
+            self.db.execute("UPDATE data_sources SET credential_profile=? WHERE id=?", (profile, source_id))
+        else:
+            profile = source["credential_profile"] if source else "saved"
+        if profile == "saved":
+            return self.empty_connection_settings()
+        if profile == "SQLSERVER" and source:
+            prefix = re.sub(r"[^A-Z0-9]+", "_", source["name"].upper()).strip("_")
+            if prefix and self.settings.database_environment(prefix + "_SQLSERVER") is not None:
+                profile = prefix + "_SQLSERVER"
+                self.db.execute("UPDATE data_sources SET credential_profile=? WHERE id=?", (profile, source_id))
+        return self.settings.database_environment(profile) or self.empty_connection_settings()
 
     def public_source(self, source):
         result = dict(source)
-        saved = self.db.one("SELECT source_id FROM source_credentials WHERE source_id=?", (source["id"],))
-        environment = self.settings.database_environment()
-        using_environment = any(
-            getattr(environment, f"sqlserver_{key}") for key in ("host", "user", "password", "database")
-        )
-        result["configuration_origin"] = "environment" if using_environment or not saved else "saved"
+        try:
+            self.source_environment(source["id"])
+        except SecretsUnavailable:
+            # Preserve metadata access so an administrator can repair this
+            # connection without blocking the other sources or the editor.
+            pass
+        profile = self.db.one("SELECT credential_profile FROM data_sources WHERE id=?", (source["id"],))
+        result.pop("credential_profile", None)
+        result["configuration_origin"] = "saved" if profile["credential_profile"] == "saved" else "environment"
+        result["credential_storage"] = ".env"
+        result["env_prefix"] = self.secrets.env_prefix(source["id"]) if result["configuration_origin"] == "saved" else profile["credential_profile"] + "_"
         result["error_scope"] = (
             "query" if source["status"] == "connected" and source.get("last_error") else "connection"
         )
         try:
             effective = self.source_settings(source["id"])
+            prefix = "HANA" if source["kind"] == "saphana" else "SQLSERVER"
             result["connection_fields"] = {
-                f"SQLSERVER_{key.upper()}": bool(getattr(effective, f"sqlserver_{key}"))
+                f"{prefix}_{key.upper()}": bool(getattr(effective, f"{prefix.lower()}_{key}"))
                 for key in ("host", "port", "user", "password", "database")
             }
-        except SecretsUnavailable:
+            result["database_scope"] = "default" if getattr(effective, prefix.lower()+"_database") else "all"
+            if prefix == "HANA":
+                result["tls"] = {"encrypt": effective.hana_encrypt, "validate_certificate": effective.hana_validate_certificate,
+                                 "custom_ca": bool(effective.hana_tls_ca_certificate), "server_name_configured": bool(effective.hana_tls_server_name)}
+        except SecretsUnavailable as exc:
             result["connection_fields"] = {}
+            result.update(status="error", last_error=str(exc), error_scope="connection")
+            self.status(source["id"], "error", str(exc))
         return result
 
     def status(self, source_id, status, error=None, checked=True):
         if self.db:
             self.db.execute(
-                "UPDATE data_sources SET status=?,last_error=?,checked_at=? WHERE id=?",
+                "UPDATE data_sources SET status=?,last_error=?,checked_at=? WHERE id=? AND enabled=1",
                 (status, error, now() if checked else None, source_id),
             )
 
@@ -379,9 +606,9 @@ class ConnectorRegistry:
             source = (
                 self.db.one("SELECT kind,last_error FROM data_sources WHERE id=?", (source_id,)) if self.db else None
             )
-            if source and source["kind"] == "sqlserver" and source["last_error"]:
+            if source and source["kind"] in ("sqlserver", "saphana") and source["last_error"]:
                 raise SourceNotConfigured(source["last_error"])
-            raise SourceNotConfigured("No connector is implemented for this source type. Choose SQL Server.")
+            raise SourceNotConfigured("No connector is implemented for this source type. Choose SQL Server or SAP HANA.")
         try:
             await connector.check()
             if self.connectors.get(source_id) is connector:
@@ -390,7 +617,7 @@ class ConnectorRegistry:
             if self.connectors.get(source_id) is connector:
                 self.status(source_id, "not_configured" if connector.missing() else "error", str(exc))
 
-    async def fetch(self, dataset, parameters):
+    async def fetch(self, dataset, parameters, *, complete=False):
         connector = self.resolve_connector(dataset["source_id"])
         if not connector or not dataset["enabled"]:
             raise SourceNotConfigured(
@@ -398,7 +625,8 @@ class ConnectorRegistry:
             )
         Draft202012Validator(json.loads(dataset["parameters_schema_json"])).validate(parameters)
         try:
-            rows = await connector.fetch(dataset["query_key"], parameters)
+            method = connector.fetch_report if complete and hasattr(connector, "fetch_report") else connector.fetch
+            rows = await method(dataset["query_key"], parameters)
             if self.connectors.get(dataset["source_id"]) is connector:
                 self.status(dataset["source_id"], "connected")
             return rows
@@ -410,35 +638,86 @@ class ConnectorRegistry:
     def authorized_source(self, user_id, source_id):
         source = self.db.one(
             """SELECT s.* FROM data_sources s JOIN users u ON u.id=? AND u.active=1
-            WHERE s.id=? AND (u.role='admin' OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))""",
+            WHERE s.id=? AND s.enabled=1 AND (u.role='devs' OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))""",
             (user_id, source_id),
         )
-        if not source or source["kind"] != "sqlserver":
+        if not source or source["kind"] not in ("sqlserver", "saphana"):
             raise SourceNotConfigured("Database source is unavailable or access was not granted.")
         return source
 
     def accessible_sources(self, user_id):
         return self.db.all(
             """SELECT s.id,s.name,s.kind,s.status FROM data_sources s JOIN users u ON u.id=? AND u.active=1
-            WHERE s.kind='sqlserver' AND (u.role='admin' OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))
+            WHERE s.kind IN ('sqlserver','saphana') AND s.enabled=1 AND (u.role='devs' OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))
             ORDER BY s.created_at""",
             (user_id,),
         )
 
-    async def database_call(self, user_id, source_id, operation, **arguments):
+    async def database_inventory(self, user_id):
+        """Discover every granted source; a failed server cannot hide other servers."""
+        semaphore = asyncio.Semaphore(4)
+
+        async def inspect(source):
+            async with semaphore:
+                databases, offset, warnings, unavailable, complete = [], 0, [], [], True
+                try:
+                    while True:
+                        page = await self.database_call(user_id, source["id"], "databases", offset=offset, limit=200)
+                        databases.extend(page["databases"])
+                        warnings.extend(page.get("warnings", []))
+                        unavailable.extend(page.get("unavailable_databases", []))
+                        complete = complete and page.get("catalog_complete", True)
+                        if page["next_offset"] is None:
+                            break
+                        offset = page["next_offset"]
+                    return {**source, "databases": databases, "catalog_complete": complete, "warnings": list(dict.fromkeys(warnings)),
+                            "unavailable_databases": list(dict.fromkeys(unavailable))}
+                except (SourceNotConfigured, ValueError) as exc:
+                    return {**source, "databases": databases, "catalog_complete": False, "error": str(exc)}
+
+        sources = await asyncio.gather(*(inspect(source) for source in self.accessible_sources(user_id)))
+        return {"sources": sources, "catalog_complete": all(s["catalog_complete"] for s in sources),
+                "scope": "All registered sources granted to this user and their online business databases accessible to each reporting login. System databases are excluded. Discover tables in each relevant database; do not infer business coverage from a database or company name."}
+
+    async def database_call(self, user_id, source_id, operation, database=None, **arguments):
         self.authorized_source(user_id, source_id)
+        if operation == "balance_reconciliation":
+            raise SourceNotConfigured(
+                "Fixed backend accounting calculators are retired. Use model-authored calculate_data code over authorized queries."
+            )
         connector = self.resolve_connector(source_id)
         if not isinstance(connector, SQLServerConnector):
             raise SourceNotConfigured(
                 "This database connection is not configured. Ask the administrator to configure the source."
             )
+        traffic = getattr(self, "traffic", None)
+        started, outcome, detail = time.perf_counter(), "error", {"source_id": source_id}
+        if traffic:
+            traffic.record("backend-database", operation, "started", user_id=user_id, correlation_id=source_id)
         try:
-            result = await getattr(connector, operation)(**arguments)
+            prefix = "hana_" if connector.dialect == "hana" else "sqlserver_"
+            if operation != "databases" and database is None and not getattr(connector.settings, prefix + "database"):
+                raise SourceNotConfigured("Select a database from discover_databases before reading business data.")
+            selected_database = database
+            if selected_database is None and connector.dialect == "hana" and operation != "databases":
+                selected_database = connector.settings.hana_database
+            active_connector = await connector.in_database(selected_database) if selected_database else connector
+            result = await getattr(active_connector, operation)(**arguments)
             self.authorized_source(user_id, source_id)
             if self.connectors.get(source_id) is connector:
                 self.status(source_id, "connected")
+            outcome = "ok"
+            if isinstance(result, dict):
+                result = {**result, "source_id": source_id, "database": getattr(active_connector.settings, prefix+"database") or None}
+            detail["row_count"] = result.get("row_count") if isinstance(result, dict) else len(result)
             return result
         except DatabaseUnavailable as exc:
+            detail["database_error_code"] = exc.code
+            detail["error_category"] = exc.category
             if self.connectors.get(source_id) is connector:
-                self.status(source_id, "connected" if exc.category == "query" else "error", str(exc))
+                self.status(source_id, "connected" if exc.category in ("query", "limit") else "error", str(exc))
             raise
+        finally:
+            if traffic:
+                traffic.record("database-backend", operation, outcome, user_id=user_id, correlation_id=source_id,
+                               duration_ms=round((time.perf_counter()-started)*1000, 2), detail=detail)

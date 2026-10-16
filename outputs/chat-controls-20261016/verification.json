@@ -1,0 +1,52 @@
+[
+  {
+    "model": "fixture",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Edited ChatGPT request verified",
+        "status": "completed"
+      },
+      {
+        "role": "assistant",
+        "content": "Protocol fixture reply.",
+        "status": "completed"
+      }
+    ],
+    "revisions": [
+      {
+        "previous_content": "Long investigation fixture retry ChatGPT",
+        "assistant_status": "interrupted"
+      },
+      {
+        "previous_content": "Long investigation fixture retry ChatGPT",
+        "assistant_status": "interrupted"
+      }
+    ]
+  },
+  {
+    "model": "claude:default",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Edited Claude request verified",
+        "status": "completed"
+      },
+      {
+        "role": "assistant",
+        "content": "Claude response: Edited Claude request verified",
+        "status": "completed"
+      }
+    ],
+    "revisions": [
+      {
+        "previous_content": "Long investigation fixture retry Claude",
+        "assistant_status": "interrupted"
+      },
+      {
+        "previous_content": "Long investigation fixture retry Claude",
+        "assistant_status": "interrupted"
+      }
+    ]
+  }
+]

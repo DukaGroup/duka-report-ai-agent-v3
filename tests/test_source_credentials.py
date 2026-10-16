@@ -19,7 +19,7 @@ def source_input(host="private-host", password="private-password"):
     }
 
 
-def test_saved_credentials_are_encrypted_not_returned_and_survive_reload(client, admin):
+def test_saved_credentials_are_in_private_env_not_returned_and_survive_reload(client, admin):
     values = source_input()
     response = client.post("/api/admin/sources", json=values, headers=HEADERS)
     assert response.status_code == 201, response.text
@@ -32,8 +32,10 @@ def test_saved_credentials_are_encrypted_not_returned_and_survive_reload(client,
     assert "private-" not in json.dumps(db.all("SELECT * FROM data_sources"))
     for endpoint in ("/api/admin/sources", "/api/admin/overview", "/api/admin/database", "/api/admin/audit"):
         assert "private-" not in client.get(endpoint).text
-    key = settings.data_dir / "source-credentials.key"
-    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    private_env = settings.data_dir / ".env"
+    assert stat.S_IMODE(private_env.stat().st_mode) == 0o600
+    assert "private-password" in private_env.read_text()
+    assert stored["ciphertext"] == "env"
     reloaded = ConnectorRegistry(settings, db)
     conn = reloaded.connectors[source["id"]]
     assert conn.settings.sqlserver_host == values["SQLSERVER_HOST"]
@@ -88,14 +90,14 @@ def test_bad_settings_fail_atomically_without_echoing_password(client, admin):
     assert client.post("/api/admin/sources", json=values, headers=HEADERS).status_code == 422
 
 
-def test_missing_key_fails_closed_without_environment_fallback(client, admin):
+def test_missing_managed_env_fails_closed_without_environment_fallback(client, admin):
     source = client.post("/api/admin/sources", json=source_input(), headers=HEADERS).json()
     settings, db = client.app.state.settings, client.app.state.db
-    (settings.data_dir / "source-credentials.key").unlink()
+    (settings.data_dir / ".env").unlink()
     reloaded = ConnectorRegistry(settings, db)
     assert source["id"] not in reloaded.connectors
     row = db.one("SELECT * FROM data_sources WHERE id=?", (source["id"],))
-    assert row["status"] == "error" and "key is missing" in row["last_error"]
+    assert row["status"] == "error" and "profile is missing" in row["last_error"]
     assert not (settings.data_dir / "source-credentials.key").exists()
 
 

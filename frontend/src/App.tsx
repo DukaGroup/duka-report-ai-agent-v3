@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   ArrowDownToLine,
@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   RotateCcw,
   Search,
-  AudioLines,
   Check,
   CircleHelp,
   Database,
@@ -16,7 +15,6 @@ import {
   LoaderCircle,
   LogOut,
   MessageSquare,
-  Mic,
   Plus,
   Send,
   Settings,
@@ -24,21 +22,34 @@ import {
   Sparkles,
   Square,
   Trash2,
-  Volume2,
+  Unplug,
+  Paperclip,
+  Pencil,
   X,
 } from "lucide-react";
-import Markdown from "react-markdown";
+import { MarkdownContent } from "./MarkdownContent";
+import { Brand } from "./Brand";
 import { Select } from "./Select";
+import { TrafficPanel } from "./TrafficPanel";
 import { api, streamChat } from "./api";
+import {
+  ConversationRuns,
+  pendingAssistantMessages,
+  messagesBeforeRestart,
+  runningReports,
+} from "./conversationRuns";
 import { label, errorMessage, auditLabel } from "./locale";
-import { VoiceRecorder, speak } from "./voice";
+import { recoverSubscription } from "./subscriptionRecovery";
+import { buildChatTimeline } from "./chatTimeline";
 import type {
   Audit,
+  Attachment,
   Conversation,
   Dataset,
   Login,
   Message,
   Model,
+  Provider,
   Overview,
   RateLimits,
   Report,
@@ -46,7 +57,6 @@ import type {
   Subscription,
   Template,
   User,
-  VoiceStatus,
 } from "./types";
 
 type Page =
@@ -56,7 +66,22 @@ type Page =
   | "sources"
   | "connection"
   | "admin";
+function cReasoning(c: Conversation) {
+  return c.reasoning_effort || "";
+}
 const initialSubscription: Subscription = { connected: false, available: true };
+function providerLoginUrl(login: Login) {
+  try {
+    const url = new URL(login.verificationUrl || "");
+    const hosts =
+      login.provider === "claude"
+        ? ["claude.com", "claude.ai", "platform.claude.com"]
+        : ["auth.openai.com"];
+    return url.protocol === "https:" && hosts.includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
 const date = (value: string) =>
   new Date(value).toLocaleDateString("sq-AL", {
     month: "short",
@@ -75,6 +100,20 @@ function Badge({
       <span />
       {children}
     </span>
+  );
+}
+function ThinkingDots({ description }: { description: string }) {
+  return (
+    <div
+      className="thinking"
+      role="status"
+      aria-label={description}
+      title={description}
+    >
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+    </div>
   );
 }
 function Modal({
@@ -150,10 +189,7 @@ function Auth({
   return (
     <div className="auth-page">
       <div className="auth-brand">
-        <div className="brand-mark">d.</div>
-        <span>
-          duka<span className="brand-sub"> HAPËSIRA E RAPORTEVE </span>
-        </span>
+        <Brand />
       </div>
       <div className="auth-card">
         <span className="eyebrow"> Një pamje më e qartë e biznesit tuaj </span>
@@ -162,7 +198,7 @@ function Auth({
         </h1>
         <p>
           {setup
-            ? "Krijoni llogarinë e administratorit. Pasi të hyni, lidhni abonimin tuaj ChatGPT."
+            ? "Krijoni llogarinë e administratorit. Pasi të hyni, lidhni abonimin tuaj ChatGPT ose Claude."
             : "Hyni në llogari për të vazhduar bisedat dhe raportet tuaja."}
         </p>
         <form onSubmit={submit}>
@@ -220,13 +256,13 @@ function Auth({
           </button>
         </form>
         <div className="auth-note">
-          <ShieldCheck size={16} /> Hyrja në llogarinë ChatGPT kryhet nga
-          OpenAI.{" "}
+          <ShieldCheck size={16} /> Lidhja e abonimit kryhet përmes OpenAI ose
+          Anthropic.{" "}
         </div>
       </div>
       <p className="auth-footer">
         {" "}
-        GRUPI DUKA <span> Biseda që sjellin qartësi. </span>
+        DUKA GROUP <span> Biseda që sjellin qartësi. </span>
       </p>
     </div>
   );
@@ -238,18 +274,38 @@ export default function App() {
     [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<{ needs_setup: boolean; user: User | null }>("/auth/status")
-      .then((r) => {
-        setSetup(r.needs_setup);
-        setUser(r.user);
-      })
-      .catch((e) => setError(errorMessage((e as Error).message)))
-      .finally(() => setLoading(false));
+    let active = true;
+    const stop = recoverSubscription(
+      async () => {
+        try {
+          const r = await api<{ needs_setup: boolean; user: User | null }>(
+            "/auth/status",
+          );
+          if (active) {
+            setSetup(r.needs_setup);
+            setUser(r.user);
+            setError("");
+          }
+          return true;
+        } catch (e) {
+          if (active) setError(errorMessage((e as Error).message));
+          return false;
+        } finally {
+          if (active) setLoading(false);
+        }
+      },
+      5000,
+      true,
+    );
+    return () => {
+      active = false;
+      stop();
+    };
   }, []);
   if (loading)
     return (
       <div className="loading-screen">
-        <div className="brand-mark">d.</div>
+        <Brand />
         <LoaderCircle className="spin" />
         <p> Duke hapur hapësirën… </p>
       </div>
@@ -258,6 +314,7 @@ export default function App() {
     return (
       <div className="loading-screen">
         <p role="alert">{error}</p>
+        <p>Po provojmë lidhjen përsëri automatikisht…</p>
         <button
           className="button primary"
           onClick={() => window.location.reload()}
@@ -287,32 +344,99 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       useState<Subscription>(initialSubscription),
     [login, setLogin] = useState<Login | null>(null),
     [connecting, setConnecting] = useState(false);
+  const [providerSubscriptions, setProviderSubscriptions] = useState<
+    Record<Provider, Subscription>
+  >({ chatgpt: initialSubscription, claude: initialSubscription });
+  const [choosingProvider, setChoosingProvider] = useState(false);
+  const [loginCode, setLoginCode] = useState("");
+  const selectedProvider = subscription.provider_id || "chatgpt";
+  const providerName = selectedProvider === "claude" ? "Claude" : "ChatGPT";
   const [models, setModels] = useState<Model[]>([]),
     [model, setModel] = useState("");
+  const subscriptionRequest = useRef<Promise<Subscription> | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]),
     [currentId, setCurrentId] = useState<string | null>(null),
     [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState(""),
-    [busy, setBusy] = useState(false),
-    [activity, setActivity] = useState("");
-  const [recording, setRecording] = useState(false),
-    [transcribing, setTranscribing] = useState(false),
-    [readReplies, setReadReplies] = useState(false),
-    [voiceMode, setVoiceMode] = useState(false);
-  const [voice, setVoice] = useState<VoiceStatus | null>(null),
-    [limits, setLimits] = useState<RateLimits | null>(null);
+  const [draft, setDraft] = useState("");
+  const [retryMessageId, setRetryMessageId] = useState<string | null>(null);
+  const [reasoningEffort, setReasoningEffort] = useState("");
+  const supportedEfforts =
+    models.find((m) => m.model === model)?.supported_reasoning_efforts || [];
+  const effort = supportedEfforts.includes(reasoningEffort)
+    ? reasoningEffort
+    : "";
+  const effortLabels: Record<string, string> = {
+    none: "Pa arsyetim",
+    minimal: "Minimal",
+    low: "I ulët",
+    medium: "Mesatar",
+    high: "I lartë",
+    xhigh: "Shumë i lartë",
+    max: "Maksimal",
+  };
+  const runs = useRef(new ConversationRuns());
+  const [, refreshRuns] = useState(0);
+  const busy =
+    runs.current.has(currentId) ||
+    messages.some((m) => m.status === "streaming");
+  const activity = runs.current.activity(currentId);
+  const drafts = useRef(
+    new Map<
+      string,
+      {
+        draft: string;
+        attachments: Attachment[];
+        model: string;
+        reasoningEffort: string;
+        retryMessageId: string | null;
+      }
+    >(),
+  );
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>(
+    [],
+  );
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [limits, setLimits] = useState<RateLimits | null>(null);
   const [reportsLoaded, setReportsLoaded] = useState(false);
-  const [stoppingReports, setStoppingReports] = useState(false);
+  const [stoppingIds, setStoppingIds] = useState<Record<string, boolean>>({});
+  const stoppingReports = !!stoppingIds[currentId || ""];
   const [reports, setReports] = useState<Report[]>([]),
     [report, setReport] = useState<Report | null>(null),
     [templates, setTemplates] = useState<Template[]>([]),
     [datasets, setDatasets] = useState<Dataset[]>([]),
     [reportForm, setReportForm] = useState(false);
-  const activeReports = reports.filter((r) =>
-    ["queued", "running"].includes(r.status),
-  );
+  const activeReports = runningReports(reports, currentId);
   const reportBusy = activeReports.length > 0;
-  const chatLocked = busy || reportBusy || !reportsLoaded || stoppingReports;
+  const pendingMessages = pendingAssistantMessages(
+    messages,
+    reports,
+    currentId,
+  );
+  const pendingDescription = reportBusy
+    ? "Raporti në Excel po përgatitet"
+    : activity || "Në pritje të përgjigjes";
+  const chatLocked =
+    busy || reportBusy || !reportsLoaded || stoppingReports || uploading;
+  const reasoningControl = (
+    <label className="reasoning-picker">
+      Arsyetimi
+      <Select
+        aria-label="Niveli i arsyetimit"
+        value={effort}
+        disabled={chatLocked || !subscription.connected}
+        onChange={(e) => setReasoningEffort(e.target.value)}
+      >
+        <option value="">Automatik</option>
+        {supportedEfforts.map((level) => (
+          <option key={level} value={level}>
+            {effortLabels[level] || level}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+
   const reportBusyRef = useRef(false);
   reportBusyRef.current = reportBusy;
   const [overview, setOverview] = useState<Overview | null>(null),
@@ -325,42 +449,56 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     [addSource, setAddSource] = useState(false),
     [addDataset, setAddDataset] = useState(false),
     [grant, setGrant] = useState<Dataset | null>(null);
-  const [voiceLanguage, setVoiceLanguage] = useState("sq");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [businessSources, setBusinessSources] = useState<Source[]>([]);
   const [sourceAccess, setSourceAccess] = useState<Source | null>(null);
   const [sourceGrants, setSourceGrants] = useState<string[]>([]);
   const [editSource, setEditSource] = useState<Source | null>(null);
   const [sourceKind, setSourceKind] = useState("sqlserver");
   const [savingSource, setSavingSource] = useState(false);
+  const [overrideEnvironment, setOverrideEnvironment] = useState(false);
+  const [autoDiscoverDatabases, setAutoDiscoverDatabases] = useState(true);
+  const [sourceActions, setSourceActions] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [deleteSource, setDeleteSource] = useState<Source | null>(null);
+  const [databaseBrowser, setDatabaseBrowser] = useState<Source | null>(null);
+  const [serverDatabases, setServerDatabases] = useState<
+    { name: string; is_default: number }[]
+  >([]);
+  const [databaseOffset, setDatabaseOffset] = useState<number | null>(null);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
   const environmentActive =
-    !!overview &&
-    [
-      "SQLSERVER_HOST",
-      "SQLSERVER_USER",
-      "SQLSERVER_PASSWORD",
-      "SQLSERVER_DATABASE",
-    ].some((key) => overview.database_configuration.environment[key]);
+    editSource?.configuration_origin === "environment" &&
+    !overrideEnvironment &&
+    sourceKind === editSource.kind;
+  const sourcePrefix = sourceKind === "saphana" ? "HANA" : "SQLSERVER";
+  const sourceSupported =
+    sourceKind === "sqlserver" || sourceKind === "saphana";
+  const changingSourceKind = !!editSource && editSource.kind !== sourceKind;
+  const keepConnectionFields =
+    !!editSource &&
+    (editSource.configuration_origin === "saved" || changingSourceKind);
   const [conversationSearch, setConversationSearch] = useState("");
   const [openingConversation, setOpeningConversation] = useState(false);
   const [deleteReport, setDeleteReport] = useState<Report | null>(null);
   const [deletingReport, setDeletingReport] = useState(false);
   const [reportTrash, setReportTrash] = useState(false);
   const [deletedReports, setDeletedReports] = useState<Report[]>([]);
+  const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
+  const [emptyingTrash, setEmptyingTrash] = useState(false);
+  const [restoringReportId, setRestoringReportId] = useState<string | null>(
+    null,
+  );
   const reportSelection = useRef<string | null>(null);
   const [deleteChat, setDeleteChat] = useState<Conversation | null>(null);
   const [chatHistory, setChatHistory] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [checkingSource, setCheckingSource] = useState<string | null>(null);
-  const bottom = useRef<HTMLDivElement>(null),
-    recorder = useRef(new VoiceRecorder()),
-    sendRef = useRef<(text: string, voiced?: boolean) => Promise<void>>(
-      async () => {},
-    ),
-    voiceModeRef = useRef(false),
-    resumeVoiceAfterReport = useRef(false),
+  const messageScroll = useRef<HTMLDivElement>(null),
+    scrolledConversation = useRef<string | null>(null),
     mounted = useRef(true),
-    activeId = useRef<string | null>(null),
-    voiceEpoch = useRef(0);
+    activeId = useRef<string | null>(null);
 
   const fail = (e: unknown) =>
     setError(errorMessage((e as Error).message || "Ndodhi një gabim."));
@@ -368,65 +506,90 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      recorder.current.stop(true);
-      window.speechSynthesis?.cancel();
     };
   }, []);
   useEffect(() => {
     activeId.current = currentId;
   }, [currentId]);
-  useEffect(() => {
-    voiceModeRef.current = voiceMode;
-    if (!voiceMode) window.speechSynthesis?.cancel();
-  }, [voiceMode]);
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" });
-  }, [messages, busy]);
-  useEffect(() => {
-    if (reportBusy) {
-      resumeVoiceAfterReport.current = voiceModeRef.current;
-      recorder.current.stop(true);
-      setRecording(false);
-    } else if (
-      resumeVoiceAfterReport.current &&
-      voiceModeRef.current &&
-      !busy &&
-      !transcribing &&
-      !recording &&
-      !window.speechSynthesis?.speaking
-    ) {
-      resumeVoiceAfterReport.current = false;
-      void startRecording();
+  useLayoutEffect(() => {
+    if (page !== "chat") {
+      scrolledConversation.current = null;
+      return;
     }
-  }, [reportBusy, busy, transcribing, recording]);
-
+    const switched = scrolledConversation.current !== currentId;
+    scrolledConversation.current = currentId;
+    const scroll = messageScroll.current;
+    scroll?.scrollTo({
+      top: scroll.scrollHeight,
+      behavior: switched || busy ? "instant" : "smooth",
+    });
+  }, [messages, busy, reportBusy, currentId, page]);
   async function loadSubscription() {
+    if (subscriptionRequest.current) return subscriptionRequest.current;
+    const request = fetchSubscription().catch((e: unknown) => {
+      if (mounted.current)
+        setSubscription((prev) => ({
+          ...prev,
+          connected: false,
+          available: false,
+          error: errorMessage((e as Error).message),
+        }));
+      throw e;
+    });
+    subscriptionRequest.current = request;
+    try {
+      return await request;
+    } finally {
+      if (subscriptionRequest.current === request)
+        subscriptionRequest.current = null;
+    }
+  }
+  async function fetchSubscription() {
     const result = await api<Subscription>("/subscription");
+    if (!mounted.current) return result;
     setSubscription(result);
-    if (result.login?.status === "failed") {
+    const provider = result.provider_id || "chatgpt";
+    const other: Provider = provider === "chatgpt" ? "claude" : "chatgpt";
+    const otherStatus = await api<Subscription>(
+      `/subscription?provider=${other}`,
+    ).catch(() => ({ connected: false, available: false }) as Subscription);
+    if (!mounted.current) return result;
+    const statuses = { [provider]: result, [other]: otherStatus } as Record<
+      Provider,
+      Subscription
+    >;
+    setProviderSubscriptions(statuses);
+    const loginProvider = login?.provider || provider;
+    if (statuses[loginProvider].login?.status === "failed") {
       setLogin(null);
       setError(
-        result.login.error ||
-          "Hyrja nuk përfundoi. Aktivizoni hyrjen me kod pajisjeje në cilësimet e sigurisë të ChatGPT dhe provoni përsëri.",
+        statuses[loginProvider].login?.error ||
+          "Hyrja nuk përfundoi. Provoni përsëri.",
       );
     }
+    setLogin((prev) =>
+      prev && statuses[prev.provider || "chatgpt"].connected ? null : prev,
+    );
     if (result.connected) {
-      setLogin(null);
-      const list = await api<Model[]>("/subscription/models");
+      const list = await api<Model[]>(
+        `/subscription/models?provider=${provider}`,
+      );
+      if (!mounted.current) return result;
       setModels(list);
       setModel((prev) =>
         list.some((m) => m.model === prev)
           ? prev
           : (list.find((m) => m.isDefault) || list[0])?.model || "",
       );
+    } else {
+      setModels([]);
+      setModel("");
     }
     return result;
   }
   async function loadReports() {
     const next = await api<Report[]>("/reports");
-    reportBusyRef.current = next.some((r) =>
-      ["queued", "running"].includes(r.status),
-    );
+    reportBusyRef.current = runningReports(next, activeId.current).length > 0;
     setReports(next);
     setReportsLoaded(true);
     if (reportTrash)
@@ -450,23 +613,28 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     if (!user) return;
     void Promise.all([
-      loadSubscription(),
+      loadSubscription().catch(() => undefined),
       api<Conversation[]>("/conversations").then(setConversations),
       api<Template[]>("/report-templates").then(setTemplates),
       api<Dataset[]>("/datasets").then(setDatasets),
       api<Source[]>("/sources").then(setBusinessSources),
-      api<VoiceStatus>("/voice").then(setVoice),
       loadReports(),
     ]).catch(fail);
   }, [user]);
   useEffect(() => {
-    if (user?.role === "admin" && (page === "admin" || page === "sources"))
+    if (user?.role === "devs" && (page === "admin" || page === "sources"))
       void loadAdmin().catch(fail);
   }, [page, user]);
   useEffect(() => {
+    if (subscription.available) return;
+    return recoverSubscription(
+      async () => (await loadSubscription()).available,
+    );
+  }, [subscription.available]);
+  useEffect(() => {
     if (!login) return;
     const timer = setInterval(() => {
-      void loadSubscription().catch(fail);
+      void loadSubscription().catch(() => undefined);
     }, 3000);
     return () => clearInterval(timer);
   }, [login?.loginId]);
@@ -481,51 +649,165 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             })
             .catch(fail);
       },
-      busy || reportBusy ? 1000 : 5000,
+      runs.current.size ||
+        reports.some((r) => ["queued", "running"].includes(r.status))
+        ? 1000
+        : 5000,
     );
     return () => clearInterval(timer);
-  }, [busy, reportBusy, report?.id, report?.status, reportTrash]);
+  }, [
+    busy,
+    reportBusy,
+    reports.some((r) => ["queued", "running"].includes(r.status)),
+    report?.id,
+    report?.status,
+    reportTrash,
+  ]);
 
-  async function connect() {
+  useEffect(() => {
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const list = await api<Conversation[]>("/conversations");
+        if (disposed) return;
+        setConversations(list);
+        const id = activeId.current;
+        if (
+          id &&
+          !runs.current.has(id) &&
+          (list.some((c) => c.id === id && c.running) ||
+            messages.some((m) => m.status === "streaming"))
+        ) {
+          const detail = await api<Conversation & { messages: Message[] }>(
+            `/conversations/${id}`,
+          );
+          if (!disposed && activeId.current === id && !runs.current.has(id))
+            setMessages(detail.messages);
+        }
+      } catch {
+        /* The normal request path surfaces connection errors. */
+      }
+    };
+    const timer = setInterval(() => void poll(), 1500);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [currentId, busy]);
+
+  async function connect(provider: Provider = selectedProvider) {
     setConnecting(true);
     setError("");
     try {
-      setLogin(await api<Login>("/subscription/login", { method: "POST" }));
+      setLoginCode("");
+      setLogin(
+        await api<Login>(`/subscription/login?provider=${provider}`, {
+          method: "POST",
+        }),
+      );
     } catch (e) {
       fail(e);
     } finally {
       setConnecting(false);
     }
   }
-  async function disconnect() {
+  async function disconnect(provider: Provider = selectedProvider) {
     try {
-      await api("/subscription/disconnect", { method: "POST" });
-      setSubscription(initialSubscription);
-      setModels([]);
+      await api(`/subscription/disconnect?provider=${provider}`, {
+        method: "POST",
+      });
       setLimits(null);
       setLogin(null);
+      await loadSubscription();
     } catch (e) {
       fail(e);
     }
   }
+  async function chooseProvider(provider: Provider) {
+    setChoosingProvider(true);
+    setError("");
+    try {
+      if (subscriptionRequest.current)
+        await subscriptionRequest.current.catch(() => undefined);
+      await api("/subscription/select", {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      });
+      setModel("");
+      setModels([]);
+      setLimits(null);
+      await loadSubscription();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setChoosingProvider(false);
+    }
+  }
+  async function finishClaudeLogin(e: FormEvent) {
+    e.preventDefault();
+    if (!login || !loginCode.trim()) return;
+    setConnecting(true);
+    try {
+      await api("/subscription/login/code", {
+        method: "POST",
+        body: JSON.stringify({
+          login_id: login.loginId,
+          code: loginCode.trim(),
+        }),
+      });
+      setLoginCode("");
+      await loadSubscription();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setConnecting(false);
+    }
+  }
+  function conversationRunning(id: string) {
+    return (
+      runs.current.has(id) ||
+      conversations.some((c) => c.id === id && c.running) ||
+      runningReports(reports, id).length > 0
+    );
+  }
   async function selectConversation(c: Conversation) {
-    if (busy && c.id === currentId) {
+    if (uploading) return;
+    if (c.id === currentId) {
       setPage("chat");
       return;
     }
-    if (busy || recording || transcribing || openingConversation) return;
-    endVoice();
+    if (openingConversation) return;
+
     setOpeningConversation(true);
     setError("");
     try {
       const result = await api<Conversation & { messages: Message[] }>(
         `/conversations/${c.id}`,
       );
+      if (currentId && c.id !== currentId)
+        drafts.current.set(currentId, {
+          draft,
+          attachments: pendingAttachments,
+          model,
+          reasoningEffort,
+          retryMessageId,
+        });
+      const saved = drafts.current.get(c.id);
+      setPendingAttachments(saved?.attachments || []);
       setCurrentId(c.id);
       activeId.current = c.id;
-      setMessages(result.messages);
-      setDraft("");
-      if (result.model) setModel(result.model);
+      setMessages(runs.current.snapshot(c.id) || result.messages);
+      setDraft(saved?.draft || "");
+      setReasoningEffort(saved?.reasoningEffort ?? cReasoning(result));
+      setRetryMessageId(saved?.retryMessageId || null);
+      if (saved?.model || result.model) {
+        const candidate = saved?.model || result.model || "";
+        setModel(
+          models.some((m) => m.model === candidate)
+            ? candidate
+            : (models.find((m) => m.isDefault) || models[0])?.model || "",
+        );
+      }
       setPage("chat");
     } catch (e) {
       fail(e);
@@ -533,30 +815,27 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setOpeningConversation(false);
     }
   }
-  async function newChat() {
-    if (chatLocked || transcribing || openingConversation) return;
-    endVoice();
-    setOpeningConversation(true);
+  function newChat() {
+    if (uploading || openingConversation) return;
+
     setError("");
-    try {
-      const next = await api<Conversation>("/conversations", {
-        method: "POST",
-        body: JSON.stringify({ model: model || null }),
+    if (currentId)
+      drafts.current.set(currentId, {
+        draft,
+        attachments: pendingAttachments,
+        model,
+        reasoningEffort,
+        retryMessageId,
       });
-      setConversations((items) => [
-        { ...next, message_count: 0, preview: null },
-        ...items,
-      ]);
-      setCurrentId(next.id);
-      activeId.current = next.id;
-      setMessages([]);
-      setDraft("");
-      setPage("chat");
-    } catch (e) {
-      fail(e);
-    } finally {
-      setOpeningConversation(false);
-    }
+    // An untouched chat is local UI state. Sending, uploading or requesting a
+    // report creates its server conversation when there is something to keep.
+    setCurrentId(null);
+    activeId.current = null;
+    setMessages([]);
+    setRetryMessageId(null);
+    setPendingAttachments([]);
+    setDraft("");
+    setPage("chat");
   }
   async function openReport(item: Report) {
     reportSelection.current = item.id;
@@ -590,208 +869,297 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
   }
   async function restoreReport(item: Report) {
+    if (emptyingTrash || restoringReportId) return;
+    setRestoringReportId(item.id);
     try {
       await api(`/reports/${item.id}/restore`, { method: "POST" });
       setDeletedReports((items) => items.filter((row) => row.id !== item.id));
       await loadReports();
     } catch (e) {
       fail(e);
+    } finally {
+      setRestoringReportId(null);
     }
   }
-  async function send(text: string, voiced = false) {
-    if (!text.trim() || chatLocked || reportBusyRef.current) return;
+  async function emptyReportTrash() {
+    if (emptyingTrash || restoringReportId || !deletedReports.length) return;
+    setEmptyingTrash(true);
+    setError("");
+    try {
+      await api("/reports/trash", { method: "DELETE" });
+      setDeletedReports([]);
+      setEmptyTrashConfirm(false);
+      await loadReports();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setEmptyingTrash(false);
+    }
+  }
+  async function send(
+    text: string,
+    retryId = retryMessageId,
+    retryFiles?: Attachment[],
+  ) {
+    if (
+      (!text.trim() && !pendingAttachments.length) ||
+      chatLocked ||
+      openingConversation ||
+      runs.current.has(currentId) ||
+      reportBusyRef.current
+    )
+      return;
+    text = text.trim() ? text : "Analizo skedarët e bashkëngjitur.";
+    const outgoing = [...(retryFiles ?? pendingAttachments)];
     if (!subscription.connected) {
-      setError("Lidhni abonimin ChatGPT për të nisur bisedën.");
+      setError(`Lidhni abonimin ${providerName} për të nisur bisedën.`);
       setPage("connection");
       return;
     }
-    setBusy(true);
     setError("");
     setDraft("");
-    setActivity("Duke menduar");
-    const spokenEpoch = voiceEpoch.current;
+    setPendingAttachments([]);
     let id = currentId,
-      full = "",
-      finished = false;
+      full = "";
     try {
       if (!id) {
+        setOpeningConversation(true);
         const conversation = await api<Conversation>("/conversations", {
           method: "POST",
-          body: JSON.stringify({ model: model || null }),
+          body: JSON.stringify({
+            model: model || null,
+            reasoning_effort: effort || null,
+          }),
         });
         id = conversation.id;
         setCurrentId(id);
         activeId.current = id;
+        setOpeningConversation(false);
       }
-      setMessages((prev) => [
-        ...prev,
+      const streamId = id;
+      setRetryMessageId(retryId);
+      drafts.current.delete(id);
+      const initialMessages: Message[] = [
+        ...(retryId ? messagesBeforeRestart(messages, retryId) : messages),
         {
-          id: `u-${Date.now()}`,
+          id: retryId || `u-${Date.now()}`,
           role: "user",
+          created_at: new Date().toISOString(),
           content: text,
+          attachments: outgoing,
           status: "completed",
         },
         {
           id: "streaming",
           role: "assistant",
+          created_at: new Date().toISOString(),
           content: "",
           status: "streaming",
         },
-      ]);
-      await streamChat(id, text, model, (event) => {
-        if (event.type === "delta") {
-          full += event.text;
-          setActivity("Duke shkruar");
-        }
-        if (event.type === "tool") setActivity("Duke kontrolluar të dhënat");
-        if (event.type === "error") throw new Error(event.message);
-        if (event.type === "done") {
-          finished = event.status === "completed";
-          full = event.text || full;
-        }
-        if (event.type === "delta" || event.type === "done")
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === "streaming"
-                ? {
-                    ...m,
-                    content: full,
-                    status: event.type === "done" ? event.status : "streaming",
-                  }
-                : m,
-            ),
+      ];
+      runs.current.start(id, initialMessages);
+      setMessages(initialMessages);
+      refreshRuns((n) => n + 1);
+      await streamChat(
+        id,
+        text,
+        model,
+        (event) => {
+          if (event.type === "message" && retryId)
+            void loadReports().catch(fail);
+          if (event.type === "delta") full += event.text;
+          if (event.type === "error") throw new Error(event.message);
+          if (event.type === "done") {
+            full = event.text || full;
+          }
+          const next = runs.current.update(
+            streamId,
+            full,
+            event.type === "done" ? event.status : "streaming",
+            event.type === "tool"
+              ? "Duke kontrolluar të dhënat"
+              : event.type === "delta"
+                ? "Duke shkruar"
+                : undefined,
           );
-      });
-      if (
-        spokenEpoch === voiceEpoch.current &&
-        (readReplies || voiced || voiceModeRef.current) &&
-        finished &&
-        full
-      )
-        speak(full, () => {
-          if (
-            spokenEpoch === voiceEpoch.current &&
-            voiceModeRef.current &&
-            mounted.current
-          )
-            void startRecording();
-        });
+          if (activeId.current === streamId && next) setMessages(next);
+          refreshRuns((n) => n + 1);
+        },
+        outgoing.map((a) => a.id),
+        { reasoning_effort: effort || null, retry_message_id: retryId },
+      );
       const [list, detail] = await Promise.all([
         api<Conversation[]>("/conversations"),
         api<Conversation & { messages: Message[] }>(`/conversations/${id}`),
       ]);
       setConversations(list);
-      if (activeId.current === id) setMessages(detail.messages);
+      drafts.current.delete(id);
+      if (activeId.current === id) {
+        setMessages(detail.messages);
+        setRetryMessageId(null);
+      }
       setBusinessSources(await api<Source[]>("/sources"));
       await loadReports();
     } catch (e) {
-      fail(e);
-      voiceModeRef.current = false;
-      setVoiceMode(false);
-      setDraft(text);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === "streaming" ? { ...m, status: "failed" } : m,
-        ),
-      );
+      if (id) {
+        runs.current.update(id, full, "failed");
+        drafts.current.set(id, {
+          draft: text,
+          attachments: outgoing,
+          model,
+          reasoningEffort,
+          retryMessageId: retryId,
+        });
+      }
+      if (activeId.current === id) {
+        fail(e);
+
+        setDraft(text);
+        setPendingAttachments(outgoing);
+        const next = id ? runs.current.snapshot(id) : undefined;
+        if (next) setMessages(next);
+        if (id) {
+          try {
+            const detail = await api<Conversation & { messages: Message[] }>(
+              `/conversations/${id}`,
+            );
+            if (activeId.current === id) setMessages(detail.messages);
+          } catch {
+            /* Preserve the visible attempt until reconnection. */
+          }
+        }
+      }
     } finally {
       try {
         await loadReports();
       } catch (e) {
-        fail(e);
+        if (activeId.current === id) fail(e);
       }
-      setBusy(false);
-      setActivity("");
+      if (id) runs.current.finish(id);
+      refreshRuns((n) => n + 1);
+      if (!id) setOpeningConversation(false);
     }
   }
-  sendRef.current = send;
-  async function startRecording() {
-    if (reportBusyRef.current || stoppingReports) return;
-    resumeVoiceAfterReport.current = false;
-    if (!voice?.available) {
-      setError(
-        "Transkriptimi zanor nuk është i disponueshëm. Kontrolloni shërbimin në Administrim.",
-      );
-      voiceModeRef.current = false;
-      setVoiceMode(false);
+  async function uploadFiles(files: FileList | null) {
+    if (!files || chatLocked) return;
+    const selected = Array.from(files);
+    if (selected.length + pendingAttachments.length > 5) {
+      setError("Bashkëngjitni deri në 5 skedarë për mesazh.");
       return;
     }
-    if (!subscription.connected) {
-      setPage("connection");
-      setError("Lidhni abonimin para se të nisni bisedën me zë.");
-      voiceModeRef.current = false;
-      setVoiceMode(false);
+    if (selected.some((f) => f.size > 12 * 1024 * 1024)) {
+      setError("Skedarët duhet të jenë më të vegjël se 12 MB.");
       return;
     }
-    voiceEpoch.current += 1;
-    window.speechSynthesis?.cancel();
-    setRecording(true);
-    try {
-      const started = await recorder.current.start((blob) => {
-        void transcribe(blob);
-      }, voiceModeRef.current);
-      if (!started) setRecording(false);
-    } catch (e) {
-      recorder.current.stop(true);
-      setRecording(false);
-      fail(e);
-      voiceModeRef.current = false;
-      setVoiceMode(false);
-    }
-  }
-  async function transcribe(blob: Blob) {
-    const epoch = voiceEpoch.current;
-    setRecording(false);
-    setTranscribing(true);
+    setUploading(true);
     setError("");
     try {
-      const form = new FormData();
-      form.append("file", blob, "recording");
-      form.append("language", voiceLanguage || "auto");
-      const result = await api<{ text: string; language: string }>(
-        "/voice/transcribe",
-        { method: "POST", body: form },
-      );
-      if (epoch !== voiceEpoch.current || !mounted.current) return;
-      if (!result.text.trim()) {
-        setError("Nuk u dëgjua të folur. Provoni përsëri.");
-        setVoiceMode(false);
-        voiceModeRef.current = false;
-      } else {
-        setTranscribing(false);
-        await sendRef.current(result.text, true);
+      let id = currentId;
+      if (!id) {
+        const chat = await api<Conversation>("/conversations", {
+          method: "POST",
+          body: JSON.stringify({
+            model: model || null,
+            reasoning_effort: effort || null,
+          }),
+        });
+        id = chat.id;
+        setCurrentId(id);
+        activeId.current = id;
+      }
+      for (const file of selected) {
+        const form = new FormData();
+        form.append("file", file);
+        const result = await api<Attachment>(
+          `/conversations/${id}/attachments`,
+          { method: "POST", body: form },
+        );
+        if (mounted.current && activeId.current === id)
+          setPendingAttachments((items) => [...items, result]);
       }
     } catch (e) {
       fail(e);
-      setVoiceMode(false);
-      voiceModeRef.current = false;
     } finally {
-      setTranscribing(false);
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
     }
   }
-  function endVoice() {
-    resumeVoiceAfterReport.current = false;
-    voiceEpoch.current += 1;
-    voiceModeRef.current = false;
-    setVoiceMode(false);
-    recorder.current.stop(true);
-    setRecording(false);
-    window.speechSynthesis?.cancel();
-  }
-  async function toggleVoiceMode() {
-    if (voiceMode) endVoice();
-    else {
-      voiceModeRef.current = true;
-      setVoiceMode(true);
-      await startRecording();
+  async function toggleAttachmentTemplate(item: Attachment) {
+    try {
+      const next = await api<Attachment>(`/attachments/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          purpose: item.purpose === "template" ? "analysis" : "template",
+        }),
+      });
+      setPendingAttachments((items) =>
+        items.map((a) => (a.id === next.id ? next : a)),
+      );
+      setMessages((items) =>
+        items.map((m) => ({
+          ...m,
+          attachments: m.attachments?.map((a) => (a.id === next.id ? next : a)),
+        })),
+      );
+    } catch (e) {
+      fail(e);
     }
+  }
+  function attachmentChip(item: Attachment, pending = false) {
+    return (
+      <div
+        key={item.id}
+        className={`attachment-chip ${item.purpose === "template" ? "template" : ""}`}
+      >
+        <Paperclip size={16} />
+        <div className="attachment-name">
+          {pending ? (
+            <strong>{item.name}</strong>
+          ) : (
+            <a href={`/api/attachments/${item.id}/download`}>{item.name}</a>
+          )}
+          <small>
+            {item.kind.toUpperCase()} ·{" "}
+            {Math.max(1, Math.round(item.size / 1024))} KB
+          </small>
+        </div>
+        {item.kind === "xlsx" && Object.keys(item.format || {}).length > 0 && (
+          <button
+            type="button"
+            className="attachment-template"
+            aria-pressed={item.purpose === "template"}
+            disabled={chatLocked}
+            onClick={() => void toggleAttachmentTemplate(item)}
+          >
+            {item.purpose === "template"
+              ? "Model paraqitjeje ✓"
+              : "Përdor formatin"}
+          </button>
+        )}
+        {pending && (
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={`Hiq skedarin ${item.name}`}
+            disabled={chatLocked}
+            onClick={() =>
+              setPendingAttachments((items) =>
+                items.filter((a) => a.id !== item.id),
+              )
+            }
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
+    );
   }
   async function stopResponse() {
-    endVoice();
-    setStoppingReports(true);
+    const targetId = currentId;
+    setStoppingIds((ids) => ({ ...ids, [targetId || ""]: true }));
     try {
-      if (currentId)
-        await api(`/conversations/${currentId}/stop`, { method: "POST" });
+      if (targetId)
+        await api(`/conversations/${targetId}/stop`, { method: "POST" });
       else
         for (const item of activeReports)
           await api(`/reports/${item.id}/stop`, { method: "POST" });
@@ -799,11 +1167,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     } catch (e) {
       fail(e);
     } finally {
-      setStoppingReports(false);
+      setStoppingIds((ids) => {
+        const next = { ...ids };
+        delete next[targetId || ""];
+        return next;
+      });
     }
   }
   function navigate(next: Page) {
-    endVoice();
     closeReport();
     setPage(next);
     setError("");
@@ -825,6 +1196,23 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         throw new Error(
           "Të dhënat manuale duhet të jenë një listë JSON me rreshta.",
         );
+      const parameters = JSON.parse(
+        String(data.parameters || "{}").trim() || "{}",
+      );
+      let conversationId = page === "chat" ? currentId : null;
+      if (page === "chat" && !conversationId) {
+        setOpeningConversation(true);
+        const next = await api<Conversation>("/conversations", {
+          method: "POST",
+          body: JSON.stringify({
+            model: model || null,
+            reasoning_effort: effort || null,
+          }),
+        });
+        conversationId = next.id;
+        setCurrentId(next.id);
+        activeId.current = next.id;
+      }
       const result = await api<Report>("/reports", {
         method: "POST",
         body: JSON.stringify({
@@ -833,11 +1221,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           instructions: data.instructions,
           dataset_id: data.dataset_id || null,
           rows,
-          parameters: JSON.parse(
-            String(data.parameters || "{}").trim() || "{}",
-          ),
+          parameters,
           model: model || null,
-          conversation_id: page === "chat" ? currentId : null,
+          reasoning_effort: effort || null,
+          conversation_id: conversationId,
         }),
       });
       setReportForm(false);
@@ -846,8 +1233,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setReport(result);
       setPage("reports");
       await loadReports();
+      setConversations(await api<Conversation[]>("/conversations"));
     } catch (e) {
       fail(e);
+    } finally {
+      setOpeningConversation(false);
     }
   }
   async function adminSubmit(
@@ -860,8 +1250,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     if (kind === "sources") {
       data.kind = sourceKind;
       for (const key of Object.keys(data)) {
-        if (key.startsWith("SQLSERVER_") && data[key] === "") delete data[key];
+        if (
+          (key.startsWith("SQLSERVER_") || key.startsWith("HANA_")) &&
+          data[key] === ""
+        )
+          delete data[key];
       }
+      if (sourceSupported && !environmentActive && autoDiscoverDatabases)
+        data[sourcePrefix + "_DATABASE"] = "";
       setSavingSource(true);
     }
     try {
@@ -913,24 +1309,82 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setError("");
     setEditSource(source);
     setSourceKind(source?.kind || "sqlserver");
+    setOverrideEnvironment(false);
+    setAutoDiscoverDatabases(
+      !source?.connection_fields?.[
+        source.kind === "saphana" ? "HANA_DATABASE" : "SQLSERVER_DATABASE"
+      ],
+    );
     setAddSource(true);
   }
+  async function changeConnection(
+    source: Source,
+    action: "connect" | "disconnect" | "remove",
+  ) {
+    setError("");
+    setSourceActions((current) => ({ ...current, [source.id]: true }));
+    try {
+      await api(
+        `/admin/sources/${source.id}${action === "remove" ? "" : `/${action}`}`,
+        {
+          method: action === "remove" ? "DELETE" : "POST",
+        },
+      );
+      if (action === "remove") setDeleteSource(null);
+      await loadAdmin();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSourceActions((current) => ({ ...current, [source.id]: false }));
+    }
+  }
+  async function browseDatabases(source: Source, offset = 0) {
+    if (loadingDatabases) return;
+    setError("");
+    setDatabaseBrowser(source);
+    if (offset === 0) {
+      setServerDatabases([]);
+      setDatabaseOffset(null);
+    }
+    setLoadingDatabases(true);
+    try {
+      const result = await api<{
+        databases: { name: string; is_default: number }[];
+        next_offset: number | null;
+      }>(`/admin/sources/${source.id}/databases?offset=${offset}&limit=100`);
+      setServerDatabases((previous) =>
+        offset === 0 ? result.databases : [...previous, ...result.databases],
+      );
+      setDatabaseOffset(result.next_offset);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setLoadingDatabases(false);
+    }
+  }
   async function removeConversation() {
-    if (!deleteChat || busy || recording || transcribing || deleting) return;
+    if (uploading) return;
+    if (!deleteChat || conversationRunning(deleteChat.id) || deleting) return;
     setDeleting(true);
     try {
       await api(`/conversations/${deleteChat.id}`, { method: "DELETE" });
       if (currentId === deleteChat.id) {
-        recorder.current.stop(true);
-        window.speechSynthesis?.cancel();
-        setVoiceMode(false);
         setCurrentId(null);
         activeId.current = null;
         setMessages([]);
+        setRetryMessageId(null);
         setDraft("");
         setPage("conversations");
       }
       setConversations((items) => items.filter((c) => c.id !== deleteChat.id));
+      setReports((items) =>
+        items.map((r) =>
+          r.conversation_id === deleteChat.id
+            ? { ...r, conversation_id: null }
+            : r,
+        ),
+      );
+      drafts.current.delete(deleteChat.id);
       setDeleteChat(null);
     } catch (e) {
       fail(e);
@@ -984,12 +1438,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     chat: current?.title || "Bisedë e re",
     reports: "Biblioteka e raporteve",
     sources: "Burimet e të dhënave",
-    connection: "Lidhja me ChatGPT",
+    connection: "Modeli",
     admin: "Administrimi",
   }[page];
   const conversationReports = currentId
     ? reports.filter((r) => r.conversation_id === currentId)
     : [];
+  const chatTimeline = buildChatTimeline(messages, conversationReports);
   const empty = messages.length === 0 && conversationReports.length === 0;
   const visibleConversations = conversations.filter((c) =>
     `${c.title} ${c.preview || ""}`
@@ -1002,15 +1457,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     <div className="workspace">
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate("conversations")}>
-          <span className="brand-mark">d.</span>
-          <span>
-            duka<span className="brand-sub"> HAPËSIRA E RAPORTEVE </span>
-          </span>
+          <Brand light />
         </button>
         <button
           className="new-chat"
           onClick={newChat}
-          disabled={chatLocked || transcribing || openingConversation}
+          disabled={uploading || openingConversation}
         >
           <Plus size={18} /> Bisedë e re <span>↗</span>
         </button>
@@ -1042,22 +1494,27 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               className={`recent-row ${currentId === c.id ? "active" : ""}`}
             >
               <button
-                disabled={
-                  (busy && c.id !== currentId) ||
-                  transcribing ||
-                  recording ||
-                  openingConversation
-                }
+                disabled={uploading || openingConversation}
                 className={`recent-item ${currentId === c.id ? "active" : ""}`}
                 onClick={() => void selectConversation(c)}
               >
-                <MessageSquare size={14} />
+                <>
+                  {conversationRunning(c.id) ? (
+                    <LoaderCircle
+                      size={14}
+                      className="spin"
+                      aria-label="Duke përgatitur përgjigjen"
+                    />
+                  ) : (
+                    <MessageSquare size={14} />
+                  )}
+                </>
                 <span>{c.title}</span>
               </button>
               <button
                 type="button"
                 className="delete-conversation"
-                disabled={chatLocked || transcribing || recording || deleting}
+                disabled={conversationRunning(c.id) || uploading || deleting}
                 aria-label={`Fshi bisedën: ${c.title}`}
                 title="Fshi bisedën"
                 onClick={() => {
@@ -1083,7 +1540,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             />
             <span>
               {" "}
-              Abonimi ChatGPT{" "}
+              Modeli · {providerName}{" "}
               <small>
                 {subscription.connected
                   ? `${subscription.account?.planType || "I lidhur"} · I lidhur`
@@ -1092,7 +1549,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </span>
             <ArrowRight size={15} />
           </button>
-          {user.role === "admin" && (
+          {user.role === "devs" && (
             <button
               className={`nav-item ${page === "admin" ? "selected" : ""}`}
               onClick={() => navigate("admin")}
@@ -1100,24 +1557,27 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <Settings size={18} /> Administrimi{" "}
             </button>
           )}
+          <button
+            className="nav-item"
+            title="Cilësimet"
+            aria-label="Cilësimet"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings size={18} /> Cilësimet
+          </button>
           <div className="profile">
             <span className="avatar">
               {user.name.slice(0, 1).toUpperCase()}
             </span>
             <span>
               {user.name}
-              <small>
-                {user.role === "admin"
-                  ? "Administratori i hapësirës"
-                  : "Anëtar i hapësirës"}
-              </small>
+              <small>{label(user.role)}</small>
             </span>
             <button
               className="icon-button"
               aria-label="Dil nga llogaria"
-              disabled={chatLocked || transcribing}
+              disabled={chatLocked}
               onClick={() => {
-                endVoice();
                 void api("/auth/logout", { method: "POST" })
                   .then(onLogout)
                   .catch(fail);
@@ -1145,7 +1605,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <History size={19} />
             </button>
             <span className="workspace-tag">
-              <span /> Grupi Duka{" "}
+              <span /> Duka Group{" "}
             </span>
             <button
               className="icon-button"
@@ -1178,7 +1638,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 <button
                   className="button primary"
                   onClick={() => void newChat()}
-                  disabled={chatLocked || openingConversation}
+                  disabled={uploading || openingConversation}
                 >
                   <Plus size={17} />
                   Bisedë e re
@@ -1203,16 +1663,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     <button
                       className="conversation-card-main"
                       aria-label={`Hap bisedën: ${c.title}`}
-                      disabled={
-                        (busy && c.id !== currentId) ||
-                        transcribing ||
-                        recording ||
-                        openingConversation
-                      }
+                      disabled={uploading || openingConversation}
                       onClick={() => void selectConversation(c)}
                     >
                       <span className="report-icon">
-                        <MessageSquare size={23} />
+                        <>
+                          {conversationRunning(c.id) ? (
+                            <LoaderCircle
+                              size={23}
+                              className="spin"
+                              aria-label="Duke përgatitur përgjigjen"
+                            />
+                          ) : (
+                            <MessageSquare size={23} />
+                          )}
+                        </>
                       </span>
                       <h3>{c.title}</h3>
                       <p>
@@ -1229,7 +1694,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       className="icon-button conversation-card-delete"
                       title="Fshi bisedën"
                       aria-label={`Fshi bisedën: ${c.title}`}
-                      disabled={busy || recording || transcribing || deleting}
+                      disabled={
+                        conversationRunning(c.id) || uploading || deleting
+                      }
                       onClick={() => {
                         setError("");
                         setDeleteChat(c);
@@ -1286,7 +1753,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </button>
                 </div>
               </div>
-              <div className={`message-scroll ${empty ? "empty-scroll" : ""}`}>
+              <div
+                ref={messageScroll}
+                className={`message-scroll ${empty ? "empty-scroll" : ""}`}
+              >
                 {empty ? (
                   <section className="chat-welcome">
                     <div className="welcome-symbol">
@@ -1340,107 +1810,149 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     </div>
                     <div className="welcome-note">
                       <ShieldCheck size={15} /> Mundësuar nga abonimi juaj
-                      ChatGPT.{" "}
+                      {providerName}.{" "}
                     </div>
                   </section>
                 ) : (
                   <div className="messages">
-                    {messages.map((m) => (
-                      <article key={m.id} className={`message ${m.role}`}>
-                        <div className={`message-avatar ${m.role}`}>
-                          {m.role === "assistant" ? (
-                            <Sparkles size={18} />
-                          ) : (
-                            user.name.slice(0, 1)
+                    {chatTimeline.map((entry) => {
+                      if (entry.kind === "message") {
+                        const m = entry.message;
+                        return (
+                          <article
+                            key={entry.key}
+                            className={`message ${m.role}`}
+                          >
+                            <div className={`message-avatar ${m.role}`}>
+                              {m.role === "assistant" ? (
+                                <Sparkles size={18} />
+                              ) : (
+                                user.name.slice(0, 1)
+                              )}
+                            </div>
+                            <div className="message-body">
+                              <div className="message-author">
+                                {m.role === "assistant"
+                                  ? "Asistenti Duka"
+                                  : user.name}
+                                <span>
+                                  {m.role === "assistant" ? "AI" : "Ju"}
+                                </span>
+                              </div>
+                              {!!m.attachments?.length && (
+                                <div className="message-attachments">
+                                  {m.attachments.map((a) => attachmentChip(a))}
+                                </div>
+                              )}
+                              {pendingMessages.has(m.id) && (
+                                <ThinkingDots
+                                  description={pendingDescription}
+                                />
+                              )}
+                              {m.content && (
+                                <MarkdownContent>{m.content}</MarkdownContent>
+                              )}
+                              {m.role === "user" && !chatLocked && (
+                                <div className="message-actions">
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label="Ndrysho mesazhin"
+                                    title="Ndrysho mesazhin dhe rinis bisedën"
+                                    onClick={() => {
+                                      setRetryMessageId(m.id);
+                                      setDraft(m.content);
+                                      setPendingAttachments(
+                                        m.attachments || [],
+                                      );
+                                    }}
+                                  >
+                                    <Pencil size={16} aria-hidden="true" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label="Ridërgo"
+                                    title="Ridërgo dhe rinis bisedën nga ky mesazh"
+                                    onClick={() =>
+                                      void send(
+                                        m.content,
+                                        m.id,
+                                        m.attachments || [],
+                                      )
+                                    }
+                                  >
+                                    <RotateCcw size={16} aria-hidden="true" />
+                                  </button>
+                                </div>
+                              )}
+                              {m.status === "failed" && (
+                                <span className="message-warning">
+                                  {" "}
+                                  Përgjigjja nuk përfundoi.{" "}
+                                </span>
+                              )}
+                              {m.status === "interrupted" && (
+                                <span className="message-warning">
+                                  {" "}
+                                  Përgjigjja u ndërpre.{" "}
+                                </span>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      }
+                      const r = entry.report;
+                      return (
+                        <div
+                          className="chat-report"
+                          key={entry.key}
+                          aria-live="polite"
+                        >
+                          <div className="chat-report-heading">
+                            <FileText size={20} />
+                            <strong>{r.title}</strong>
+                            <Badge good={r.status === "completed"}>
+                              {label(
+                                r.stage === "interrupted"
+                                  ? "interrupted"
+                                  : r.status,
+                              )}
+                            </Badge>
+                          </div>
+                          {["queued", "running"].includes(r.status) && (
+                            <p>{label(r.stage || "gathering")}</p>
                           )}
+                          {r.error && (
+                            <p className="message-warning">
+                              {errorMessage(r.error)}
+                            </p>
+                          )}
+                          {r.status === "completed" && (
+                            <a
+                              className="button primary small"
+                              href={`/api/reports/${r.id}/export/xlsx`}
+                            >
+                              <ArrowDownToLine size={16} />
+                              Shkarko Excel
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {reportBusy && pendingMessages.size === 0 && (
+                      <article className="message assistant">
+                        <div className="message-avatar assistant">
+                          <Sparkles size={18} />
                         </div>
                         <div className="message-body">
                           <div className="message-author">
-                            {m.role === "assistant"
-                              ? "Asistenti Duka"
-                              : user.name}
-                            <span>
-                              {m.role === "assistant" ? "ChatGPT" : "Ju"}
-                            </span>
+                            Asistenti Duka <span>{providerName}</span>
                           </div>
-                          {m.content ? (
-                            <div className="markdown">
-                              <Markdown>{m.content}</Markdown>
-                            </div>
-                          ) : (
-                            <div className="thinking">
-                              <span />
-                              <span />
-                              <span />
-                              {activity || "Në pritje të përgjigjes"}
-                            </div>
-                          )}
-                          {m.status === "failed" && (
-                            <span className="message-warning">
-                              {" "}
-                              Përgjigjja nuk përfundoi.{" "}
-                            </span>
-                          )}
-                          {m.status === "interrupted" && (
-                            <span className="message-warning">
-                              {" "}
-                              Përgjigjja u ndërpre.{" "}
-                            </span>
-                          )}
-                          {m.role === "assistant" &&
-                            m.status === "completed" &&
-                            m.content && (
-                              <button
-                                className="icon-button read-message"
-                                aria-label="Lexo përgjigjen me zë"
-                                onClick={() => speak(m.content)}
-                              >
-                                <Volume2 size={16} />
-                              </button>
-                            )}
+                          <ThinkingDots description={pendingDescription} />
                         </div>
                       </article>
-                    ))}
-                    {conversationReports.map((r) => (
-                      <div
-                        className="chat-report"
-                        key={r.id}
-                        aria-live="polite"
-                      >
-                        <div className="chat-report-heading">
-                          <FileText size={20} />
-                          <strong>{r.title}</strong>
-                          <Badge good={r.status === "completed"}>
-                            {label(
-                              r.stage === "interrupted"
-                                ? "interrupted"
-                                : r.status,
-                            )}
-                          </Badge>
-                        </div>
-                        {["queued", "running"].includes(r.status) && (
-                          <p>
-                            <LoaderCircle className="spin" size={16} />
-                            {label(r.stage || "gathering")}
-                          </p>
-                        )}
-                        {r.error && (
-                          <p className="message-warning">
-                            {errorMessage(r.error)}
-                          </p>
-                        )}
-                        {r.status === "completed" && (
-                          <a
-                            className="button primary small"
-                            href={`/api/reports/${r.id}/export/xlsx`}
-                          >
-                            <ArrowDownToLine size={16} />
-                            Shkarko Excel
-                          </a>
-                        )}
-                      </div>
-                    ))}
-                    <div ref={bottom} />
+                    )}
                   </div>
                 )}
               </div>
@@ -1448,39 +1960,33 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 {!subscription.connected && (
                   <div className="connect-prompt">
                     <span>
-                      <Sparkles size={15} /> Lidhni abonimin ChatGPT për të
-                      biseduar.{" "}
+                      <Sparkles size={15} /> Lidhni abonimin {providerName} për
+                      të biseduar.{" "}
                     </span>
-                    <button onClick={connect} disabled={connecting}>
+                    <button
+                      onClick={() => void connect()}
+                      disabled={connecting}
+                    >
                       {connecting ? "Duke u lidhur…" : "Lidh llogarinë"}
                       <ArrowRight size={14} />
                     </button>
                   </div>
                 )}
-                {(recording || transcribing || voiceMode) && (
-                  <div className="voice-status">
-                    <AudioLines size={17} />
-                    {transcribing
-                      ? "Duke transkriptuar lokalisht… Përdorimi i parë mund të shkarkojë modelin zanor."
-                      : recording
-                        ? "Po dëgjoj… Flisni natyrshëm ose shtypni mikrofonin për të përfunduar."
-                        : "Biseda me zë është aktive."}
-                    <button onClick={endVoice}> Ndalo zërin </button>
-                  </div>
-                )}
-                {reportBusy && (
-                  <div className="report-progress" role="status">
-                    <LoaderCircle size={18} className="spin" />
-                    <div>
-                      <strong>Raporti në Excel po përgatitet</strong>
-                      <span>
-                        {activeReports
-                          .map((r) => label(r.stage || "gathering"))
-                          .join(" · ")}{" "}
-                        — Prisni përfundimin ose ndërpriteni me butonin e
-                        ndalimit.
-                      </span>
-                    </div>
+                {retryMessageId && (
+                  <div className="retry-banner" role="status">
+                    Biseda do të rinisë nga ky mesazh. Mesazhet pas tij do të
+                    zëvendësohen.
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => {
+                        setRetryMessageId(null);
+                        setDraft("");
+                        setPendingAttachments([]);
+                      }}
+                    >
+                      Anulo ndryshimin
+                    </button>
                   </div>
                 )}
                 <form
@@ -1490,12 +1996,33 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     void send(draft);
                   }}
                 >
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    hidden
+                    multiple
+                    accept=".xlsx,.csv,.pdf,.docx,.txt"
+                    aria-label="Zgjidh skedarët për analizë"
+                    disabled={chatLocked}
+                    onChange={(e) => void uploadFiles(e.target.files)}
+                  />
+                  {!!pendingAttachments.length && (
+                    <div className="pending-attachments">
+                      {pendingAttachments.map((a) => attachmentChip(a, true))}
+                    </div>
+                  )}
+                  {uploading && (
+                    <p className="upload-status" role="status">
+                      <LoaderCircle size={16} className="spin" />
+                      Duke lexuar skedarin…
+                    </p>
+                  )}
                   <textarea
                     aria-label="Mesazhi"
                     placeholder="Bëni një pyetje ose kërkoni analizë dhe raport nga databaza…"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    disabled={chatLocked || transcribing || recording}
+                    disabled={chatLocked}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
@@ -1508,13 +2035,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       <span className="model-picker">
                         <Sparkles size={14} />
                         <Select
-                          aria-label="Modeli ChatGPT"
+                          aria-label={`Modeli ${providerName}`}
                           value={model}
                           onChange={(e) => setModel(e.target.value)}
                           disabled={!subscription.connected || chatLocked}
                         >
                           {!models.length && (
-                            <option value=""> Abonimi ChatGPT </option>
+                            <option value=""> Abonimi {providerName} </option>
                           )}
                           {models.map((m) => (
                             <option key={m.id} value={m.model}>
@@ -1523,35 +2050,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           ))}
                         </Select>
                       </span>
+                      {reasoningControl}
                       <span className="composer-divider" />
                       <button
                         type="button"
-                        className={`icon-button ${recording ? "recording" : ""}`}
-                        aria-label={
-                          recording
-                            ? "Përfundo regjistrimin"
-                            : "Regjistro një mesazh zanor"
-                        }
-                        onClick={() =>
-                          recording
-                            ? recorder.current.stop()
-                            : void startRecording()
-                        }
-                        disabled={chatLocked || transcribing}
+                        className="button outline small upload-button"
+                        aria-label="Ngarko skedar"
+                        title="Ngarko Excel, CSV, PDF, Word ose tekst (deri në 12 MB)"
+                        disabled={chatLocked || pendingAttachments.length >= 5}
+                        onClick={() => fileInput.current?.click()}
                       >
-                        <Mic size={19} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`icon-button ${readReplies ? "on" : ""}`}
-                        aria-label="Aktivizo përgjigjet me zë"
-                        title="Lexo përgjigjet me zë"
-                        onClick={() => setReadReplies(!readReplies)}
-                      >
-                        <Volume2 size={18} />
+                        <Paperclip size={18} />
+                        {uploading ? "Duke ngarkuar…" : "Ngarko skedar"}
                       </button>
                     </div>
-                    {chatLocked ? (
+                    {busy || reportBusy ? (
                       <button
                         type="button"
                         className="send-button stop"
@@ -1570,9 +2083,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         aria-label="Dërgo mesazhin"
                         disabled={
                           chatLocked ||
-                          !draft.trim() ||
-                          recording ||
-                          transcribing
+                          (!draft.trim() && !pendingAttachments.length)
                         }
                       >
                         <ArrowRight size={21} />
@@ -1585,107 +2096,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     {" "}
                     Verifikoni shifrat e rëndësishme me të dhënat burimore.{" "}
                   </span>
-                  <button
-                    disabled={
-                      (chatLocked || transcribing || recording) && !voiceMode
-                    }
-                    className={voiceMode ? "voice-toggle on" : "voice-toggle"}
-                    onClick={() => void toggleVoiceMode()}
-                  >
-                    <AudioLines size={14} />
-                    {voiceMode ? "Zëri është aktiv" : "Fillo bisedën me zë"}
-                  </button>
                 </div>
-                <label className="voice-language">
-                  Gjuha e të folurit
-                  <Select
-                    aria-label="Gjuha e të folurit"
-                    value={voiceLanguage}
-                    disabled={
-                      chatLocked || recording || transcribing || voiceMode
-                    }
-                    onChange={(e) => setVoiceLanguage(e.target.value)}
-                  >
-                    <option value="sq">Shqip</option>
-                    <option value="en">Anglisht</option>
-                    <option value="">Zbulim automatik</option>
-                  </Select>
-                </label>
-                <p className="voice-help">
-                  Për bisedë me zë, shtyp “Fillo bisedën me zë” dhe lejo
-                  mikrofonin. Për një mesazh të vetëm, përdor ikonën e
-                  mikrofonit. Zëri funksionon në localhost ose HTTPS.
-                </p>
               </div>
             </main>
-            <aside className="context-panel">
-              <span className="eyebrow"> KONTEKSTI I HAPËSIRËS </span>
-              <h3>
-                {" "}
-                Përgjigjet e mira <br /> nisin nga konteksti.{" "}
-              </h3>
-              <p> Bisedat dhe raportet tuaja ruhen së bashku. </p>
-              <section className="context-card">
-                <div className="context-icon">
-                  <Sparkles size={18} />
-                </div>
-                <strong> Llogaria juaj ChatGPT </strong>
-                <p>
-                  {subscription.connected
-                    ? "Abonimi juaj është gati për bisedën."
-                    : "Lidhni llogarinë tuaj për të nisur bisedën."}
-                </p>
-                <button
-                  className="text-button"
-                  onClick={() => navigate("connection")}
-                >
-                  {subscription.connected ? "Menaxho lidhjen" : "Lidh abonimin"}
-                  <ArrowRight size={14} />
-                </button>
-              </section>
-              <section className="context-card">
-                <div className="context-icon neutral">
-                  <Database size={18} />
-                </div>
-                <strong> Të dhënat e biznesit </strong>
-                <Badge
-                  good={businessSources.some((s) => s.status === "connected")}
-                >
-                  {businessSources.some((s) => s.status === "connected")
-                    ? "I lidhur"
-                    : "Në pritje të lidhjes"}
-                </Badge>
-                <p>
-                  {" "}
-                  Pas lidhjes, kërkojini asistentit të zbulojë tabelat, të
-                  analizojë të dhënat dhe të krijojë raport. Nuk kërkohet
-                  përcaktim manual i dataset-eve.{" "}
-                </p>
-                <button
-                  className="text-button"
-                  onClick={() => navigate("sources")}
-                >
-                  {" "}
-                  Shiko burimet e të dhënave <ArrowRight size={14} />
-                </button>
-              </section>
-              <div className="context-tip">
-                <span> VAZHDONI BISEDËN </span>
-                <p>
-                  {" "}
-                  “Mund ta shpjegosh?” <br /> “Çfarë të analizoj më pas?” <br />{" "}
-                  “Ktheje këtë në raport.”{" "}
-                </p>
-              </div>
-              <div className="context-footer">
-                <ShieldCheck size={15} />
-                <span>
-                  {" "}
-                  Kredencialet ruhen në server. <br /> Ju kontrolloni lidhjen
-                  tuaj.{" "}
-                </span>
-              </div>
-            </aside>
           </div>
         )}
 
@@ -1693,58 +2106,112 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <main className="page-content">
             <PageHeading
               eyebrow="LLOGARIA DHE ABONIMI JUAJ"
-              title="Lidhni llogarinë tuaj ChatGPT."
-              text="Përdorni abonimin tuaj ChatGPT për biseda, analiza dhe raporte."
+              title="Modeli"
+              text="Lidhni ChatGPT dhe Claude, pastaj zgjidhni cilin abonim të përdorni për biseda, analiza dhe raporte."
             />
-            <section className="connection-card">
-              <div className="provider-logo">
-                <Sparkles size={28} />
-              </div>
-              <div>
-                <h2> Abonimi ChatGPT </h2>
-                <p>
-                  {subscription.connected
-                    ? subscription.account?.email || "Llogaria juaj ChatGPT"
-                    : "Hyni në mënyrë të sigurt përmes OpenAI për të lidhur llogarinë."}
-                </p>
-                <Badge good={subscription.connected}>
-                  {subscription.connected
-                    ? `${subscription.account?.planType || "Abonimi"} · I lidhur`
-                    : "I palidhur"}
-                </Badge>
-              </div>
-              <button
-                className={`button ${subscription.connected ? "outline" : "primary"}`}
-                onClick={subscription.connected ? disconnect : connect}
-                disabled={connecting || busy}
-              >
-                {connecting && <LoaderCircle className="spin" size={17} />}{" "}
-                {subscription.connected ? "Shkëput llogarinë" : "Lidh ChatGPT"}
-              </button>
+            {(["chatgpt", "claude"] as Provider[]).map((provider) => {
+              const status = providerSubscriptions[provider];
+              const name = provider === "claude" ? "Claude" : "ChatGPT";
+              const selected = selectedProvider === provider;
+              return (
+                <section
+                  key={provider}
+                  className={`connection-card ${selected ? "selected-provider" : ""}`}
+                  aria-label={`Abonimi ${name}`}
+                >
+                  <div className="provider-logo">
+                    <Sparkles size={28} />
+                  </div>
+                  <div className="provider-details">
+                    <h2> Abonimi {name} </h2>
+                    <p>
+                      {status.connected
+                        ? status.account?.email || `Llogaria juaj ${name}`
+                        : `Hyni në llogarinë tuaj ${name} për të lidhur abonimin.`}
+                    </p>
+                    <Badge good={status.connected}>
+                      {status.connected
+                        ? `${status.account?.planType || "Abonimi"} · I lidhur`
+                        : "I palidhur"}
+                    </Badge>
+                  </div>
+                  <div className="provider-actions">
+                    <button
+                      className={`button ${status.connected ? "outline" : "primary"}`}
+                      onClick={() =>
+                        void (status.connected
+                          ? disconnect(provider)
+                          : connect(provider))
+                      }
+                      disabled={
+                        connecting || choosingProvider || busy || reportBusy
+                      }
+                    >
+                      {connecting && (
+                        <LoaderCircle className="spin" size={17} />
+                      )}{" "}
+                      {status.connected ? `Shkëput ${name}` : `Lidh ${name}`}
+                    </button>
+                    <button
+                      className={`button ${selected ? "provider-chosen" : "outline"}`}
+                      aria-pressed={selected}
+                      onClick={() => void chooseProvider(provider)}
+                      disabled={
+                        selected ||
+                        choosingProvider ||
+                        connecting ||
+                        busy ||
+                        reportBusy
+                      }
+                    >
+                      {selected ? "Në përdorim" : `Përdor ${name}`}
+                    </button>
+                  </div>
+                </section>
+              );
+            })}
+            <section className="panel provider-model-panel">
+              <label>
+                Modeli për biseda dhe raporte
+                <select
+                  aria-label="Zgjidh modelin"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={
+                    !subscription.connected || choosingProvider || chatLocked
+                  }
+                >
+                  {!models.length && (
+                    <option value="">Lidhni abonimin {providerName}</option>
+                  )}
+                  {models.map((m) => (
+                    <option key={m.id} value={m.model}>
+                      {m.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p>
+                Zgjedhja përdoret për mesazhet dhe raportet e ardhshme. Të dyja
+                llogaritë mund të qëndrojnë të lidhura.
+              </p>
             </section>
             {!subscription.available && (
               <p className="error-box">
-                {errorMessage(subscription.error || "")}
+                {errorMessage(subscription.error || "")} Lidhja do të provohet
+                përsëri automatikisht sapo rrjeti të jetë gati.
               </p>
             )}
+            <section className="panel">{reasoningControl}</section>
             <div className="info-grid">
               <div className="info-card">
                 <ShieldCheck size={21} />
                 <h3> Biseda përdor abonimin tuaj </h3>
                 <p>
                   {" "}
-                  Backend-i përdor Codex CLI zyrtar me hyrjen ChatGPT. Zbatohen
-                  kufijtë Codex të abonimit tuaj.{" "}
-                </p>
-              </div>
-              <div className="info-card">
-                <AudioLines size={21} />
-                <h3> Bisedë me zë </h3>
-                <p>
-                  {" "}
-                  Të folurit transkriptohet lokalisht me Whisper. Pajisja juaj
-                  lexon përgjigjet me zë. Mikrofonin mund ta përdorni në
-                  localhost ose HTTPS.{" "}
+                  Përdoret abonimi që keni zgjedhur dhe kufijtë e llogarisë
+                  përkatëse. Mund të ndërroni ofruesin duke ruajtur bisedat dhe
+                  raportet tuaja.{" "}
                 </p>
               </div>
               <div className="info-card">
@@ -1753,11 +2220,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 <p>
                   {" "}
                   Kjo hapësirë ruan bisedat e veta. Lidhja e llogarisë nuk
-                  importon bisedat ose kujtesën nga ChatGPT.{" "}
+                  importon bisedat ose kujtesën nga ChatGPT ose Claude.{" "}
                 </p>
               </div>
             </div>
-            {subscription.connected && (
+            {subscription.connected && selectedProvider === "chatgpt" && (
               <section className="panel">
                 <div className="panel-heading">
                   <h3> Përdorimi i abonimit </h3>
@@ -1809,10 +2276,23 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 )}
               </section>
             )}
+            {subscription.connected && selectedProvider === "claude" && (
+              <p className="footnote">
+                Përdorimin dhe kufijtë e abonimit mund t’i kontrolloni te{" "}
+                <a
+                  href="https://claude.ai/settings/usage"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  llogaria Claude
+                </a>
+                .
+              </p>
+            )}
             <p className="footnote">
-              {" "}
-              Hyrja me kod pajisjeje duhet të aktivizohet në cilësimet e
-              sigurisë të ChatGPT ose të lejohet nga administratori.{" "}
+              {selectedProvider === "chatgpt"
+                ? "Hyrja me kod pajisjeje duhet të aktivizohet në cilësimet e sigurisë të ChatGPT ose të lejohet nga administratori."
+                : "Për Claude, hyni në shfletues me abonimin tuaj dhe vendosni këtu kodin njëpërdorimësh që shfaqet pas hyrjes."}
             </p>
           </main>
         )}
@@ -1855,6 +2335,25 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 Të fshira
               </button>
             </div>
+            {reportTrash && (
+              <div className="trash-toolbar">
+                <span>{deletedReports.length} raporte të fshira</span>
+                <button
+                  className="button danger small"
+                  disabled={
+                    !deletedReports.length ||
+                    emptyingTrash ||
+                    !!restoringReportId
+                  }
+                  onClick={() => {
+                    setError("");
+                    setEmptyTrashConfirm(true);
+                  }}
+                >
+                  <Trash2 size={16} /> Zbraz koshin
+                </button>
+              </div>
+            )}
             {libraryReports.length ? (
               <div className="report-grid">
                 {libraryReports.map((r) => (
@@ -1898,10 +2397,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       {reportTrash ? (
                         <button
                           className="button outline small"
+                          disabled={emptyingTrash || !!restoringReportId}
                           onClick={() => void restoreReport(r)}
                         >
                           <RotateCcw size={15} />
-                          Rikthe raportin
+                          {restoringReportId === r.id
+                            ? "Duke rikthyer…"
+                            : "Rikthe raportin"}
                         </button>
                       ) : (
                         <>
@@ -1966,14 +2468,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <PageHeading
               eyebrow="BAZA E RAPORTEVE TUAJA"
               title="Burimet e të dhënave tuaja."
-              text="Lidhni databazat e biznesit për t’i analizuar dhe për të krijuar raporte nga biseda."
+              text="Menaxhoni lidhje SQL Server dhe SAP HANA. Çdo server mund të ketë shumë databaza."
               action={
-                user.role === "admin" && (
+                user.role === "devs" && (
                   <button
                     className="button primary"
                     onClick={() => openSource()}
                   >
-                    <Plus size={17} /> Shto burim{" "}
+                    <Plus size={17} /> Shto lidhje{" "}
                   </button>
                 )
               }
@@ -1983,18 +2485,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <div>
                 <strong>
                   {" "}
-                  Raporte nga SQL Server me kredenciale private.{" "}
+                  Raporte nga SQL Server dhe SAP HANA me kredenciale
+                  private.{" "}
                 </strong>
                 <p>
                   {" "}
-                  Lidhni burimin SQL Server dhe kontrolloni lidhjen. Asistenti
-                  zbulon tabelat, analizon të dhënat dhe krijon raporte direkt
-                  nga biseda. Dataset-et manuale janë opsionale. Kredencialet
-                  mbeten private në backend.{" "}
+                  Shtoni hostin, portin, përdoruesin dhe fjalëkalimin për çdo
+                  lidhje. Emri i databazës është opsional: asistenti zbulon
+                  databazat dhe tabelat që lejon secili përdorues SQL.
+                  Kredencialet mbeten private në backend.{" "}
                 </p>
               </div>
             </div>
-            {user.role === "admin" ? (
+            {user.role === "devs" ? (
               <>
                 {sources.length ? (
                   <div className="source-grid">
@@ -2006,6 +2509,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         </Badge>
                         <h3>{s.name}</h3>
                         <span className="source-type">{s.kind}</span>
+                        {(s.kind === "sqlserver" || s.kind === "saphana") && (
+                          <p className="source-scope">
+                            {s.database_scope === "all"
+                              ? "Zbulim automatik i databazave në server"
+                              : "Databazë parazgjedhje dhe zbulim në server"}
+                          </p>
+                        )}
                         <p>
                           {s.description ||
                             (s.configuration_origin === "saved"
@@ -2025,7 +2535,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             {new Date(s.checked_at).toLocaleString("sq-AL")}
                           </small>
                         )}
-                        {s.kind === "sqlserver" && (
+                        {(s.kind === "sqlserver" || s.kind === "saphana") && (
                           <button
                             className="button outline small"
                             onClick={() => openSource(s)}
@@ -2033,7 +2543,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             <Settings size={15} /> Konfiguro lidhjen{" "}
                           </button>
                         )}
-                        {s.kind === "sqlserver" && (
+                        {(s.kind === "sqlserver" || s.kind === "saphana") && (
                           <button
                             className="button outline small"
                             onClick={() => void openSourceAccess(s)}
@@ -2041,20 +2551,66 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             <ShieldCheck size={15} /> Qasja te burimi{" "}
                           </button>
                         )}
-                        {s.kind === "sqlserver" && (
+                        {(s.kind === "sqlserver" || s.kind === "saphana") &&
+                          s.enabled !== 0 && (
+                            <button
+                              className="button outline small"
+                              disabled={
+                                checkingSource === s.id || sourceActions[s.id]
+                              }
+                              onClick={() => void checkSource(s)}
+                            >
+                              {checkingSource === s.id ? (
+                                <LoaderCircle size={15} className="spin" />
+                              ) : (
+                                <Check size={15} />
+                              )}{" "}
+                              Kontrollo lidhjen{" "}
+                            </button>
+                          )}
+                        <div className="source-actions">
+                          {(s.kind === "sqlserver" || s.kind === "saphana") &&
+                            s.enabled !== 0 && (
+                              <button
+                                className="button outline small"
+                                disabled={sourceActions[s.id]}
+                                onClick={() => void browseDatabases(s)}
+                              >
+                                <Database size={15} /> Shiko databazat
+                              </button>
+                            )}
+                          {(s.kind === "sqlserver" || s.kind === "saphana") && (
+                            <button
+                              className="button outline small"
+                              disabled={
+                                sourceActions[s.id] || checkingSource === s.id
+                              }
+                              onClick={() =>
+                                void changeConnection(
+                                  s,
+                                  s.enabled === 0 ? "connect" : "disconnect",
+                                )
+                              }
+                            >
+                              {sourceActions[s.id] ? (
+                                <LoaderCircle size={15} className="spin" />
+                              ) : (
+                                <Unplug size={15} />
+                              )}
+                              {s.enabled === 0 ? "Rilidh" : "Shkëput"}
+                            </button>
+                          )}
                           <button
-                            className="button outline small"
-                            disabled={checkingSource === s.id}
-                            onClick={() => void checkSource(s)}
+                            className="button outline small danger-text"
+                            disabled={sourceActions[s.id]}
+                            onClick={() => {
+                              setError("");
+                              setDeleteSource(s);
+                            }}
                           >
-                            {checkingSource === s.id ? (
-                              <LoaderCircle size={15} className="spin" />
-                            ) : (
-                              <Check size={15} />
-                            )}{" "}
-                            Kontrollo lidhjen{" "}
+                            <Trash2 size={15} /> Hiq lidhjen
                           </button>
-                        )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2107,7 +2663,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </main>
         )}
 
-        {page === "admin" && user.role === "admin" && (
+        {page === "admin" && user.role === "devs" && (
           <main className="page-content">
             <PageHeading
               eyebrow="ADMINISTRIMI I HAPËSIRËS"
@@ -2115,7 +2671,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               text="Menaxhoni anëtarët, kontrolloni shërbimet dhe ndiqni aktivitetin."
             />
             <div className="tabs">
-              {["overview", "users", "activity"].map((t) => (
+              {["overview", "users", "traffic", "activity"].map((t) => (
                 <button
                   className={adminTab === t ? "active" : ""}
                   key={t}
@@ -2125,7 +2681,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     ? "Përmbledhje"
                     : t === "users"
                       ? "Anëtarët dhe qasja"
-                      : "Regjistri i aktivitetit"}
+                      : t === "traffic"
+                        ? "Trafiku"
+                        : "Regjistri i aktivitetit"}
                 </button>
               ))}
             </div>
@@ -2165,19 +2723,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <h3> Gjendja e shërbimeve </h3>
                   <div className="service-row">
                     <span>
-                      <Sparkles size={19} /> Lidhja me abonimin ChatGPT{" "}
+                      <Sparkles size={19} /> Lidhjet me modelet AI{" "}
                     </span>
-                    <Badge good>Codex CLI</Badge>
-                  </div>
-                  <div className="service-row">
-                    <span>
-                      <AudioLines size={19} /> Transkriptimi zanor lokal{" "}
-                    </span>
-                    <Badge good={overview.voice.available}>
-                      {overview.voice.available
-                        ? `Whisper · ${overview.voice.model}`
-                        : "I padisponueshëm"}
-                    </Badge>
+                    <Badge good>ChatGPT · Claude</Badge>
                   </div>
                   <div className="service-row">
                     <span>
@@ -2212,7 +2760,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </section>
                 <section className="panel">
                   <div className="panel-heading">
-                    <h3> Konfigurimi i SQL Server </h3>
+                    <h3> Konfigurimi i databazave </h3>
                     <button
                       className="button outline small"
                       onClick={() => void loadAdmin().catch(fail)}
@@ -2223,10 +2771,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </div>
                   <p className="muted">
                     {" "}
-                    Kur SQL Server është konfiguruar në .env, backend-i përdor
-                    ato vlera për lidhjen. Nuk duhet t’i shkruani përsëri në
-                    formular. Nëse .env nuk ka lidhje SQL Server, mund të ruani
-                    cilësime private për çdo burim.{" "}
+                    Lidhjet SQL Server dhe SAP HANA ruhen në .env të projektit.
+                    Çdo lidhje ka profilin e vet dhe përdor drejtuesin përkatës.
+                    Vlerat e kredencialeve nuk shfaqen në shfletues.{" "}
                   </p>
                   {Object.entries(
                     overview.database_configuration.environment,
@@ -2260,7 +2807,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           {new Date(source.checked_at).toLocaleString("sq-AL")}
                         </small>
                       )}
-                      {source.kind === "sqlserver" && (
+                      {(source.kind === "sqlserver" ||
+                        source.kind === "saphana") && (
                         <button
                           className="button outline small"
                           onClick={() => openSource(source)}
@@ -2268,7 +2816,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           <Settings size={15} /> Konfiguro lidhjen{" "}
                         </button>
                       )}
-                      {source.kind === "sqlserver" && (
+                      {(source.kind === "sqlserver" ||
+                        source.kind === "saphana") && (
                         <button
                           className="button outline small"
                           disabled={checkingSource === source.id}
@@ -2284,15 +2833,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   {!overview.database_sources.length && (
                     <p className="muted">
                       {" "}
-                      Shtoni një burim SQL Server për të kontrolluar
-                      lidhjen.{" "}
+                      Shtoni një lidhje SQL Server ose SAP HANA për të
+                      kontrolluar lidhjen.{" "}
                     </p>
                   )}
                 </section>
                 <p className="footnote">
                   {" "}
-                  Çdo anëtar lidh abonimin e vet ChatGPT. Administratori nuk
-                  sheh kredencialet ChatGPT të anëtarëve të tjerë.{" "}
+                  Çdo anëtar lidh abonimet e veta ChatGPT ose Claude.
+                  Administratori nuk sheh kredencialet e anëtarëve të
+                  tjerë.{" "}
                 </p>
               </>
             )}
@@ -2325,7 +2875,27 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             <strong>{u.name}</strong>
                             <small>{u.email}</small>
                           </td>
-                          <td>{label(u.role)}</td>
+                          <td>
+                            <Select
+                              aria-label={`Roli i ${u.name}`}
+                              value={u.role}
+                              disabled={u.id === user.id}
+                              onChange={(e) =>
+                                void api(`/admin/users/${u.id}`, {
+                                  method: "PATCH",
+                                  body: JSON.stringify({
+                                    role: e.target.value,
+                                  }),
+                                })
+                                  .then(loadAdmin)
+                                  .catch(fail)
+                              }
+                            >
+                              <option value="devs">Devs</option>
+                              <option value="president">President</option>
+                              <option value="manager">Manager</option>
+                            </Select>
+                          </td>
                           <td>
                             <Badge good={!!u.active}>
                               {u.active ? "Aktiv" : "Joaktiv"}
@@ -2362,6 +2932,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </div>
               </section>
             )}
+            {adminTab === "traffic" && <TrafficPanel />}
             {adminTab === "activity" && (
               <section className="panel">
                 <div className="panel-heading">
@@ -2401,6 +2972,101 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </main>
         )}
       </div>
+
+      {databaseBrowser && (
+        <Modal
+          title={`Databazat: ${databaseBrowser.name}`}
+          error={error}
+          onClose={() => setDatabaseBrowser(null)}
+        >
+          <p className="footnote">
+            Databazat e biznesit që lejon kjo lidhje. Asistenti i zbulon
+            automatikisht; nuk duhet t’i shtoni veçmas.
+          </p>
+          <div className="server-database-list">
+            {serverDatabases.map((database) => (
+              <div className="service-row" key={database.name}>
+                <strong>{database.name}</strong>
+                {!!database.is_default && <Badge good>Parazgjedhje</Badge>}
+              </div>
+            ))}
+          </div>
+          {loadingDatabases && (
+            <p className="inline-progress" role="status">
+              <LoaderCircle size={17} className="spin" /> Duke zbuluar
+              databazat…
+            </p>
+          )}
+          {!loadingDatabases && !serverDatabases.length && !error && (
+            <p>
+              Nuk u gjetën databaza biznesi të disponueshme. Kontrolloni lejet e
+              përdoruesit SQL.
+            </p>
+          )}
+          {databaseOffset !== null && (
+            <button
+              className="button outline small"
+              disabled={loadingDatabases}
+              onClick={() =>
+                void browseDatabases(databaseBrowser, databaseOffset)
+              }
+            >
+              Shfaq më shumë
+            </button>
+          )}
+        </Modal>
+      )}
+      {deleteSource && (
+        <Modal
+          title="Të hiqet lidhja?"
+          error={error}
+          onClose={() => {
+            if (!sourceActions[deleteSource.id]) setDeleteSource(null);
+          }}
+        >
+          <p>
+            Hiq lidhjen “{deleteSource.name}” nga aplikacioni?{" "}
+            {deleteSource.configuration_origin === "environment"
+              ? "Konfigurimi .env mbetet në server."
+              : "Profili i ruajtur i kësaj lidhjeje do të hiqet nga .env."}{" "}
+            Raportet e krijuara do të ruhen. Databazat në server nuk ndryshohen.
+          </p>
+          <div className="modal-actions">
+            <button
+              className="button outline"
+              disabled={sourceActions[deleteSource.id]}
+              onClick={() => setDeleteSource(null)}
+            >
+              Anulo
+            </button>
+            <button
+              className="button danger"
+              disabled={sourceActions[deleteSource.id]}
+              onClick={() => void changeConnection(deleteSource, "remove")}
+            >
+              {sourceActions[deleteSource.id] ? "Duke hequr…" : "Hiq lidhjen"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {settingsOpen && (
+        <Modal title="Cilësimet" onClose={() => setSettingsOpen(false)}>
+          {reasoningControl}
+          <p>
+            Zgjidhni sa arsyetim përdor modeli. Nivelet varen nga modeli i
+            zgjedhur dhe zbatohen për mesazhet dhe raportet e ardhshme.
+          </p>
+          <div className="modal-actions">
+            <button
+              className="button primary"
+              onClick={() => setSettingsOpen(false)}
+            >
+              Mbyll
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {page === "reports" && report && (
         <Modal
@@ -2450,9 +3116,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 {label(report.stage || "gathering")}{" "}
                 <button
                   className="button outline small"
-                  disabled={stoppingReports}
+                  disabled={!!stoppingIds[report.conversation_id || ""]}
                   onClick={async () => {
-                    setStoppingReports(true);
+                    const targetId = report.conversation_id || null;
+                    setStoppingIds((ids) => ({
+                      ...ids,
+                      [targetId || ""]: true,
+                    }));
                     try {
                       await api(`/reports/${report.id}/stop`, {
                         method: "POST",
@@ -2463,7 +3133,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     } catch (e) {
                       fail(e);
                     } finally {
-                      setStoppingReports(false);
+                      setStoppingIds((ids) => {
+                        const next = { ...ids };
+                        delete next[targetId || ""];
+                        return next;
+                      });
                     }
                   }}
                 >
@@ -2487,7 +3161,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 {report.document.sections.map((s, i) => (
                   <div className="report-section" key={i}>
                     <h3>{s.heading}</h3>
-                    <Markdown>{s.body}</Markdown>
+                    <MarkdownContent>{s.body}</MarkdownContent>
                   </div>
                 ))}
                 {report.document.limitations.length > 0 && (
@@ -2525,7 +3199,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       {login && (
         <Modal
           error={error}
-          title="Lidhni llogarinë ChatGPT"
+          title={`Lidhni llogarinë ${login.provider === "claude" ? "Claude" : "ChatGPT"}`}
           onClose={() => setLogin(null)}
         >
           <div className="login-steps">
@@ -2534,11 +3208,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </span>
             <p>
               {" "}
-              Hapni faqen e hyrjes së OpenAI, hyni në llogari dhe vendosni këtë
-              kod njëpërdorimësh.{" "}
+              {login.provider === "claude"
+                ? "Hapni faqen e hyrjes së Claude. Hyni me abonimin tuaj, pastaj kopjoni kodin që shfaqet dhe vendoseni më poshtë."
+                : "Hapni faqen e hyrjes së OpenAI, hyni në llogari dhe vendosni këtë kod njëpërdorimësh."}
             </p>
-            <div className="device-code">{login.userCode}</div>
-            {login.verificationUrl?.startsWith("https://auth.openai.com/") && (
+            {login.userCode && (
+              <div className="device-code">{login.userCode}</div>
+            )}
+            {providerLoginUrl(login) && (
               <a
                 className="button primary wide"
                 href={login.verificationUrl}
@@ -2546,8 +3223,33 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 rel="noopener noreferrer"
               >
                 {" "}
-                Hap hyrjen OpenAI <ArrowRight size={17} />
+                Hap hyrjen {login.provider === "claude"
+                  ? "Claude"
+                  : "OpenAI"}{" "}
+                <ArrowRight size={17} />
               </a>
+            )}
+            {login.requiresCode && (
+              <form onSubmit={finishClaudeLogin} className="claude-login-form">
+                <label>
+                  Kodi njëpërdorimësh nga Claude
+                  <input
+                    aria-label="Kodi nga Claude"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={4096}
+                    value={loginCode}
+                    onChange={(e) => setLoginCode(e.target.value)}
+                  />
+                </label>
+                <button
+                  className="button primary wide"
+                  disabled={connecting || !loginCode.trim()}
+                >
+                  Përfundo lidhjen
+                </button>
+              </form>
             )}
             <p className="waiting">
               <LoaderCircle size={16} className="spin" /> Në pritje që të
@@ -2555,8 +3257,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </p>
             <p className="footnote">
               {" "}
-              Nëse hyrja me kod pajisjeje është e çaktivizuar, aktivizojeni te
-              cilësimet e sigurisë të ChatGPT.{" "}
+              {login.provider === "claude"
+                ? "Kodi përdoret vetëm për të përfunduar këtë hyrje në Claude."
+                : "Nëse hyrja me kod pajisjeje është e çaktivizuar, aktivizojeni te cilësimet e sigurisë të ChatGPT."}
             </p>
           </div>
         </Modal>
@@ -2571,7 +3274,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <div className="history-row" key={c.id}>
               <button
                 className="text-button history-title"
-                disabled={chatLocked || recording || transcribing || deleting}
+                disabled={uploading || deleting}
                 onClick={() => {
                   setChatHistory(false);
                   void selectConversation(c);
@@ -2583,7 +3286,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 className="delete-conversation"
                 aria-label={`Fshi bisedën: ${c.title}`}
-                disabled={chatLocked || recording || transcribing || deleting}
+                disabled={conversationRunning(c.id) || uploading || deleting}
                 onClick={() => {
                   setChatHistory(false);
                   setDeleteChat(c);
@@ -2622,7 +3325,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </button>
             <button
               className="button danger"
-              disabled={deleting || busy || recording || transcribing}
+              disabled={deleting || conversationRunning(deleteChat.id)}
               onClick={() => void removeConversation()}
             >
               {deleting ? "Duke fshirë…" : "Fshi bisedën"}
@@ -2656,6 +3359,41 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               onClick={() => void removeReport()}
             >
               {deletingReport ? "Duke fshirë…" : "Fshi raportin"}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {emptyTrashConfirm && (
+        <Modal
+          title="Të zbrazet koshi?"
+          error={error}
+          onClose={() => {
+            if (!emptyingTrash) setEmptyTrashConfirm(false);
+          }}
+        >
+          <p>
+            Do të fshihen përgjithmonë {deletedReports.length} raporte nga “Të
+            fshira”, skedarët e tyre Excel dhe të dhënat e ruajtura të
+            raporteve. Ky veprim nuk mund të zhbëhet.
+          </p>
+          <div className="modal-actions">
+            <button
+              className="button outline"
+              disabled={emptyingTrash}
+              onClick={() => setEmptyTrashConfirm(false)}
+            >
+              Anulo
+            </button>
+            <button
+              className="button danger"
+              disabled={
+                emptyingTrash || !!restoringReportId || !deletedReports.length
+              }
+              onClick={() => void emptyReportTrash()}
+            >
+              {emptyingTrash
+                ? "Duke fshirë përgjithmonë…"
+                : "Fshi përgjithmonë"}
             </button>
           </div>
         </Modal>
@@ -2770,8 +3508,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               {" "}
               Roli{" "}
               <Select name="role">
-                <option value="member"> Anëtar </option>
-                <option value="admin"> Administrator </option>
+                <option value="manager">Manager</option>
+                <option value="president">President</option>
+                <option value="devs">Devs</option>
               </Select>
             </label>
             <button className="button primary wide"> Shto anëtar </button>
@@ -2792,7 +3531,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             veçantë.{" "}
           </p>
           {users
-            .filter((member) => member.role !== "admin")
+            .filter((member) => member.role !== "devs")
             .map((member) => (
               <div className="grant-row" key={member.id}>
                 <div>
@@ -2809,7 +3548,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </button>
               </div>
             ))}
-          {!users.some((member) => member.role !== "admin") && (
+          {!users.some((member) => member.role !== "devs") && (
             <p className="muted"> Nuk ka ende llogari anëtarësh. </p>
           )}
         </Modal>
@@ -2829,13 +3568,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <form onSubmit={(e) => void adminSubmit(e, "sources")}>
             <label>
               {" "}
-              Emri i databazës{" "}
+              Emri i lidhjes{" "}
               <input
                 name="name"
                 required
                 maxLength={120}
                 defaultValue={editSource?.name || ""}
-                placeholder="Databaza e raporteve të biznesit"
+                placeholder="P.sh. serveri i financës ose GoTech"
               />
             </label>
             <label>
@@ -2844,188 +3583,270 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <Select
                 name="kind"
                 value={sourceKind}
-                disabled={!!editSource}
-                onChange={(e) => setSourceKind(e.target.value)}
+                disabled={
+                  !!editSource &&
+                  !["sqlserver", "saphana"].includes(editSource.kind)
+                }
+                onChange={(e) => {
+                  setSourceKind(e.target.value);
+                  setAutoDiscoverDatabases(true);
+                }}
               >
-                {["sqlserver", "postgresql", "mysql", "sqlite", "other"].map(
-                  (kind) => (
-                    <option key={kind} value={kind}>
+                {[
+                  "sqlserver",
+                  "saphana",
+                  "postgresql",
+                  "mysql",
+                  "sqlite",
+                  "other",
+                ].map((kind) => (
+                  <option key={kind} value={kind}>
+                    {
                       {
-                        {
-                          sqlserver: "SQL Server",
-                          postgresql: "PostgreSQL",
-                          mysql: "MySQL",
-                          sqlite: "SQLite",
-                          other: "Tjetër",
-                        }[kind]
-                      }
-                    </option>
-                  ),
-                )}
+                        sqlserver: "SQL Server",
+                        saphana: "SAP HANA",
+                        postgresql: "PostgreSQL",
+                        mysql: "MySQL",
+                        sqlite: "SQLite",
+                        other: "Tjetër",
+                      }[kind]
+                    }
+                  </option>
+                ))}
               </Select>
             </label>
-            {sourceKind === "sqlserver" && (
-              <fieldset className="source-connection-fields">
-                <legend> Lidhja SQL Server </legend>
-                {environmentActive && (
-                  <div className="notice environment-source">
-                    <div>
-                      <strong>Lidhja përdor .env në server.</strong>
-                      <p>
-                        Vlerat që janë vendosur janë ngarkuar dhe nuk janë
-                        fshirë. Fushat më poshtë tregojnë vetëm gjendjen e
-                        konfigurimit; nuk duhet t’i plotësoni përsëri.
-                      </p>
-                    </div>
-                  </div>
-                )}
-                {!environmentActive &&
-                  editSource?.configuration_origin === "saved" && (
-                    <p className="footnote">
-                      {" "}
-                      Vlerat e ruajtura mbeten të fshehura. Lëreni fushën bosh
-                      për të mbajtur vlerën aktuale.{" "}
-                    </p>
-                  )}
-                {!environmentActive && (
+            {sourceSupported && (
+              <fieldset className="source-connection-fields" key={sourceKind}>
+                <legend>
+                  {sourceKind === "saphana"
+                    ? "Lidhja SAP HANA"
+                    : "Lidhja SQL Server"}
+                </legend>
+                {environmentActive ? (
                   <>
+                    <div className="notice environment-source">
+                      <div>
+                        <strong>Lidhja përdor .env në server.</strong>
+                        <p>
+                          Kredencialet janë ngarkuar privatisht. Nuk shfaqen në
+                          shfletues.
+                        </p>
+                        <button
+                          type="button"
+                          className="button outline small"
+                          onClick={() => setOverrideEnvironment(true)}
+                        >
+                          Ndrysho konfigurimin e lidhjes
+                        </button>
+                      </div>
+                    </div>
+                    <div className="environment-fields">
+                      {["HOST", "PORT", "USER", "PASSWORD", "DATABASE"].map(
+                        (field) => (
+                          <div className="service-row" key={field}>
+                            <code>
+                              {sourcePrefix}_{field}
+                            </code>
+                            <Badge
+                              good={
+                                !!editSource?.connection_fields?.[
+                                  sourcePrefix + "_" + field
+                                ] || field === "DATABASE"
+                              }
+                            >
+                              {editSource?.connection_fields?.[
+                                sourcePrefix + "_" + field
+                              ]
+                                ? "Ngarkuar nga .env"
+                                : field === "DATABASE"
+                                  ? "Zbulim automatik"
+                                  : "Mungon në .env"}
+                            </Badge>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {keepConnectionFields && (
+                      <p className="footnote">
+                        Fushat bosh mbajnë hostin, përdoruesin dhe fjalëkalimin
+                        aktual. Kredencialet ruhen në .env.
+                      </p>
+                    )}
+                    {changingSourceKind && (
+                      <p className="notice">
+                        Vendosni portin SQL të llojit të ri. Databaza
+                        parazgjedhje pastrohet për zbulim automatik.
+                      </p>
+                    )}
+                    {["HOST", "PORT", "USER", "PASSWORD"].map((field) => (
+                      <label key={field}>
+                        {sourcePrefix}_{field}
+                        <input
+                          name={sourcePrefix + "_" + field}
+                          type={
+                            field === "PASSWORD"
+                              ? "password"
+                              : field === "PORT"
+                                ? "number"
+                                : "text"
+                          }
+                          required={
+                            !keepConnectionFields ||
+                            (field === "PORT" && changingSourceKind)
+                          }
+                          min={field === "PORT" ? 1 : undefined}
+                          max={field === "PORT" ? 65535 : undefined}
+                          maxLength={field === "PASSWORD" ? 1024 : 255}
+                          autoComplete={
+                            field === "PASSWORD" ? "new-password" : "off"
+                          }
+                          defaultValue={
+                            field === "PORT" && !editSource
+                              ? sourceKind === "saphana"
+                                ? "30015"
+                                : "1433"
+                              : ""
+                          }
+                          placeholder={
+                            field === "PORT"
+                              ? sourceKind === "saphana"
+                                ? "Porti SQL HANA, p.sh. 30015 ose 443"
+                                : "1433"
+                              : keepConnectionFields
+                                ? "Lëreni bosh për të mbajtur vlerën aktuale"
+                                : field === "HOST"
+                                  ? "Adresa e serverit"
+                                  : field === "USER"
+                                    ? "Përdoruesi i raporteve"
+                                    : "Fjalëkalimi"
+                          }
+                        />
+                      </label>
+                    ))}
                     <label>
-                      SQLSERVER_HOST
-                      <input
-                        name="SQLSERVER_HOST"
-                        disabled={environmentActive}
-                        required={
-                          !environmentActive &&
-                          (!editSource ||
-                            editSource.configuration_origin !== "saved")
-                        }
-                        maxLength={255}
-                        autoComplete="off"
-                        placeholder={
-                          environmentActive
-                            ? "Konfiguruar në .env"
-                            : "sql.example.internal"
-                        }
-                      />
+                      <span className="source-discovery-option">
+                        <input
+                          type="checkbox"
+                          checked={autoDiscoverDatabases}
+                          onChange={(e) =>
+                            setAutoDiscoverDatabases(e.target.checked)
+                          }
+                        />
+                        Zbulo automatikisht databazat
+                      </span>
                     </label>
                     <label>
-                      SQLSERVER_PORT
+                      {sourcePrefix}_DATABASE (opsionale)
                       <input
-                        name="SQLSERVER_PORT"
-                        disabled={environmentActive}
-                        type="number"
-                        min={1}
-                        max={65535}
-                        required={
-                          !environmentActive &&
-                          (!editSource ||
-                            editSource.configuration_origin !== "saved")
-                        }
-                        defaultValue={
-                          environmentActive ||
-                          editSource?.configuration_origin === "saved"
-                            ? ""
-                            : "1433"
-                        }
-                        placeholder={
-                          environmentActive ? "Konfiguruar në .env" : "1433"
-                        }
-                      />
-                    </label>
-                    <label>
-                      SQLSERVER_USER
-                      <input
-                        name="SQLSERVER_USER"
-                        disabled={environmentActive}
-                        required={
-                          !environmentActive &&
-                          (!editSource ||
-                            editSource.configuration_origin !== "saved")
-                        }
-                        maxLength={255}
-                        autoComplete="off"
-                        placeholder={
-                          environmentActive
-                            ? "Konfiguruar në .env"
-                            : "Përdoruesi i raporteve"
-                        }
-                      />
-                    </label>
-                    <label>
-                      SQLSERVER_PASSWORD
-                      <input
-                        name="SQLSERVER_PASSWORD"
-                        disabled={environmentActive}
-                        type="password"
-                        required={
-                          !environmentActive &&
-                          (!editSource ||
-                            editSource.configuration_origin !== "saved")
-                        }
-                        maxLength={1024}
-                        autoComplete="new-password"
-                        placeholder={
-                          environmentActive
-                            ? "Fjalëkalimi ruhet në .env"
-                            : editSource?.configuration_origin === "saved"
-                              ? "Lëreni bosh për të mbajtur fjalëkalimin"
-                              : "Fjalëkalimi i databazës"
-                        }
-                      />
-                    </label>
-                    <label>
-                      SQLSERVER_DATABASE
-                      <input
-                        name="SQLSERVER_DATABASE"
-                        disabled={environmentActive}
-                        required={
-                          !environmentActive &&
-                          (!editSource ||
-                            editSource.configuration_origin !== "saved")
-                        }
+                        name={sourcePrefix + "_DATABASE"}
+                        disabled={autoDiscoverDatabases}
                         maxLength={128}
                         autoComplete="off"
                         placeholder={
-                          environmentActive
-                            ? "Konfiguruar në .env"
-                            : "Databaza ku do të lidheni"
+                          autoDiscoverDatabases
+                            ? "Databazat do të zbulohen automatikisht"
+                            : "Databaza parazgjedhje, nëse dëshironi"
                         }
                       />
                     </label>
+                    {sourceKind === "saphana" && (
+                      <>
+                        <label>
+                          Certifikata CA e besuar (PEM, opsionale)
+                          <textarea
+                            name="HANA_TLS_CA_CERTIFICATE"
+                            rows={5}
+                            maxLength={65536}
+                            autoComplete="off"
+                            spellCheck={false}
+                            placeholder={
+                              editSource?.tls?.custom_ca
+                                ? "Certifikata është ruajtur. Lëreni bosh për ta mbajtur."
+                                : "-----BEGIN CERTIFICATE-----\nCertifikata rrënjë/ndërmjetëse nga administratori SAP HANA\n-----END CERTIFICATE-----"
+                            }
+                          />
+                        </label>
+                        <label>
+                          Emri DNS në certifikatën e serverit (opsionale)
+                          <input
+                            name="HANA_TLS_SERVER_NAME"
+                            maxLength={253}
+                            autoComplete="off"
+                            placeholder={
+                              editSource?.tls?.server_name_configured
+                                ? "Emri është ruajtur. Lëreni bosh për ta mbajtur."
+                                : "P.sh. hana.company.internal"
+                            }
+                          />
+                        </label>
+                        <p className="footnote">
+                          Certifikata CA dhe emri i serverit merren nga
+                          administratori i SAP HANA. Mos vendosni çelësa
+                          privatë. Ruhet në .env dhe përdoret vetëm nga
+                          backend-i për verifikimin TLS.
+                        </p>
+                        <label>
+                          HANA_ENCRYPT
+                          <Select
+                            name="HANA_ENCRYPT"
+                            defaultValue={
+                              editSource?.tls?.encrypt === false
+                                ? "false"
+                                : "true"
+                            }
+                          >
+                            <option value="true">TLS i aktivizuar</option>
+                            <option value="false">
+                              Pa TLS — vetëm nëse serveri e kërkon
+                            </option>
+                          </Select>
+                        </label>
+                        <label>
+                          HANA_VALIDATE_CERTIFICATE
+                          <Select
+                            name="HANA_VALIDATE_CERTIFICATE"
+                            defaultValue={
+                              editSource?.tls?.validate_certificate === false
+                                ? "false"
+                                : "true"
+                            }
+                          >
+                            <option value="true">
+                              Kontrollo certifikatën e serverit
+                            </option>
+                            <option value="false">
+                              Pa kontroll certifikate — lidhje pa verifikim
+                            </option>
+                          </Select>
+                        </label>
+                      </>
+                    )}
                   </>
                 )}
-                {environmentActive && (
-                  <div className="environment-fields">
-                    {[
-                      "SQLSERVER_HOST",
-                      "SQLSERVER_PORT",
-                      "SQLSERVER_USER",
-                      "SQLSERVER_PASSWORD",
-                      "SQLSERVER_DATABASE",
-                    ].map((key) => (
-                      <div className="service-row" key={key}>
-                        <code>{key}</code>
-                        <Badge
-                          good={
-                            !!overview?.database_configuration.environment[key]
-                          }
-                        >
-                          {overview?.database_configuration.environment[key]
-                            ? "Ngarkuar nga .env"
-                            : "Mungon në .env"}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
+                {sourceKind === "saphana" && (
+                  <p className="footnote">
+                    Përdorni portin SQL të SAP HANA, jo portin SQL Server. HANA
+                    Cloud zakonisht përdor 443 dhe TLS. Skemat e kompanive në
+                    SAP Business One zbulohen brenda tenant-it; HANA_DATABASE
+                    është emri i tenant-it, jo skema.
+                  </p>
                 )}
                 <p className="footnote">
-                  {environmentActive
-                    ? "Backend-i i lexon kredencialet privatisht nga .env. Vlerat nuk i dërgohen ChatGPT dhe nuk shfaqen në shfletues. Për ndryshime në .env, rikrijoni container-in."
-                    : "Të dhënat e lidhjes ruhen të enkriptuara në backend dhe nuk i dërgohen bisedës. Lëreni bosh një fushë për të mbajtur vlerën e ruajtur."}
+                  Konfigurimi ruhet në .env të projektit dhe lexohet vetëm nga
+                  backend-i. Modeli nuk merr hostin, përdoruesin apo
+                  fjalëkalimin.
                 </p>
+                {editSource?.env_prefix && (
+                  <p className="footnote">
+                    Prefiksi në .env: <code>{editSource.env_prefix}</code>
+                  </p>
+                )}
               </fieldset>
             )}
-            {sourceKind !== "sqlserver" && (
+            {!sourceSupported && (
               <p className="footnote">
                 {" "}
                 Ky lloj databaze mund të përcaktohet, por lidhja e tij nuk është

@@ -32,12 +32,22 @@ export async function streamChat(
   content: string,
   model: string,
   onEvent: (event: Record<string, string>) => void,
+  attachmentIds: string[] = [],
+  options: {
+    reasoning_effort?: string | null;
+    retry_message_id?: string | null;
+  } = {},
 ) {
   const response = await fetch(`/api/conversations/${id}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Duka-Request": "1" },
     credentials: "same-origin",
-    body: JSON.stringify({ content, model: model || null }),
+    body: JSON.stringify({
+      content,
+      model: model || null,
+      attachment_ids: attachmentIds,
+      ...options,
+    }),
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));

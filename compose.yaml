@@ -3,6 +3,11 @@ services:
     build: .
     init: true
     restart: unless-stopped
+    # Persist upstream resolvers even when Docker starts before networking.
+    # Use local/VPN DNS in .env when SQL Server has a private hostname.
+    dns:
+      - ${DOCKER_DNS_PRIMARY:-1.1.1.1}
+      - ${DOCKER_DNS_SECONDARY:-1.0.0.1}
     ports:
       - "127.0.0.1:${PORT:-8080}:8080"
     environment:
@@ -16,7 +21,12 @@ services:
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
       MAX_CODEX_RUNTIMES: ${MAX_CODEX_RUNTIMES:-8}
-      TURN_TIMEOUT_SECONDS: ${TURN_TIMEOUT_SECONDS:-300}
+      MAX_CODEX_WORKERS: ${MAX_CODEX_WORKERS:-16}
+      REPORT_MAX_ROWS: ${REPORT_MAX_ROWS:-1000000}
+      REPORT_MAX_BYTES: ${REPORT_MAX_BYTES:-250000000}
+      WORKBOOK_SCRIPT_TIMEOUT_SECONDS: ${WORKBOOK_SCRIPT_TIMEOUT_SECONDS:-300}
+      WORKBOOK_SCRIPT_MEMORY_MB: ${WORKBOOK_SCRIPT_MEMORY_MB:-4096}
+      TURN_TIMEOUT_SECONDS: ${TURN_TIMEOUT_SECONDS:-0}
       SQLSERVER_HOST: ${SQLSERVER_HOST:-}
       SQLSERVER_PORT: ${SQLSERVER_PORT:-1433}
       SQLSERVER_USER: ${SQLSERVER_USER:-}
@@ -30,7 +40,7 @@ services:
       - type: bind
         source: ./.env
         target: /run/duka.env
-        read_only: true
+        read_only: false
         bind:
           create_host_path: false
     read_only: true

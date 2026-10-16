@@ -85,10 +85,15 @@ def test_model_tools_can_read_and_save_reports_only_from_granted_datasets(client
     client.patch(f"/api/admin/datasets/{dataset['id']}", json={"active": True}, headers=HEADERS)
     client.app.state.connectors.register(source["id"], FixtureConnector())
     manager = client.app.state.manager
+    chat = client.post("/api/conversations", headers=HEADERS, json={}).json()
+    thread_id = "fixture-" + chat["id"]
+    client.app.state.db.execute("UPDATE conversations SET provider_thread_id=? WHERE id=?", (thread_id, chat["id"]))
 
     def tool(name, arguments):
         response = client.portal.call(
-            manager.tool_call, admin["id"], {"namespace": "duka_reporting", "tool": name, "arguments": arguments}
+            manager.tool_call,
+            admin["id"],
+            {"namespace": "duka_reporting", "threadId": thread_id, "tool": name, "arguments": arguments},
         )
         return json.loads(response["contentItems"][0]["text"])
 

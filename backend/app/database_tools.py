@@ -84,8 +84,16 @@ def quote(name):
     return "[" + name.replace("]", "]]") + "]"
 
 
-def compile_select(query: DatabaseQuery, descriptions):
+def compile_select(query: DatabaseQuery, descriptions, *, complete=False, dialect="sqlserver"):
     """Compile only metadata-verified identifiers and bound scalar filter values."""
+    if dialect not in ("sqlserver", "hana"):
+        raise ValueError("Unsupported database dialect.")
+    def quoted(name):
+        return '"' + name.replace('"', '""') + '"' if dialect == "hana" else quote(name)
+
+    def placeholder(key):
+        return "?" if dialect == "hana" else f"%({key})s"
+
     tables = {t.alias: t for t in query.tables}
     if len(tables) != len(query.tables):
         raise ValueError("Table aliases must be unique.")
@@ -97,7 +105,7 @@ def compile_select(query: DatabaseQuery, descriptions):
         alias, separator, name = ref.partition(".")
         if not separator or alias not in metadata or name not in metadata[alias]:
             raise ValueError("Unknown column. Use alias.column from describe_table results.")
-        return f"{quote(alias)}.{quote(name)}", metadata[alias][name]
+        return f"{quoted(alias)}.{quoted(name)}", metadata[alias][name]
 
     output, columns, labels, folded_labels = [], [], set(), set()
     selections = query.select
@@ -115,6 +123,11 @@ def compile_select(query: DatabaseQuery, descriptions):
                 if item.bucket == "day"
                 else f"DATEFROMPARTS(YEAR({sql}), {'MONTH(' + sql + ')' if item.bucket == 'month' else '1'}, 1)"
             )
+            if dialect == "hana":
+                original, _ = column(item.column)
+                sql = (f"CAST({original} AS DATE)" if item.bucket == "day" else
+                       f"TO_DATE(TO_NVARCHAR({original}, 'YYYY-MM') || '-01', 'YYYY-MM-DD')" if item.bucket == "month" else
+                       f"TO_DATE(TO_NVARCHAR(YEAR({original})) || '-01-01', 'YYYY-MM-DD')")
         selection_sql[item.alias or info["name"]] = sql
 
     def group_column(ref):
@@ -127,7 +140,7 @@ def compile_select(query: DatabaseQuery, descriptions):
             raise ValueError("Result column names must be unique and at most 100 characters; use aliases.")
         labels.add(name)
         folded_labels.add(name.casefold())
-        output.append(f"{sql} AS {quote(name)}")
+        output.append(f"{sql} AS {quoted(name)}")
         columns.append({"name": name, "type": kind})
 
     for item in selections:
@@ -146,18 +159,18 @@ def compile_select(query: DatabaseQuery, descriptions):
         numeric = {"int", "bigint", "smallint", "tinyint", "float", "real", "decimal", "numeric", "money", "smallmoney"}
         if item.function in ("sum", "avg") and info["type"] not in numeric:
             raise ValueError("SUM and AVG require a numeric column.")
-        function = "COUNT_BIG" if item.function in ("count", "count_distinct") else item.function.upper()
+        function = ("COUNT" if dialect == "hana" else "COUNT_BIG") if item.function in ("count", "count_distinct") else item.function.upper()
         expression = "DISTINCT " + sql if item.function == "count_distinct" else sql
         add(
             f"{function}({expression})",
             item.alias,
-            "integer" if function == "COUNT_BIG" else "decimal" if item.function in ("sum", "avg") else info["type"],
+            "integer" if item.function in ("count", "count_distinct") else "decimal" if item.function in ("sum", "avg") else info["type"],
         )
     if not output:
         raise ValueError("Choose columns or aggregates to read.")
 
     first = query.tables[0]
-    from_sql = f"{quote(first.schema_name)}.{quote(first.name)} AS {quote(first.alias)}"
+    from_sql = f"{quoted(first.schema_name)}.{quoted(first.name)} AS {quoted(first.alias)}"
     seen = {first.alias}
     for table, join in zip(query.tables[1:], query.joins):
         left, _ = column(join.left)
@@ -165,7 +178,7 @@ def compile_select(query: DatabaseQuery, descriptions):
         a, b = join.left.partition(".")[0], join.right.partition(".")[0]
         if not ((a in seen and b == table.alias) or (b in seen and a == table.alias)):
             raise ValueError("Each join must connect the new table to a previous table.")
-        from_sql += f" {join.kind.upper()} JOIN {quote(table.schema_name)}.{quote(table.name)} AS {quote(table.alias)} ON {left} = {right}"
+        from_sql += f" {join.kind.upper()} JOIN {quoted(table.schema_name)}.{quoted(table.name)} AS {quoted(table.alias)} ON {left} = {right}"
         seen.add(table.alias)
     params, predicates = {}, []
     for index, condition in enumerate(query.filters):
@@ -178,7 +191,7 @@ def compile_select(query: DatabaseQuery, descriptions):
                 raise ValueError("IN requires at least one value.")
             keys = [f"{key}_{i}" for i in range(len(condition.values))]
             params.update(zip(keys, condition.values))
-            predicates.append(f"{sql} IN ({', '.join('%(' + k + ')s' for k in keys)})")
+            predicates.append(f"{sql} IN ({', '.join(placeholder(k) for k in keys)})")
         elif condition.value is None:
             if condition.operator not in ("eq", "ne"):
                 raise ValueError("Use is_null/not_null to filter NULL values.")
@@ -188,19 +201,22 @@ def compile_select(query: DatabaseQuery, descriptions):
                 condition.operator
             ]
             params[key] = condition.value
-            predicates.append(f"{sql} {operator} %({key})s")
+            predicates.append(f"{sql} {operator} {placeholder(key)}")
     # Fetch one extra row to detect limited results, never present previews as complete data.
-    sql = f"SELECT TOP ({query.limit + 1}) {', '.join(output)} FROM {from_sql}"
+    prefix = "SELECT" if complete or dialect == "hana" else f"SELECT TOP ({query.limit + 1})"
+    sql = f"{prefix} {', '.join(output)} FROM {from_sql}"
     if predicates:
         sql += " WHERE " + " AND ".join(predicates)
     if grouped:
         sql += " GROUP BY " + ", ".join(group_column(ref) for ref in query.group_by)
     ordering = []
     for item in query.order_by:
-        ref = quote(item.column) if item.column in labels else column(item.column)[0]
+        ref = quoted(item.column) if item.column in labels else column(item.column)[0]
         if (query.metrics or grouped) and item.column not in labels and ref not in grouped:
             raise ValueError("Sort grouped results by a group column or metric alias.")
         ordering.append(f"{ref} {item.direction.upper()}")
     if ordering:
         sql += " ORDER BY " + ", ".join(ordering)
+    if dialect == "hana" and not complete:
+        sql += f" LIMIT {query.limit + 1}"
     return sql, params, columns

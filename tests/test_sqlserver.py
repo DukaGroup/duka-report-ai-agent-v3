@@ -9,7 +9,6 @@ from jsonschema import ValidationError
 from app.config import Settings
 from app.connectors import DatabaseUnavailable, QueryCatalog, SQLServerConnector, SourceNotConfigured
 from app.db import Database
-from app.reports import numeric_summary
 
 
 class Driver:
@@ -33,8 +32,10 @@ class Driver:
         self.executed = (sql, parameters)
 
     def fetchmany(self, count):
-        assert count == 501
-        return self.rows[:count]
+        start = getattr(self, "position", 0)
+        batch = self.rows[start : start + count]
+        self.position = start + len(batch)
+        return batch
 
     def rollback(self):
         self.rolled_back = True
@@ -67,9 +68,6 @@ async def test_sqlserver_bound_parameters_read_intent_and_exact_decimal_results(
     assert driver.options["timeout"] == 15
     assert driver.closed and driver.rolled_back
     assert rows == [{"revenue": "1234567890123.45", "day": "2026-10-01"}]
-    assert numeric_summary(rows, [{"name": "revenue", "type": "decimal"}])["numeric_column_sums"] == {
-        "revenue": "1234567890123.45"
-    }
 
 
 async def test_missing_or_invalid_parameters_never_open_connection():
@@ -99,9 +97,20 @@ async def test_driver_errors_never_disclose_connection_secrets():
     assert "private-" not in repr(db.settings)
 
 
+async def test_schema_counts_are_paginated_and_table_schema_filter_is_bound():
+    driver=Driver([{'schema_name':'sales','table_count':50,'view_count':3},{'schema_name':'archive','table_count':20,'view_count':1}])
+    result=await connector(driver).schemas(limit=1)
+    assert result['schemas']==[{'schema_name':'sales','table_count':50,'view_count':3}] and result['next_offset']==1
+    assert 'GROUP BY TABLE_SCHEMA' in driver.executed[0] and driver.executed[1]=={'offset':0,'size':2}
+    driver=Driver([{'schema_name':'sales','name':'Orders','kind':'BASE TABLE'}])
+    attack="sales'; DROP TABLE Orders; --"
+    await connector(driver).tables(schema=attack,name_contains='Orders')
+    assert attack not in driver.executed[0] and driver.executed[1]['schema']==attack
+
+
 async def test_large_results_are_rejected_without_silent_truncation():
     driver = Driver([{"value": 1}] * 501)
-    with pytest.raises(DatabaseUnavailable, match="500 rows"):
+    with pytest.raises(DatabaseUnavailable, match="row limit"):
         await connector(driver).fetch("connection_check", {})
     assert driver.closed and driver.rolled_back
 

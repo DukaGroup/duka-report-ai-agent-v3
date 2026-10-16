@@ -59,12 +59,13 @@ def current_user(request: Request):
     )
     if not user:
         raise HTTPException(401, "Sign in to your workspace first.")
+    request.state.traffic_user_id = user["id"]
     return user
 
 
 def admin_user(request: Request):
     user = current_user(request)
-    if user["role"] != "admin":
+    if user["role"] != "devs":
         raise HTTPException(403, "Administrator access is required.")
     return user
 

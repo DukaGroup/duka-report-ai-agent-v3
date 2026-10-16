@@ -28,11 +28,13 @@ def test_backend_reads_dotenv_without_expanding_password_or_exposing_it(tmp_path
     assert "env-host" not in repr(resolved) and "secret" not in repr(resolved)
 
 
-def test_dotenv_overrides_saved_form_settings_and_blank_edits_preserve_both(client, admin, tmp_path):
+def test_dotenv_overrides_legacy_saved_settings_and_blank_edits_preserve_both(client, admin, tmp_path):
     source = client.post("/api/admin/sources", json=source_input(), headers=HEADERS).json()
     state = client.app.state
+    state.db.execute("UPDATE data_sources SET credential_profile='legacy' WHERE id=?", (source["id"],))
     path = tmp_path / ".env"
     environment_file(path)
+    path.write_text(path.read_text() + state.connectors.secrets.environment.path.read_text())
     state.settings.env_file = path
     registry = ConnectorRegistry(state.settings, state.db)
     state.connectors = registry
@@ -54,6 +56,7 @@ def test_dotenv_overrides_saved_form_settings_and_blank_edits_preserve_both(clie
 def test_changed_dotenv_refreshes_existing_connector_and_missing_fields_do_not_mix(client, admin, tmp_path):
     source = client.post("/api/admin/sources", json=source_input(), headers=HEADERS).json()
     state = client.app.state
+    state.db.execute("UPDATE data_sources SET credential_profile='SQLSERVER' WHERE id=?", (source["id"],))
     path = tmp_path / ".env"
     environment_file(path)
     state.settings.env_file = path
@@ -93,7 +96,7 @@ async def test_query_dependency_error_preserves_connected_status_and_returns_spe
     )
     db = Database(tmp_path / "metadata.sqlite3")
     db.initialize()
-    db.execute("INSERT INTO users VALUES('u','admin@example.test','Admin','fixture','admin',1,?)", (now(),))
+    db.execute("INSERT INTO users VALUES('u','admin@example.test','Admin','fixture','devs',1,?)", (now(),))
     db.execute(
         "INSERT INTO data_sources(id,name,kind,description,status,created_at) VALUES('s','Source','sqlserver','','not_checked',?)",
         (now(),),
