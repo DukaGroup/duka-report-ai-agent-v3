@@ -1,4 +1,5 @@
 const labels: Record<string, string> = {
+  recovering: "Duke rifilluar punën",
   "Connect your Claude subscription before sending a message.":
     "Lidhni abonimin Claude para se të dërgoni mesazh.",
   "Claude connection failed. Check your subscription connection and try again.":
@@ -44,6 +45,19 @@ const labels: Record<string, string> = {
 };
 export const label = (value: string) => labels[value] || value;
 const errors: Record<string, string> = {
+  "The current password is incorrect.": "Fjalëkalimi aktual është i pasaktë.",
+  "The recovery code is invalid or expired.":
+    "Kodi i rikuperimit është i pavlefshëm ose ka skaduar.",
+  "Active member not found.": "Anëtari aktiv nuk u gjet.",
+  "Choose databases and companies in member access settings. New source-wide grants are no longer supported.":
+    "Zgjidhni databazat dhe kompanitë te qasja e anëtarit. Qasjet e reja për të gjithë burimin nuk lejohen.",
+  "Stop the current response before restoring a version.":
+    "Ndërprisni përgjigjen përpara rikthimit të versionit.",
+  "Stop the current response and reports before restoring a version.":
+    "Ndërprisni përgjigjen dhe raportet përpara rikthimit të versionit.",
+  "Conversation version not found.": "Versioni i bisedës nuk u gjet.",
+  "Response not found.": "Përgjigjja nuk u gjet.",
+
   "The response reached the server time limit before it finished. Check slow database tools in Administration → Traffic, then retry.":
     "Përgjigjja arriti kufirin kohor të serverit pa përfunduar. Kontrolloni vonesat e mjeteve të databazës te Administrimi → Trafiku dhe provoni përsëri.",
   "SAP HANA certificate hostname mismatch. Use the DNS name on the certificate or configure HANA_TLS_SERVER_NAME to the verified server identity.":
@@ -305,6 +319,11 @@ export function auditLabel(action: string): string {
     "attachment.uploaded": "Skedar i ngarkuar",
     "user.created": "Anëtar i shtuar",
     "user.updated": "Anëtar i ndryshuar",
+    "user.password_changed": "Fjalëkalim i ndryshuar",
+    "user.password_reset_issued": "Kod rikuperimi i krijuar",
+    "user.password_reset": "Fjalëkalim i rivendosur",
+    "conversation.version_restored": "Version bisede i rikthyer",
+    "source.grant_preserved": "Qasje ekzistuese e ruajtur",
     "runtime.restarted": "Lidhje e rinisur",
     "subscription.connected": "Abonim i lidhur",
     "subscription.disconnected": "Abonim i shkëputur",

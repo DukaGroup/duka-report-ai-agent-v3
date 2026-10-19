@@ -29,6 +29,7 @@ from .schemas import (
     SubscriptionLoginCode,
     UpdateUser,
     UpdateAccount,
+    MemberDataAccess,
 )
 from .security import (
     COOKIE,
@@ -48,6 +49,9 @@ from .attachments import AttachmentStore
 from .traffic import TrafficLog, TrafficMiddleware, DIRECTIONS
 from .workbook_runner import rebuild_excel
 from .reasoning import saved_effort, validate_effort
+from .chat_jobs import ChatJobs
+from .accounts import register_accounts
+from .branches import register_branches
 
 
 def create_app(settings=None, manager_factory=SubscriptionManager):
@@ -79,7 +83,16 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.manager.report_threads = {}
         app.state.manager.cancelled_report_turns = set()
         app.state.manager.report_handler = submit_report
+        app.state.stop_user_reports = stop_reports
+        app.state.manager.shutting_down = False
+        app.state.chat_jobs = ChatJobs(app.state)
+        for report in app.state.db.all("SELECT r.id,r.user_id,w.analyses_json FROM reports r JOIN report_work w ON w.report_id=r.id WHERE r.status IN ('queued','running')"):
+            launch_report(report['id'], report['user_id'], json.loads(report['analyses_json']))
+        for job in app.state.db.all("SELECT id FROM chat_runs WHERE status IN ('queued','running','paused')"):
+            app.state.chat_jobs.start(job['id'])
         yield
+        app.state.manager.shutting_down = True
+        await app.state.chat_jobs.close()
         for task in list(app.state.jobs):
             task.cancel()
         await asyncio.gather(*app.state.jobs, return_exceptions=True)
@@ -90,6 +103,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         title="Duka Report Agent", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
     )
     app.add_middleware(TrafficMiddleware)
+    register_accounts(app, settings)
+    register_branches(app)
 
     @app.middleware("http")
     async def boundaries(request, call_next):
@@ -284,7 +299,23 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             **row,
             "reasoning_effort": saved_effort(request.app.state.db, conversation_id),
             "messages": messages,
+            "active_run_id": (request.app.state.db.one("SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')", (conversation_id,)) or {}).get('id'),
         }
+
+    @app.get('/api/conversations/{conversation_id}/requests/{request_key}')
+    async def accepted_chat_request(conversation_id: str, request_key: str, request: Request, user=Depends(current_user)):
+        owned_conversation(request, conversation_id, user['id'])
+        row = app.state.db.one('SELECT run_id FROM chat_request_keys WHERE user_id=? AND request_key=? AND conversation_id=?', (user['id'], request_key, conversation_id))
+        if not row:
+            raise HTTPException(404, 'Response not found.')
+        return row
+
+    @app.get('/api/conversations/{conversation_id}/runs/{identifier}/events')
+    async def chat_events(conversation_id: str, identifier: str, request: Request, after: int = Query(default=0, ge=0), user=Depends(current_user)):
+        owned_conversation(request, conversation_id, user['id'])
+        if not app.state.db.one('SELECT id FROM chat_runs WHERE id=? AND conversation_id=? AND user_id=?', (identifier, conversation_id, user['id'])):
+            raise HTTPException(404, 'Response not found.')
+        return StreamingResponse(app.state.chat_jobs.events(identifier, after), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
 
     @app.post("/api/conversations/{conversation_id}/attachments", status_code=201)
     async def upload_attachment(
@@ -345,6 +376,14 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @app.post("/api/conversations/{conversation_id}/messages")
     async def send_message(conversation_id: str, body: ChatMessage, request: Request, user=Depends(current_user)):
         row = owned_conversation(request, conversation_id, user["id"])
+        if body.request_id:
+            accepted = app.state.db.one('SELECT run_id,conversation_id FROM chat_request_keys WHERE user_id=? AND request_key=?', (user['id'], body.request_id))
+            if accepted and accepted['conversation_id'] != conversation_id:
+                raise HTTPException(422, 'This request key belongs to another conversation.')
+            if accepted:
+                return StreamingResponse(app.state.chat_jobs.events(accepted['run_id']), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
+        if request.app.state.db.one("SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')", (conversation_id,)):
+            raise HTTPException(409, "Wait for this response to finish, or stop it first.")
         if request.app.state.db.one(
             "SELECT id FROM reports WHERE user_id=? AND conversation_id=? AND status IN ('queued','running') LIMIT 1",
             (user["id"], conversation_id),
@@ -413,7 +452,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 if history:
                     content = json.dumps(
                         {
-                            "previous_messages": history if retry_user else history[-40:],
+                            "previous_messages": history,
                             "new_message": body.content,
                             **({"attachments": list(files.values())} if files else {}),
                         },
@@ -442,40 +481,20 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 for identifier in body.attachment_ids:
                     c.execute("INSERT INTO message_attachments VALUES(?,?)", (user_message_id, identifier))
                 c.execute("INSERT INTO messages VALUES(?,?,?,?,?,?)", (assistant_id, conversation_id, "assistant", "", "streaming", now()))
+                app.state.chat_jobs.enqueue(c, assistant_id, conversation_id, user['id'], {
+                    'thread': thread_id, 'content': content, 'wrapped': content != body.content,
+                    'model': model, 'effort': effort,
+                })
+                if body.request_id:
+                    c.execute('INSERT INTO chat_request_keys VALUES(?,?,?,?)', (user['id'], body.request_id, conversation_id, assistant_id))
         except BaseException:
             lock.release()
             if worker_acquired:
                 await request.app.state.manager.release_worker(user["id"], "chat", conversation_id)
             raise
 
-        async def events():
-            text, status = "", "interrupted"
-            try:
-                yield json.dumps({"type": "message", "id": assistant_id}) + "\n"
-                async for event in runtime.stream(thread_id, content, model, **({"reasoning_effort": effort} if effort is not None else {})):
-                    if event["type"] == "delta":
-                        text += event["text"]
-                    elif event["type"] == "done":
-                        status = "completed" if event["status"] == "completed" else "interrupted"
-                        text = event.get("text") or text
-                    yield json.dumps(event) + "\n"
-            except ProviderError as exc:
-                status = "failed"
-                yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                status = "failed"
-                yield (
-                    json.dumps({"type": "error", "message": "The response could not finish. Please try again."}) + "\n"
-                )
-            finally:
-                db.execute("UPDATE messages SET content=?,status=? WHERE id=?", (text, status, assistant_id))
-                db.audit(user["id"], "chat.response", conversation_id, {"status": status})
-                lock.release()
-                await request.app.state.manager.release_worker(user["id"], "chat", conversation_id)
-
-        return StreamingResponse(events(), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
+        app.state.chat_jobs.start(assistant_id, runtime, lock)
+        return StreamingResponse(app.state.chat_jobs.events(assistant_id), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
     @app.post("/api/conversations/{conversation_id}/stop")
     async def stop_message(conversation_id: str, request: Request, user=Depends(current_user)):
@@ -493,6 +512,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             except ProviderError:
                 pass
         await stop_reports(user["id"], conversation_id=conversation_id)
+        await app.state.chat_jobs.stop(conversation_id)
         return {"ok": True}
 
     async def stop_reports(user_id, identifier=None, conversation_id=None):
@@ -572,8 +592,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     async def datasets(request: Request, user=Depends(current_user)):
         return request.app.state.db.all(
             "SELECT d.id,d.name,d.description,d.enabled,s.name AS source,s.status FROM datasets d JOIN data_sources s ON s.id=d.source_id "
-            "JOIN dataset_grants g ON g.dataset_id=d.id WHERE g.user_id=?",
-            (user["id"],),
+            "WHERE ? IN ('devs','president') OR EXISTS(SELECT 1 FROM dataset_grants g WHERE g.dataset_id=d.id AND g.user_id=?)",
+            (user['role'],user["id"]),
         )
 
     @app.get("/api/report-templates")
@@ -744,6 +764,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                     "source": source["name"],
                     "source_id": source["id"],
                     "database": result.get("database"),
+                    "access_scope": result.get('access_scope'),
+                    "access_stamp": result.get('access_stamp'),
                     "query": result["query"],
                     "columns": result["columns"],
                     "scope": result["scope"],
@@ -760,13 +782,13 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 ) from exc
         elif body.dataset_id:
             dataset = db.one(
-                "SELECT d.* FROM datasets d JOIN dataset_grants g ON g.dataset_id=d.id WHERE d.id=? AND g.user_id=?",
-                (body.dataset_id, user["id"]),
+                "SELECT d.* FROM datasets d WHERE d.id=? AND (? IN ('devs','president') OR EXISTS(SELECT 1 FROM dataset_grants g WHERE g.dataset_id=d.id AND g.user_id=?))",
+                (body.dataset_id, db.one('SELECT role FROM users WHERE id=?',(user_id,))['role'],user_id),
             )
             if not dataset:
                 raise HTTPException(404, "Dataset not found or access was not granted.")
             try:
-                rows = await state.connectors.fetch(dataset, body.parameters, complete=True)
+                rows = await state.connectors.fetch(dataset, body.parameters, complete=True, user_id=user_id)
                 provenance = {
                     "source": dataset["name"],
                     "query_key": dataset["query_key"],
@@ -831,45 +853,49 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             )["count"]
             if in_flight >= 2:
                 raise HTTPException(429, "Wait for your current reports to finish before starting another.")
+            from .data_access import capture_checks, validate_capture
+            validate_capture(db,user_id,capture_checks(provenance))
             snapshot_id = uid()
             db.execute(
                 "INSERT INTO dataset_snapshots VALUES(?,?,?,?,?,?)",
                 (snapshot_id, user["id"], body.dataset_id, json.dumps(provenance), serialized, now()),
             )
-        db.execute(
-            "INSERT INTO reports(id,user_id,conversation_id,template_id,snapshot_id,title,instructions,model,parameters_json,status,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                identifier,
-                user["id"],
-                body.conversation_id,
-                body.template_id,
-                snapshot_id,
-                body.title,
-                body.instructions,
-                body.model,
-                json.dumps(body.parameters),
-                "blocked" if error else "queued",
-                error,
-                now(),
-            ),
-        )
-        db.execute("INSERT INTO report_settings VALUES(?,?)", (identifier, body.reasoning_effort))
-        db.audit(user["id"], "report.requested", identifier)
-        if not error:
-            task = asyncio.create_task(
-                generate_report(
-                    db, state.manager, identifier, user["id"], [a.model_dump(by_alias=True) for a in body.analyses]
-                )
+        analyses = [a.model_dump(by_alias=True) for a in body.analyses]
+        with db.connect() as c:
+            c.execute(
+                "INSERT INTO reports(id,user_id,conversation_id,template_id,snapshot_id,title,instructions,model,parameters_json,status,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    identifier,
+                    user["id"],
+                    body.conversation_id,
+                    body.template_id,
+                    snapshot_id,
+                    body.title,
+                    body.instructions,
+                    body.model,
+                    json.dumps(body.parameters),
+                    "blocked" if error else "queued",
+                    error,
+                    now(),
+                ),
             )
-            state.jobs.add(task)
-            state.report_jobs[identifier] = task
-
-            def done(task):
-                state.jobs.discard(task)
-                state.report_jobs.pop(identifier, None)
-
-            task.add_done_callback(done)
+            c.execute("INSERT INTO report_settings VALUES(?,?)", (identifier, body.reasoning_effort))
+            if not error:
+                c.execute('INSERT INTO report_work VALUES(?,?)', (identifier, json.dumps(analyses)))
+        db.audit(user['id'], 'report.requested', identifier)
+        if not error:
+            launch_report(identifier, user_id, analyses)
         return db.one("SELECT * FROM reports WHERE id=? AND user_id=?", (identifier, user_id))
+
+    def launch_report(identifier, user_id, analyses):
+        state = app.state
+        task = asyncio.create_task(generate_report(state.db, state.manager, identifier, user_id, analyses))
+        state.jobs.add(task)
+        state.report_jobs[identifier] = task
+        def done(task):
+            state.jobs.discard(task)
+            state.report_jobs.pop(identifier, None)
+        task.add_done_callback(done)
 
     @app.get("/api/reports/{identifier}")
     async def report_detail(identifier: str, request: Request, user=Depends(current_user)):
@@ -942,18 +968,99 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             "database_configuration": app.state.connectors.configuration(),
         }
 
+    async def validated_access(actor, body, existing_user=None):
+        from .data_access import DataAccess, discover_companies
+        db, registry = app.state.db, app.state.connectors
+        previous = DataAccess(db).saved(existing_user) if existing_user else {"databases":[],"legacy_source_ids":[]}
+        legacy = set(body.preserve_legacy_source_ids)
+        if not legacy <= set(previous['legacy_source_ids']):
+            raise HTTPException(422, "New access must select specific databases and companies.")
+        seen, resolved, inventories = set(), [], {}
+        for grant in body.databases:
+            key = (grant.source_id,grant.database)
+            if key in seen or grant.source_id in legacy or len(grant.company_ids) != len(set(grant.company_ids)):
+                raise HTTPException(422, "Duplicate or conflicting database access choices.")
+            seen.add(key)
+            if (grant.all_companies and grant.company_ids) or (not grant.all_companies and not grant.company_ids):
+                raise HTTPException(422, "Select all companies or at least one specific company.")
+            stored = db.one('SELECT * FROM database_grants WHERE user_id=? AND source_id=? AND database_name=?', (existing_user,grant.source_id,grant.database)) if existing_user else None
+            old_units = json.loads(stored['companies_json']) if stored else []
+            if stored and bool(stored['all_companies']) == grant.all_companies and {u['id'] for u in old_units} == set(grant.company_ids):
+                units = old_units
+            else:
+                try:
+                    if grant.source_id not in inventories:
+                        names,offset = set(),0
+                        while True:
+                            page = await registry.database_call(actor,grant.source_id,'databases',offset=offset,limit=200)
+                            names.update(d['name'] for d in page['databases'])
+                            if page['next_offset'] is None:
+                                break
+                            offset = page['next_offset']
+                        inventories[grant.source_id] = names
+                    if grant.database not in inventories[grant.source_id]:
+                        raise ValueError('Choose an available database from the access catalog.')
+                    units = []
+                    if not grant.all_companies:
+                        connector = await registry.resolve_connector(grant.source_id).in_database(grant.database)
+                        catalog = await discover_companies(connector)
+                        available = {u['id']:u for u in catalog['companies']}
+                        if not set(grant.company_ids) <= set(available):
+                            raise ValueError('A selected company could not be verified. Refresh the access catalog.')
+                        units = [available[identifier] for identifier in sorted(grant.company_ids)]
+                except (ValueError, SourceNotConfigured) as exc:
+                    raise HTTPException(422,str(exc)) from exc
+            resolved.append({'source_id':grant.source_id,'database':grant.database,'all_companies':grant.all_companies,'companies':units})
+        return resolved,legacy
+
+    @app.get('/api/admin/access-catalog')
+    async def access_catalog(user=Depends(admin_user)):
+        return await app.state.connectors.database_inventory(user['id'])
+
+    @app.get('/api/admin/access-catalog/{source_id}/companies')
+    async def access_companies(source_id: str, database: str = Query(min_length=1,max_length=128), user=Depends(admin_user)):
+        from .data_access import discover_companies
+        registry = app.state.connectors
+        try:
+            registry.authorized_source(user['id'],source_id)
+            connector = registry.resolve_connector(source_id)
+            if not connector:
+                raise SourceNotConfigured('Configure this source before selecting its companies.')
+            return await discover_companies(await connector.in_database(database))
+        except (ValueError,SourceNotConfigured) as exc:
+            raise HTTPException(422,str(exc)) from exc
+
+    @app.get('/api/admin/users/{identifier}/access')
+    async def member_access(identifier: str, user=Depends(admin_user)):
+        from .data_access import DataAccess
+        if not app.state.db.one('SELECT id FROM users WHERE id=?',(identifier,)):
+            raise HTTPException(404,'User not found.')
+        return DataAccess(app.state.db).saved(identifier)
+
+    @app.put('/api/admin/users/{identifier}/access')
+    async def save_member_access(identifier: str, body: MemberDataAccess, user=Depends(admin_user)):
+        from .data_access import DataAccess
+        if not app.state.db.one('SELECT id FROM users WHERE id=?',(identifier,)):
+            raise HTTPException(404,'User not found.')
+        selections,legacy = await validated_access(user['id'],body,identifier)
+        with app.state.db.connect() as c:
+            DataAccess(app.state.db).replace(c,identifier,selections,legacy)
+        app.state.db.audit(user['id'],'user.access_updated',identifier,{'database_count':len(selections)})
+        return DataAccess(app.state.db).saved(identifier)
+
     @app.get("/api/admin/users")
     async def users(request: Request, user=Depends(admin_user)):
         return [public_user(row) for row in request.app.state.db.all("SELECT * FROM users ORDER BY created_at")]
 
     @app.post("/api/admin/users", status_code=201)
     async def add_user(body: CreateUser, request: Request, user=Depends(admin_user)):
+        from .data_access import DataAccess
+        selections,legacy = await validated_access(user['id'],body.database_access or MemberDataAccess())
         identifier = uid()
         try:
-            request.app.state.db.execute(
-                "INSERT INTO users VALUES(?,?,?,?,?,?,?)",
-                (identifier, body.email, body.name, hash_password(body.password), body.role, 1, now()),
-            )
+            with request.app.state.db.connect() as c:
+                c.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)", (identifier,body.email,body.name,hash_password(body.password),body.role,1,now()))
+                DataAccess(request.app.state.db).replace(c,identifier,selections,legacy)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "A user with that email already exists.") from exc
         request.app.state.db.audit(user["id"], "user.created", identifier)
@@ -962,6 +1069,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @app.patch("/api/admin/users/{identifier}")
     async def update_user(identifier: str, body: UpdateAccount, request: Request, user=Depends(admin_user)):
         db = request.app.state.db
+        access_change = await validated_access(user['id'],body.database_access,identifier) if body.database_access is not None else None
         with db.connect() as c:
             c.execute("BEGIN IMMEDIATE")
             target = c.execute("SELECT * FROM users WHERE id=?", (identifier,)).fetchone()
@@ -975,9 +1083,19 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 if c.execute("SELECT count(*) FROM users WHERE role='devs' AND active=1").fetchone()[0] <= 1:
                     raise HTTPException(422, "Keep at least one active Devs account.")
             c.execute("UPDATE users SET active=?,role=? WHERE id=?", (active, role, identifier))
+            if active != target['active'] or role != target['role']:
+                from .data_access import DataAccess
+                DataAccess.bump(c,identifier)
+            if access_change is not None:
+                from .data_access import DataAccess
+                DataAccess(db).replace(c,identifier,*access_change)
             if not active:
                 c.execute("DELETE FROM sessions WHERE user_id=?", (identifier,))
         # Existing grants remain untouched when roles change.
+        if not active:
+            for chat in db.all('SELECT id FROM conversations WHERE user_id=?', (identifier,)):
+                await app.state.chat_jobs.stop(chat['id'])
+            await stop_reports(identifier)
         if not active or role != target["role"]:
             await request.app.state.manager.release(identifier)
         db.audit(user["id"], "user.updated", identifier, {"active": bool(active), "role": role})
@@ -1135,13 +1253,22 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             "SELECT id FROM users WHERE id=?", (user_id,)
         ):
             raise HTTPException(404, "Source or member not found.")
-        db.execute("INSERT OR IGNORE INTO source_grants VALUES(?,?)", (source_id, user_id))
-        db.audit(user["id"], "source.granted", source_id, {"user_id": user_id})
+        with db.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if not c.execute('SELECT 1 FROM source_grants WHERE source_id=? AND user_id=?', (source_id, user_id)).fetchone():
+                raise HTTPException(422, 'Choose databases and companies in member access settings. New source-wide grants are no longer supported.')
+        # Compatibility reads preserve existing grants without widening access.
+        db.audit(user["id"], "source.grant_preserved", source_id, {"user_id": user_id})
         return {"ok": True}
 
     @app.delete("/api/admin/sources/{source_id}/grants/{user_id}")
     async def revoke_source(source_id: str, user_id: str, request: Request, user=Depends(admin_user)):
-        app.state.db.execute("DELETE FROM source_grants WHERE source_id=? AND user_id=?", (source_id, user_id))
+        with app.state.db.connect() as c:
+            c.execute("DELETE FROM source_grants WHERE source_id=? AND user_id=?", (source_id, user_id))
+            c.execute("DELETE FROM source_access_policies WHERE source_id=? AND user_id=?", (source_id, user_id))
+            c.execute("DELETE FROM database_grants WHERE source_id=? AND user_id=?", (source_id, user_id))
+            from .data_access import DataAccess
+            DataAccess.bump(c,user_id)
         app.state.db.audit(user["id"], "source.revoked", source_id, {"user_id": user_id})
         return {"ok": True}
 

@@ -71,7 +71,7 @@ def test_sqlserver_missing_configuration_status_and_dataset_enable_controls(clie
     assert client.post(f"/api/admin/sources/{source['id']}/check", headers=HEADERS).status_code == 403
 
 
-def test_model_tools_can_read_and_save_reports_only_from_granted_datasets(client, admin):
+def test_devs_model_tools_can_read_and_save_datasets_without_explicit_grants(client, admin):
     class FixtureConnector:
         async def fetch(self, key, parameters):
             return [{"revenue": 42}]
@@ -104,9 +104,9 @@ def test_model_tools_can_read_and_save_reports_only_from_granted_datasets(client
         "instructions": "Summarize",
         "template_id": "sales",
     }
-    assert "error" in tool("fetch_dataset", {"dataset_id": dataset["id"], "parameters": {}})
-    assert "error" in tool("create_report", args)
-    client.put(f"/api/admin/datasets/{dataset['id']}/grants/{admin['id']}", headers=HEADERS)
+    assert tool("fetch_dataset", {"dataset_id": dataset["id"], "parameters": {}})['rows'] == [{'revenue':42}]
+    assert "error" in tool("create_report", args)  # Subscription is still disconnected.
+    assert not client.app.state.db.all('SELECT * FROM dataset_grants WHERE user_id=?',(admin['id'],))
     listing = tool("list_datasets", {})["datasets"][0]
     assert "parameters_schema" in listing and "columns_schema" in listing
     assert "query_key" not in listing and "password" not in json.dumps(listing)

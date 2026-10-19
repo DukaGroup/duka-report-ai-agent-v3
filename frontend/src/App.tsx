@@ -31,7 +31,16 @@ import { MarkdownContent } from "./MarkdownContent";
 import { Brand } from "./Brand";
 import { Select } from "./Select";
 import { TrafficPanel } from "./TrafficPanel";
+import { DatabaseAccessPicker, emptyDataAccess } from "./DatabaseAccessPicker";
+import type { MemberDataAccess } from "./DatabaseAccessPicker";
 import { api, streamChat } from "./api";
+import { loadDrafts, saveDrafts } from "./drafts";
+import {
+  PasswordChangeForm,
+  RecoveryForm,
+  MemberRecovery,
+} from "./AccountRecovery";
+import { ChatVersions } from "./ChatVersions";
 import {
   ConversationRuns,
   pendingAssistantMessages,
@@ -168,8 +177,10 @@ function Auth({
 }) {
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError("");
     const data = Object.fromEntries(new FormData(e.currentTarget));
@@ -186,6 +197,7 @@ function Auth({
       setBusy(false);
     }
   }
+  if (recovering) return <RecoveryForm onBack={() => setRecovering(false)} />;
   return (
     <div className="auth-page">
       <div className="auth-brand">
@@ -255,6 +267,15 @@ function Auth({
             {setup ? "Krijo hapësirën" : "Hyr"}
           </button>
         </form>
+        {!setup && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setRecovering(true)}
+          >
+            Harrova fjalëkalimin
+          </button>
+        )}
         <div className="auth-note">
           <ShieldCheck size={16} /> Lidhja e abonimit kryhet përmes OpenAI ose
           Anthropic.{" "}
@@ -357,9 +378,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [conversations, setConversations] = useState<Conversation[]>([]),
     [currentId, setCurrentId] = useState<string | null>(null),
     [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(
+    () => loadDrafts(user.id).get("__new__")?.draft || "",
+  );
   const [retryMessageId, setRetryMessageId] = useState<string | null>(null);
-  const [reasoningEffort, setReasoningEffort] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState(
+    () => loadDrafts(user.id).get("__new__")?.reasoningEffort || "",
+  );
   const supportedEfforts =
     models.find((m) => m.model === model)?.supported_reasoning_efforts || [];
   const effort = supportedEfforts.includes(reasoningEffort)
@@ -380,20 +405,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     runs.current.has(currentId) ||
     messages.some((m) => m.status === "streaming");
   const activity = runs.current.activity(currentId);
-  const drafts = useRef(
-    new Map<
-      string,
-      {
-        draft: string;
-        attachments: Attachment[];
-        model: string;
-        reasoningEffort: string;
-        retryMessageId: string | null;
-      }
-    >(),
-  );
+  const drafts = useRef(loadDrafts(user.id));
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>(
-    [],
+    () => drafts.current.get("__new__")?.attachments || [],
   );
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -451,6 +465,17 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     [grant, setGrant] = useState<Dataset | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [businessSources, setBusinessSources] = useState<Source[]>([]);
+  const [newMemberRole, setNewMemberRole] = useState<User["role"]>("manager");
+  const [newMemberAccess, setNewMemberAccess] =
+    useState<MemberDataAccess>(emptyDataAccess);
+  const [accessMember, setAccessMember] = useState<User | null>(null);
+  const [memberAccess, setMemberAccess] =
+    useState<MemberDataAccess>(emptyDataAccess);
+  const [savingAccess, setSavingAccess] = useState(false);
+  const [savingAdmin, setSavingAdmin] = useState(false);
+  const adminSaving = useRef(false);
+  const [recoveryMember, setRecoveryMember] = useState<User | null>(null);
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [sourceAccess, setSourceAccess] = useState<Source | null>(null);
   const [sourceGrants, setSourceGrants] = useState<string[]>([]);
   const [editSource, setEditSource] = useState<Source | null>(null);
@@ -481,6 +506,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     (editSource.configuration_origin === "saved" || changingSourceKind);
   const [conversationSearch, setConversationSearch] = useState("");
   const [openingConversation, setOpeningConversation] = useState(false);
+  const [connectionLost, setConnectionLost] = useState(false);
   const [deleteReport, setDeleteReport] = useState<Report | null>(null);
   const [deletingReport, setDeletingReport] = useState(false);
   const [reportTrash, setReportTrash] = useState(false);
@@ -511,6 +537,65 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     activeId.current = currentId;
   }, [currentId]);
+  useEffect(() => {
+    const draftId = currentId || (page === "chat" ? "__new__" : null);
+    if (!draftId) return;
+    if (draft || pendingAttachments.length || retryMessageId)
+      drafts.current.set(draftId, {
+        draft,
+        attachments: pendingAttachments,
+        model,
+        reasoningEffort,
+        retryMessageId,
+      });
+    else drafts.current.delete(draftId);
+    saveDrafts(user.id, drafts.current);
+    try {
+      localStorage.setItem(`duka.currentChat.${user.id}`, draftId);
+    } catch {
+      /* Optional browser storage. */
+    }
+  }, [
+    currentId,
+    draft,
+    pendingAttachments,
+    model,
+    reasoningEffort,
+    retryMessageId,
+    user.id,
+    page,
+  ]);
+  useEffect(() => {
+    if (
+      !currentId ||
+      runs.current.has(currentId) ||
+      !messages.some((m) => m.status === "streaming")
+    )
+      return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const detail = await api<Conversation & { messages: Message[] }>(
+          `/conversations/${currentId}`,
+        );
+        if (!active || activeId.current !== currentId) return;
+        setMessages(detail.messages);
+        setConnectionLost(false);
+        if (!detail.messages.some((m) => m.status === "streaming")) {
+          setConversations(await api<Conversation[]>("/conversations"));
+          await loadReports();
+        }
+      } catch {
+        if (active) setConnectionLost(true);
+      }
+    };
+    const timer = setInterval(() => void refresh(), 1000);
+    void refresh();
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [currentId, messages.some((m) => m.status === "streaming"), busy]);
   useLayoutEffect(() => {
     if (page !== "chat") {
       scrolledConversation.current = null;
@@ -614,7 +699,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     if (!user) return;
     void Promise.all([
       loadSubscription().catch(() => undefined),
-      api<Conversation[]>("/conversations").then(setConversations),
+      api<Conversation[]>("/conversations").then((items) => {
+        setConversations(items);
+        let saved = "";
+        try {
+          saved = localStorage.getItem(`duka.currentChat.${user.id}`) || "";
+        } catch {
+          /* Optional browser storage. */
+        }
+        const previous = items.find((c) => c.id === saved);
+        if (previous && !activeId.current) void selectConversation(previous);
+        else if (saved === "__new__" && !activeId.current) setPage("chat");
+      }),
       api<Template[]>("/report-templates").then(setTemplates),
       api<Dataset[]>("/datasets").then(setDatasets),
       api<Source[]>("/sources").then(setBusinessSources),
@@ -641,13 +737,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     const timer = setInterval(
       () => {
-        void loadReports().catch(fail);
+        void loadReports()
+          .then(() => setConnectionLost(false))
+          .catch(() => setConnectionLost(true));
         if (report && ["queued", "running"].includes(report.status))
           void api<Report>(`/reports/${report.id}`)
             .then((next) => {
               if (reportSelection.current === next.id) setReport(next);
+              setConnectionLost(false);
             })
-            .catch(fail);
+            .catch(() => setConnectionLost(true));
       },
       runs.current.size ||
         reports.some((r) => ["queued", "running"].includes(r.status))
@@ -803,7 +902,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       if (saved?.model || result.model) {
         const candidate = saved?.model || result.model || "";
         setModel(
-          models.some((m) => m.model === candidate)
+          !models.length || models.some((m) => m.model === candidate)
             ? candidate
             : (models.find((m) => m.isDefault) || models[0])?.model || "",
         );
@@ -827,6 +926,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         reasoningEffort,
         retryMessageId,
       });
+    drafts.current.delete("__new__");
+    saveDrafts(user.id, drafts.current);
     // An untouched chat is local UI state. Sending, uploading or requesting a
     // report creates its server conversation when there is something to keep.
     setCurrentId(null);
@@ -939,6 +1040,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       const streamId = id;
       setRetryMessageId(retryId);
       drafts.current.delete(id);
+      drafts.current.delete("__new__");
+      saveDrafts(user.id, drafts.current);
       const initialMessages: Message[] = [
         ...(retryId ? messagesBeforeRestart(messages, retryId) : messages),
         {
@@ -968,6 +1071,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           if (event.type === "message" && retryId)
             void loadReports().catch(fail);
           if (event.type === "delta") full += event.text;
+          if (event.type === "snapshot") full = event.text || "";
           if (event.type === "error") throw new Error(event.message);
           if (event.type === "done") {
             full = event.text || full;
@@ -976,11 +1080,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             streamId,
             full,
             event.type === "done" ? event.status : "streaming",
-            event.type === "tool"
-              ? "Duke kontrolluar të dhënat"
-              : event.type === "delta"
-                ? "Duke shkruar"
-                : undefined,
+            event.type === "reconnecting"
+              ? "Duke rilidhur përgjigjen…"
+              : event.type === "snapshot" && event.activity === "recovering"
+                ? "Duke rifilluar hetimin…"
+                : event.type === "tool"
+                  ? "Duke kontrolluar të dhënat"
+                  : event.type === "delta"
+                    ? "Duke shkruar"
+                    : undefined,
           );
           if (activeId.current === streamId && next) setMessages(next);
           refreshRuns((n) => n + 1);
@@ -1245,8 +1353,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     kind: "users" | "sources" | "datasets",
   ) {
     e.preventDefault();
-    if (kind === "sources" && savingSource) return;
-    const data = Object.fromEntries(new FormData(e.currentTarget));
+    if (adminSaving.current) return;
+    adminSaving.current = true;
+    setSavingAdmin(true);
+    const data: Record<string, unknown> = Object.fromEntries(
+      new FormData(e.currentTarget),
+    );
+    if (kind === "users") data.database_access = newMemberAccess;
     if (kind === "sources") {
       data.kind = sourceKind;
       for (const key of Object.keys(data)) {
@@ -1278,6 +1391,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       fail(e);
     } finally {
       if (kind === "sources") setSavingSource(false);
+      adminSaving.current = false;
+      setSavingAdmin(false);
     }
   }
   async function openSourceAccess(source: Source) {
@@ -1291,18 +1406,37 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       fail(e);
     }
   }
-  async function changeSourceAccess(member: User) {
-    if (!sourceAccess) return;
-    const granted = sourceGrants.includes(member.id);
+  async function openMemberAccess(member: User) {
+    setError("");
     try {
-      await api(`/admin/sources/${sourceAccess.id}/grants/${member.id}`, {
-        method: granted ? "DELETE" : "PUT",
+      const saved = await api<{
+        databases: MemberDataAccess["databases"];
+        legacy_source_ids: string[];
+      }>(`/admin/users/${member.id}/access`);
+      setMemberAccess({
+        databases: saved.databases,
+        preserve_legacy_source_ids: saved.legacy_source_ids,
       });
-      setSourceGrants((ids) =>
-        granted ? ids.filter((id) => id !== member.id) : [...ids, member.id],
-      );
+      setSourceAccess(null);
+      setAccessMember(member);
     } catch (e) {
       fail(e);
+    }
+  }
+  async function saveMemberAccess() {
+    if (!accessMember || savingAccess) return;
+    setSavingAccess(true);
+    try {
+      await api(`/admin/users/${accessMember.id}/access`, {
+        method: "PUT",
+        body: JSON.stringify(memberAccess),
+      });
+      setAccessMember(null);
+      await loadAdmin();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSavingAccess(false);
     }
   }
   function openSource(source: Source | null = null) {
@@ -1385,6 +1519,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         ),
       );
       drafts.current.delete(deleteChat.id);
+      saveDrafts(user.id, drafts.current);
+      try {
+        if (
+          localStorage.getItem(`duka.currentChat.${user.id}`) === deleteChat.id
+        )
+          localStorage.removeItem(`duka.currentChat.${user.id}`);
+      } catch {
+        /* Optional storage. */
+      }
       setDeleteChat(null);
     } catch (e) {
       fail(e);
@@ -1616,6 +1759,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </button>
           </div>
         </header>
+        {connectionLost && (
+          <div className="notice" role="status">
+            Lidhja me serverin u ndërpre. Po rilidhemi automatikisht; puna e
+            pranuar ruhet.
+          </div>
+        )}
         {error && (
           <div className="global-error" role="alert">
             <span>{error}</span>
@@ -1739,6 +1888,17 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <span>{current?.title || "Bisedë e re"}</span>
                 </div>
                 <div>
+                  {currentId && (
+                    <button
+                      className="icon-button"
+                      aria-label="Versionet e bisedës"
+                      title="Versionet e bisedës"
+                      disabled={busy || reportBusy}
+                      onClick={() => setVersionsOpen(true)}
+                    >
+                      <History size={17} />
+                    </button>
+                  )}
                   <Badge good={subscription.connected}>
                     {subscription.connected
                       ? "Abonimi është lidhur"
@@ -2852,7 +3012,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <h3> Anëtarët e hapësirës </h3>
                   <button
                     className="button primary small"
-                    onClick={() => setAddUser(true)}
+                    onClick={() => {
+                      setNewMemberRole("manager");
+                      setNewMemberAccess(emptyDataAccess());
+                      setAddUser(true);
+                    }}
                   >
                     <Plus size={16} /> Shto anëtar{" "}
                   </button>
@@ -2865,6 +3029,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         <th> Roli </th>
                         <th> Gjendja </th>
                         <th> Lidhja </th>
+                        <th> Databazat dhe kompanitë </th>
                         <th />
                       </tr>
                     </thead>
@@ -2917,6 +3082,24 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             </button>
                           </td>
                           <td>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => void openMemberAccess(u)}
+                            >
+                              {u.role === "manager"
+                                ? "Zgjidh qasjen"
+                                : "Qasje në të gjitha"}
+                            </button>
+                          </td>
+                          <td>
+                            <button
+                              className="text-button"
+                              disabled={!u.active}
+                              onClick={() => setRecoveryMember(u)}
+                            >
+                              Rikupero llogarinë
+                            </button>
                             <button
                               className="button outline small"
                               disabled={u.id === user.id}
@@ -3050,6 +3233,41 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         </Modal>
       )}
 
+      {recoveryMember && (
+        <Modal
+          title={`Rikuperimi: ${recoveryMember.name}`}
+          onClose={() => setRecoveryMember(null)}
+        >
+          <MemberRecovery member={recoveryMember} />
+        </Modal>
+      )}
+      {versionsOpen && currentId && (
+        <Modal
+          title="Versionet e bisedës"
+          onClose={() => setVersionsOpen(false)}
+        >
+          <ChatVersions
+            id={currentId}
+            onRestore={async () => {
+              const restoredId = currentId;
+              const detail = await api<Conversation & { messages: Message[] }>(
+                `/conversations/${restoredId}`,
+              );
+              drafts.current.delete(restoredId);
+              saveDrafts(user.id, drafts.current);
+              if (activeId.current === restoredId) {
+                setMessages(detail.messages);
+                setDraft("");
+                setPendingAttachments([]);
+                setRetryMessageId(null);
+              }
+              setConversations(await api<Conversation[]>("/conversations"));
+              await loadReports();
+              setVersionsOpen(false);
+            }}
+          />
+        </Modal>
+      )}
       {settingsOpen && (
         <Modal title="Cilësimet" onClose={() => setSettingsOpen(false)}>
           {reasoningControl}
@@ -3057,6 +3275,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             Zgjidhni sa arsyetim përdor modeli. Nivelet varen nga modeli i
             zgjedhur dhe zbatohen për mesazhet dhe raportet e ardhshme.
           </p>
+          <PasswordChangeForm />
           <div className="modal-actions">
             <button
               className="button primary"
@@ -3482,7 +3701,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         <Modal
           error={error}
           title="Shto një anëtar"
-          onClose={() => setAddUser(false)}
+          onClose={() => {
+            if (!savingAdmin) setAddUser(false);
+          }}
         >
           <form onSubmit={(e) => void adminSubmit(e, "users")}>
             <label>
@@ -3507,14 +3728,62 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <label>
               {" "}
               Roli{" "}
-              <Select name="role">
+              <Select
+                name="role"
+                value={newMemberRole}
+                onChange={(e) =>
+                  setNewMemberRole(e.target.value as User["role"])
+                }
+              >
                 <option value="manager">Manager</option>
                 <option value="president">President</option>
                 <option value="devs">Devs</option>
               </Select>
             </label>
-            <button className="button primary wide"> Shto anëtar </button>
+            <DatabaseAccessPicker
+              value={newMemberAccess}
+              onChange={setNewMemberAccess}
+              allAccess={newMemberRole !== "manager"}
+              disabled={savingAdmin}
+            />
+            <button className="button primary wide" disabled={savingAdmin}>
+              {savingAdmin ? "Duke shtuar…" : "Shto anëtar"}
+            </button>
           </form>
+        </Modal>
+      )}
+      {accessMember && (
+        <Modal
+          title={`Qasja: ${accessMember.name}`}
+          error={error}
+          onClose={() => {
+            if (!savingAccess) setAccessMember(null);
+          }}
+        >
+          <DatabaseAccessPicker
+            value={memberAccess}
+            onChange={setMemberAccess}
+            allAccess={accessMember.role !== "manager"}
+            disabled={savingAccess}
+          />
+          <div className="modal-actions">
+            <button
+              className="button outline"
+              disabled={savingAccess}
+              onClick={() => setAccessMember(null)}
+            >
+              Mbyll
+            </button>
+            {accessMember.role === "manager" && (
+              <button
+                className="button primary"
+                disabled={savingAccess}
+                onClick={() => void saveMemberAccess()}
+              >
+                {savingAccess ? "Duke ruajtur…" : "Ruaj qasjen"}
+              </button>
+            )}
+          </div>
         </Modal>
       )}
       {sourceAccess && (
@@ -3524,33 +3793,35 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           onClose={() => setSourceAccess(null)}
         >
           <p>
-            {" "}
-            Administratorët mund të analizojnë automatikisht burimet e lidhura.
-            Jepuni anëtarëve qasje te burimi për të zbuluar dhe analizuar
-            tabelat që lejon përdoruesi SQL. Qasja te dataset-et mbetet e
-            veçantë.{" "}
+            President dhe Devs kanë qasje në çdo databazë. Për Manager, zgjidhni
+            databazat dhe kompanitë veçmas.
           </p>
-          {users
-            .filter((member) => member.role !== "devs")
-            .map((member) => (
-              <div className="grant-row" key={member.id}>
-                <div>
-                  <strong>{member.name}</strong>
-                  <small>{member.email}</small>
-                </div>
+          {users.map((member) => (
+            <div className="grant-row" key={member.id}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={
+                    member.role !== "manager" ||
+                    sourceGrants.includes(member.id)
+                  }
+                  disabled={member.role !== "manager"}
+                  onChange={() => void openMemberAccess(member)}
+                />
+                {member.name}
+                <small>{member.email}</small>
+              </label>
+              {member.role === "manager" && (
                 <button
-                  className="button outline small"
-                  onClick={() => void changeSourceAccess(member)}
+                  type="button"
+                  className="text-button"
+                  onClick={() => void openMemberAccess(member)}
                 >
-                  {sourceGrants.includes(member.id)
-                    ? "Hiq qasjen"
-                    : "Jep qasje"}
+                  Databazat dhe kompanitë
                 </button>
-              </div>
-            ))}
-          {!users.some((member) => member.role !== "devs") && (
-            <p className="muted"> Nuk ka ende llogari anëtarësh. </p>
-          )}
+              )}
+            </div>
+          ))}
         </Modal>
       )}
       {addSource && (
@@ -3877,7 +4148,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         <Modal
           error={error}
           title="Përcakto një dataset opsional"
-          onClose={() => setAddDataset(false)}
+          onClose={() => {
+            if (!savingAdmin) setAddDataset(false);
+          }}
         >
           <form onSubmit={(e) => void adminSubmit(e, "datasets")}>
             <label>
@@ -3934,7 +4207,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               konfigurimit të burimit. Katalogu përdor parametrat{" "}
               {'{"schema_name":"dbo"}'}.
             </p>
-            <button className="button primary wide"> Ruaj dataset-in </button>
+            <button className="button primary wide" disabled={savingAdmin}>
+              {savingAdmin ? "Duke ruajtur…" : "Ruaj dataset-in"}
+            </button>
           </form>
         </Modal>
       )}

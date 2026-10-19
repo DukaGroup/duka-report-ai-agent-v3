@@ -148,13 +148,15 @@ class CalculationService:
                     raise ValueError("Complete calculation inputs exceed configured limits; narrow or aggregate the queries.")
                 tables[item.name] = result["rows"]
                 audit.append({"name": item.name, "row_count": len(result["rows"]), "columns": result["columns"],
-                              "sha256": hashlib.sha256(serialized.encode()).hexdigest(), "captured_at": captured})
+                              "sha256": hashlib.sha256(serialized.encode()).hexdigest(), "captured_at": captured,
+                              **({"access_stamp": result['access_stamp'], "database":result.get('database')} if item.kind == 'database' and result.get('access_stamp') else {})})
             result = await self.run(plan.script, tables)
             result = await asyncio.to_thread(validate_output, result, self.settings.report_max_rows, self.settings.report_max_bytes)
             # A grant revoked during execution also prevents capture/publication.
-            for item in plan.inputs:
+            for item, captured_input in zip(plan.inputs,audit):
                 if item.kind == "database":
                     self.connectors.authorized_source(user, item.source_id)
+                    self.check_access_stamp(user,item.source_id,captured_input.get('database',item.database),captured_input.get('access_stamp'))
                 else:
                     self.attachments.owned(user, item.attachment_id, conversation)
             self.conversation(user, conversation)
@@ -203,15 +205,26 @@ class CalculationService:
                 raise ValueError(result["error"])
             return result["result"]
 
+    def check_access_stamp(self, user, source, database, captured_stamp):
+        from .data_access import DataAccess
+        access = DataAccess(self.db)
+        if captured_stamp is None and not access.scoped(user,source):
+            return  # Existing captures retain their original source-grant behavior.
+        if captured_stamp != access.stamp(user,source,database):
+            raise ValueError('Database/company access changed since this calculation. Recalculate with the current grants.')
+
     def owned(self, user, conversation, identifier):
         self.conversation(user, conversation)
         row = self.db.one("SELECT * FROM calculation_runs WHERE id=? AND user_id=? AND conversation_id=? AND id NOT IN (SELECT calculation_id FROM archived_calculations)", (identifier, user, conversation))
         if not row:
             raise ValueError("Calculation not found in this conversation.")
         provenance = json.loads(row["provenance_json"])
+        captures = {item['name']:item for item in provenance.get('inputs',[])}
         for item in provenance["plan"]["inputs"]:
             if item["kind"] == "database":
                 self.connectors.authorized_source(user, item["source_id"])
+                captured = captures.get(item['name'],{})
+                self.check_access_stamp(user,item['source_id'],captured.get('database',item.get('database')),captured.get('access_stamp'))
             else:
                 self.attachments.owned(user, item["attachment_id"], conversation)
         return row, provenance, json.loads(row["result_json"])

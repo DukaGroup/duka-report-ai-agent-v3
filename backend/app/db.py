@@ -95,9 +95,10 @@ class Database:
                 # conversations, uploads, report snapshots and exports stay intact.
                 c.execute("UPDATE conversations SET provider_thread_id=NULL")
                 c.execute("INSERT INTO schema_migrations VALUES(8,?)", (now(),))
-            c.execute("UPDATE messages SET status='interrupted' WHERE status='streaming'")
+            c.execute("UPDATE messages SET status='interrupted' WHERE status='streaming' AND id NOT IN (SELECT id FROM chat_runs WHERE status IN ('queued','running','paused'))")
+            c.execute("UPDATE chat_runs SET status='queued' WHERE status IN ('running','paused')")
             c.execute(
-                "UPDATE reports SET status='failed', error='Application restarted during generation.' WHERE status IN ('queued','running')"
+                "UPDATE reports SET status='failed', error='Application restarted during generation.' WHERE status IN ('queued','running') AND id NOT IN (SELECT report_id FROM report_work)"
             )
             templates = [
                 ("executive", "Executive overview", "Key performance, changes, findings, and next steps."),
@@ -145,7 +146,9 @@ class Database:
         c.execute("INSERT INTO conversation_branches VALUES(?,?,?,?,?)", (
             branch_id, conversation_id, target["id"],
             json.dumps({"messages": messages, "attachments": attachments, "revisions": revisions,
-                        "report_ids": reports, "calculation_ids": calculations}, ensure_ascii=False), now()))
+                        "report_ids": reports, "calculation_ids": calculations,
+                        "active_report_ids": [r[0] for r in c.execute('SELECT id FROM reports WHERE conversation_id=?', (conversation_id,))],
+                        "active_calculation_ids": [r[0] for r in c.execute('SELECT id FROM calculation_runs WHERE conversation_id=? AND id NOT IN (SELECT calculation_id FROM archived_calculations)', (conversation_id,))]}, ensure_ascii=False), now()))
         # Saved reports keep their snapshots and exports in the Reports library.
         c.execute("UPDATE reports SET conversation_id=NULL WHERE conversation_id=? AND created_at>=?", (conversation_id, target["created_at"]))
         c.executemany("INSERT INTO archived_calculations VALUES(?,?)", [(identifier, branch_id) for identifier in calculations])

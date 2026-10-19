@@ -140,7 +140,7 @@ def test_roles_keep_source_grants_and_do_not_grant_president_admin(client, admin
     member = create_member(client)
     assert member['role'] == 'manager'
     source = client.post('/api/admin/sources', headers=HEADERS, json={'name': 'Granted database', 'kind': 'sqlserver'}).json()
-    client.put(f"/api/admin/sources/{source['id']}/grants/{member['id']}", headers=HEADERS)
+    client.app.state.db.execute("INSERT INTO source_grants VALUES(?,?)", (source["id"], member["id"]))
     assert client.patch(f"/api/admin/users/{member['id']}", headers=HEADERS, json={'role': 'president'}).status_code == 200
     assert client.app.state.db.one('SELECT * FROM source_grants WHERE user_id=? AND source_id=?', (member['id'], source['id']))
     assert client.patch(f"/api/admin/users/{admin['id']}", headers=HEADERS, json={'role': 'manager'}).status_code == 422

@@ -228,6 +228,8 @@ def test_source_grants_are_required_for_members_and_revocation_is_immediate(clie
     assert connector.calls == []
     assert client.put(f"/api/admin/sources/{source['id']}/grants/{member['id']}", headers=HEADERS).status_code == 403
     client.cookies.set("duka_session", token)
+    assert client.put(f"/api/admin/sources/{source['id']}/grants/{member['id']}", headers=HEADERS).status_code == 422
+    client.app.state.db.execute("INSERT INTO source_grants VALUES(?,?)", (source["id"], member["id"]))
     assert client.put(f"/api/admin/sources/{source['id']}/grants/{member['id']}", headers=HEADERS).status_code == 200
     assert call_tool(client, member, "query_database", {"source_id": source["id"], "query": query_plan()})["rows"]
     client.delete(f"/api/admin/sources/{source['id']}/grants/{member['id']}", headers=HEADERS)

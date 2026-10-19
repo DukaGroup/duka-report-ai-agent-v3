@@ -2747,3 +2747,82 @@ textarea {
 .composer-left {
   flex-wrap: wrap;
 }
+
+.database-access-picker {
+  margin: 18px 0;
+}
+.database-access-picker p {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.access-source {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  min-width: 0;
+}
+.access-source legend {
+  padding: 0 6px;
+}
+.access-source label,
+.grant-row > label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  cursor: pointer;
+}
+.database-access-picker input[type="checkbox"],
+.grant-row input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--brand-action);
+}
+.access-database {
+  margin: 8px 0 0 12px;
+}
+.access-database-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.access-database-heading label {
+  overflow-wrap: anywhere;
+}
+.access-companies {
+  margin: 10px 0 12px 25px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  display: grid;
+  gap: 10px;
+}
+.access-companies label {
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.access-companies small {
+  color: var(--muted);
+}
+.access-company-list {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 3px;
+}
+
+.account-password-form { display: grid; gap: 14px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border, #e5e7eb); }
+.account-password-form h3, .account-password-form p { margin: 0; }
+.account-password-form label { display: grid; gap: 7px; }
+.account-password-form input { width: 100%; min-width: 0; }
+.chat-versions { display: grid; gap: 14px; max-height: 65vh; overflow: auto; }
+.version-choice { display: flex; align-items: flex-start; gap: 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 14px; cursor: pointer; }
+.version-choice input { width: auto; margin-top: 4px; }
+.version-choice small { display: block; margin-top: 5px; color: #71717a; }
+.version-choice p { margin: 7px 0 0; overflow-wrap: anywhere; }

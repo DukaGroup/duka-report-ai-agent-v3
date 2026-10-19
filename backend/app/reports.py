@@ -121,6 +121,8 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
                     "source": source["name"],
                     "source_id": source_id,
                     "database": result.get("database"),
+                    "access_scope": result.get('access_scope'),
+                    "access_stamp": result.get('access_stamp'),
                     "rows": result["rows"],
                     "columns": result["columns"],
                     "query": result["query"],
@@ -140,10 +142,9 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
             raise ReportDataError(
                 "The complete report exceeds the configured export limits. Ask an administrator to increase them; no partial report was generated."
             )
-        db.execute(
-            "UPDATE dataset_snapshots SET provenance_json=? WHERE id=?",
-            (snapshot["provenance_json"], snapshot["id"]),
-        )
+        with db.connect() as c:
+            c.execute("UPDATE dataset_snapshots SET provenance_json=? WHERE id=?", (snapshot["provenance_json"], snapshot["id"]))
+            c.execute("UPDATE report_work SET analyses_json='[]' WHERE report_id=?", (report_id,))
         # The saved snapshot retains private audit evidence for validation. It
         # must never be sent to the narrative model or its repair prompts.
         from .balance_workbook import balance_contract
@@ -163,6 +164,7 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
             {
                 "task": "Write a thorough business report in the language of user_request, or the report instructions when no original user request is supplied. Honor an explicit user request for a different language. Ignore the language of this task, JSON keys and database labels. Use only the supplied query results and model-authored calculation outputs, within the user's requested scope and exclusions. Analyze relevant performance, trends, breakdowns, exceptions and financial metrics supported by these sources. Comparisons outside that scope, later adjustments, revised balances and reconciliation require an explicit user request; asking for detail does not authorize them. State scope, missing inputs and limitations; never infer unavailable costs, VAT rates, exchange rates, or invent forecasts. Follow the supplied confirmed currency context. Return only the required JSON document. Write the workbook script yourself. The backend renders your chosen operations and preserves captured results; it supplies no hidden accounting formulas. Never infer full-data totals from samples. If a required total was not captured, state that limitation instead of inventing it.",
                 "user_request": user_request["content"] if user_request else None,
+                "conversation_history": db.all("SELECT role,content FROM messages WHERE conversation_id=? AND status='completed' ORDER BY created_at,rowid", (report['conversation_id'],)),
                 "base_currency": BASE_CURRENCY,
                 "workbook_script_api": WORKBOOK_SCRIPT_API,
                 "currency_instructions": "Albanian lek (ALL) is the confirmed workspace base currency. Blank, null or whitespace-only currency codes mean ALL, not an unknown currency. Samples display these codes as ALL; the original snapshot remains unchanged. Use ALL in base-currency headings, monetary totals, chart axes and explanations. Preserve explicit foreign currencies and distinguish document amounts from local-currency amounts. Do not combine incompatible currencies or invent conversion rates. Counts, quantities and percentages are not currencies.",
@@ -195,6 +197,9 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
         )
         # The immutable serialized snapshot is all the workbook worker needs.
         # Release the gathered row dictionaries before it allocates Excel cells.
+        from .data_access import capture_checks, validate_capture
+        permission_checks = capture_checks(provenance)
+        validate_capture(db, user_id, permission_checks)
         rows = provenance = additional = result = item = None
         runtime = await manager.acquire_worker(user_id, "report", report_id, report["model"])
         worker_acquired = True
@@ -202,14 +207,15 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
         manager.report_threads[report_id] = thread_id
         setting = db.one("SELECT reasoning_effort FROM report_settings WHERE report_id=?", (report_id,))
         effort_options = {"reasoning_effort": setting["reasoning_effort"]} if setting and setting["reasoning_effort"] is not None else {}
-        fragments = ""
-        async for event in runtime.stream(thread_id, prompt, report["model"], strict_report_schema(), **effort_options):
-            if event["type"] == "delta":
-                fragments += event["text"]
-            if event["type"] == "done":
-                if event["status"] != "completed":
-                    raise ValueError("Report generation was interrupted.")
-                fragments = event.get("text") or fragments
+        fragments = report.get('content_json') or ""
+        if not fragments:
+            async for event in runtime.stream(thread_id, prompt, report["model"], strict_report_schema(), **effort_options):
+                if event["type"] == "delta":
+                    fragments += event["text"]
+                if event["type"] == "done":
+                    if event["status"] != "completed":
+                        raise ValueError("Report generation was interrupted.")
+                    fragments = event.get("text") or fragments
         document = ReportDocument.model_validate_json(fragments)
         if document.workbook is None:
             raise ReportDataError("Workbook translations are missing. Retry report generation.")
@@ -246,6 +252,7 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
                             raise ReportDataError("Report generation was interrupted by the user.")
                         fixed = event.get("text") or fixed
                 document.workbook.python_script = WorkbookScriptRepair.model_validate_json(fixed).python_script
+        validate_capture(db,user_id,permission_checks)
         save_excel(manager, report, snapshot, content)
         db.execute(
             "UPDATE reports SET status='completed', stage='completed', error=NULL, content_json=?, completed_at=? WHERE id=?",
@@ -253,6 +260,9 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
         )
         db.audit(user_id, "report.completed", report_id)
     except asyncio.CancelledError:
+        if getattr(manager, 'shutting_down', False):
+            db.execute("UPDATE reports SET status='queued',stage='recovering',error=NULL WHERE id=?", (report_id,))
+            raise
         db.execute(
             "UPDATE reports SET status='failed',stage='interrupted',error=?,completed_at=? WHERE id=?",
             ("Report generation was interrupted by the user.", now(), report_id),

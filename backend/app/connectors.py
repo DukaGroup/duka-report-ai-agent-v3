@@ -369,10 +369,10 @@ class SQLServerConnector:
         )
         return {"schema": schema, "table": table, "columns": columns, "relationships": keys}
 
-    async def query(self, query):
+    async def query(self, query, row_scopes=None):
         query = DatabaseQuery.model_validate(query)
         descriptions = {table.alias: await self.describe(table.schema_name, table.name) for table in query.tables}
-        sql, params, columns = compile_select(query, descriptions, dialect=self.dialect)
+        sql, params, columns = compile_select(query, descriptions, dialect=self.dialect, row_scopes=row_scopes)
         rows = await asyncio.to_thread(self._run, sql, params, 501)
         truncated = len(rows) > query.limit
         return {
@@ -386,7 +386,7 @@ class SQLServerConnector:
             else "All matching rows within the result limit.",
         }
 
-    async def report_query(self, query):
+    async def report_query(self, query, row_scopes=None):
         """One cursor reads the entire filtered/grouped result; no TOP or OFFSET.
 
         Batching limits fetch memory without changing query membership or risking
@@ -394,7 +394,7 @@ class SQLServerConnector:
         """
         plan = DatabaseQuery.model_validate(query)
         descriptions = {table.alias: await self.describe(table.schema_name, table.name) for table in plan.tables}
-        sql, params, columns = compile_select(plan, descriptions, complete=True, dialect=self.dialect)
+        sql, params, columns = compile_select(plan, descriptions, complete=True, dialect=self.dialect, row_scopes=row_scopes)
         rows = await asyncio.to_thread(self._run_full, sql, params)
         return {
             "rows": rows,
@@ -617,12 +617,18 @@ class ConnectorRegistry:
             if self.connectors.get(source_id) is connector:
                 self.status(source_id, "not_configured" if connector.missing() else "error", str(exc))
 
-    async def fetch(self, dataset, parameters, *, complete=False):
+    async def fetch(self, dataset, parameters, *, complete=False, user_id=None):
         connector = self.resolve_connector(dataset["source_id"])
         if not connector or not dataset["enabled"]:
             raise SourceNotConfigured(
                 "This database is not connected yet. An administrator must configure its connector and enable the dataset."
             )
+        if user_id:
+            from .data_access import DataAccess
+            access = DataAccess(self.db)
+            self.authorized_source(user_id, dataset['source_id'])
+            if access.scoped(user_id,dataset['source_id']):
+                raise SourceNotConfigured("Company/database-restricted members must use structured queries; this registered script has no verified access boundary.")
         Draft202012Validator(json.loads(dataset["parameters_schema_json"])).validate(parameters)
         try:
             method = connector.fetch_report if complete and hasattr(connector, "fetch_report") else connector.fetch
@@ -638,7 +644,7 @@ class ConnectorRegistry:
     def authorized_source(self, user_id, source_id):
         source = self.db.one(
             """SELECT s.* FROM data_sources s JOIN users u ON u.id=? AND u.active=1
-            WHERE s.id=? AND s.enabled=1 AND (u.role='devs' OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))""",
+            WHERE s.id=? AND s.enabled=1 AND (u.role IN ('devs','president') OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))""",
             (user_id, source_id),
         )
         if not source or source["kind"] not in ("sqlserver", "saphana"):
@@ -648,7 +654,7 @@ class ConnectorRegistry:
     def accessible_sources(self, user_id):
         return self.db.all(
             """SELECT s.id,s.name,s.kind,s.status FROM data_sources s JOIN users u ON u.id=? AND u.active=1
-            WHERE s.kind IN ('sqlserver','saphana') AND s.enabled=1 AND (u.role='devs' OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))
+            WHERE s.kind IN ('sqlserver','saphana') AND s.enabled=1 AND (u.role IN ('devs','president') OR EXISTS(SELECT 1 FROM source_grants g WHERE g.source_id=s.id AND g.user_id=u.id))
             ORDER BY s.created_at""",
             (user_id,),
         )
@@ -677,10 +683,12 @@ class ConnectorRegistry:
 
         sources = await asyncio.gather(*(inspect(source) for source in self.accessible_sources(user_id)))
         return {"sources": sources, "catalog_complete": all(s["catalog_complete"] for s in sources),
-                "scope": "All registered sources granted to this user and their online business databases accessible to each reporting login. System databases are excluded. Discover tables in each relevant database; do not infer business coverage from a database or company name."}
+                "scope": "Only sources, databases and companies authorized for this user. System databases are excluded. Company restrictions returned by discovery and queries are enforced before reading data; do not infer business coverage from a database or company name."}
 
     async def database_call(self, user_id, source_id, operation, database=None, **arguments):
         self.authorized_source(user_id, source_id)
+        from .data_access import DataAccess, restricted_call
+        access = DataAccess(self.db)
         if operation == "balance_reconciliation":
             raise SourceNotConfigured(
                 "Fixed backend accounting calculators are retired. Use model-authored calculate_data code over authorized queries."
@@ -702,13 +710,34 @@ class ConnectorRegistry:
             if selected_database is None and connector.dialect == "hana" and operation != "databases":
                 selected_database = connector.settings.hana_database
             active_connector = await connector.in_database(selected_database) if selected_database else connector
-            result = await getattr(active_connector, operation)(**arguments)
+            actual_database = getattr(active_connector.settings, prefix+"database") or None
+            stamp = access.stamp(user_id,source_id,None if operation == 'databases' else actual_database)
+            if operation == 'databases' and access.scoped(user_id,source_id):
+                allowed = {r['database_name']:r for r in self.db.all('SELECT * FROM database_grants WHERE user_id=? AND source_id=?',(user_id,source_id))}
+                rows, offset, warnings = [], 0, []
+                while True:
+                    page = await connector.databases(offset=offset,limit=200)
+                    rows.extend({**r,'all_companies':bool(allowed[r['name']]['all_companies']),'companies':json.loads(allowed[r['name']]['companies_json'])} for r in page['databases'] if r['name'] in allowed)
+                    warnings.extend(page.get('warnings',[]))
+                    if page['next_offset'] is None:
+                        break
+                    offset = page['next_offset']
+                start,size = arguments.get('offset',0),arguments.get('limit',100)
+                if type(start) is not int or start<0 or type(size) is not int or not 1<=size<=200:
+                    raise ValueError('Invalid database catalog page.')
+                result = {'databases':rows[start:start+size],'next_offset':start+size if len(rows)>start+size else None,'warnings':list(dict.fromkeys(warnings))}
+            else:
+                units = access.rule(user_id,source_id,actual_database) if operation != 'databases' else None
+                result = await restricted_call(active_connector,operation,arguments,units) if access.scoped(user_id,source_id) and operation != 'databases' else await getattr(active_connector, operation)(**arguments)
             self.authorized_source(user_id, source_id)
+            if stamp != access.stamp(user_id,source_id,None if operation == 'databases' else actual_database):
+                raise SourceNotConfigured('Data access changed during the request. Retry with the current grants.')
             if self.connectors.get(source_id) is connector:
                 self.status(source_id, "connected")
             outcome = "ok"
             if isinstance(result, dict):
-                result = {**result, "source_id": source_id, "database": getattr(active_connector.settings, prefix+"database") or None}
+                result = {**result, "source_id": source_id, "database": actual_database, "access_stamp":stamp,
+                          **({'access_scope':{'all_companies':units is None,'companies':units or []}} if operation != 'databases' else {})}
             detail["row_count"] = result.get("row_count") if isinstance(result, dict) else len(result)
             return result
         except DatabaseUnavailable as exc:

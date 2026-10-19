@@ -84,7 +84,7 @@ def quote(name):
     return "[" + name.replace("]", "]]") + "]"
 
 
-def compile_select(query: DatabaseQuery, descriptions, *, complete=False, dialect="sqlserver"):
+def compile_select(query: DatabaseQuery, descriptions, *, complete=False, dialect="sqlserver", row_scopes=None):
     """Compile only metadata-verified identifiers and bound scalar filter values."""
     if dialect not in ("sqlserver", "hana"):
         raise ValueError("Unsupported database dialect.")
@@ -169,8 +169,31 @@ def compile_select(query: DatabaseQuery, descriptions, *, complete=False, dialec
     if not output:
         raise ValueError("Choose columns or aggregates to read.")
 
+    params, predicates = {}, []
+
+    def table_reference(table):
+        base = f"{quoted(table.schema_name)}.{quoted(table.name)}"
+        scopes = (row_scopes or {}).get(table.alias)
+        if scopes is not None:
+            if not scopes:
+                raise ValueError("No authorized company rows.")
+            alternatives = []
+            for index, scope in enumerate(scopes):
+                parts = []
+                for field, value in scope.items():
+                    if field not in metadata[table.alias]:
+                        raise ValueError("Company access column is unavailable.")
+                    key = f"access_{table.alias}_{index}_{len(parts)}"
+                    params[key] = value
+                    parts.append(f"{quoted(field)} = {placeholder(key)}")
+                if not parts:
+                    raise ValueError("Company row scope cannot be empty.")
+                alternatives.append("(" + " AND ".join(parts) + ")")
+            base = f"(SELECT * FROM {base} WHERE " + " OR ".join(alternatives) + ")"
+        return f"{base} AS {quoted(table.alias)}"
+
     first = query.tables[0]
-    from_sql = f"{quoted(first.schema_name)}.{quoted(first.name)} AS {quoted(first.alias)}"
+    from_sql = table_reference(first)
     seen = {first.alias}
     for table, join in zip(query.tables[1:], query.joins):
         left, _ = column(join.left)
@@ -178,9 +201,8 @@ def compile_select(query: DatabaseQuery, descriptions, *, complete=False, dialec
         a, b = join.left.partition(".")[0], join.right.partition(".")[0]
         if not ((a in seen and b == table.alias) or (b in seen and a == table.alias)):
             raise ValueError("Each join must connect the new table to a previous table.")
-        from_sql += f" {join.kind.upper()} JOIN {quoted(table.schema_name)}.{quoted(table.name)} AS {quoted(table.alias)} ON {left} = {right}"
+        from_sql += f" {join.kind.upper()} JOIN {table_reference(table)} ON {left} = {right}"
         seen.add(table.alias)
-    params, predicates = {}, []
     for index, condition in enumerate(query.filters):
         sql, _ = column(condition.column)
         key = f"f{index}"

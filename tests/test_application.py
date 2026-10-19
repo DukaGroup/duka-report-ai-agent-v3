@@ -94,7 +94,7 @@ def test_sources_dataset_grants_and_blocked_reports(client, admin):
         headers=HEADERS,
         json={"source_id": source["id"], "name": "Sales", "query_key": "sales_summary"},
     ).json()
-    assert client.get("/api/datasets").json() == []
+    assert [d["id"] for d in client.get("/api/datasets").json()] == [dataset["id"]]
     client.put(f"/api/admin/datasets/{dataset['id']}/grants/{member['id']}", headers=HEADERS)
     sign_in_member(client)
     assert client.get("/api/datasets").json()[0]["id"] == dataset["id"]

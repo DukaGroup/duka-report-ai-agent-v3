@@ -143,3 +143,55 @@ CREATE TABLE IF NOT EXISTS archived_calculations (
     calculation_id TEXT PRIMARY KEY REFERENCES calculation_runs(id) ON DELETE CASCADE,
     branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS source_access_policies (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES data_sources(id) ON DELETE CASCADE,
+    PRIMARY KEY(user_id,source_id)
+);
+CREATE TABLE IF NOT EXISTS database_grants (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES data_sources(id) ON DELETE CASCADE,
+    database_name TEXT NOT NULL,
+    all_companies INTEGER NOT NULL CHECK(all_companies IN (0,1)),
+    companies_json TEXT NOT NULL,
+    PRIMARY KEY(user_id,source_id,database_name)
+);
+CREATE TABLE IF NOT EXISTS data_access_versions (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS chat_runs (
+    id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_chat_run ON chat_runs(conversation_id)
+    WHERE status IN ('queued','running','paused');
+CREATE TABLE IF NOT EXISTS chat_run_events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES chat_runs(id) ON DELETE CASCADE,
+    event_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_events_run ON chat_run_events(run_id,seq);
+CREATE TABLE IF NOT EXISTS report_work (
+    report_id TEXT PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE,
+    analyses_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS password_resets (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_request_keys (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    request_key TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES chat_runs(id) ON DELETE CASCADE,
+    PRIMARY KEY(user_id,request_key)
+);

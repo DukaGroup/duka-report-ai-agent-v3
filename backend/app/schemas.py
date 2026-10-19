@@ -25,7 +25,20 @@ class Credentials(InputModel):
         return value
 
 
+class DatabaseAccessGrant(InputModel):
+    source_id: str = Field(min_length=1, max_length=100)
+    database: str = Field(min_length=1, max_length=128)
+    all_companies: bool = True
+    company_ids: list[str] = Field(default_factory=list, max_length=5000)
+
+
+class MemberDataAccess(InputModel):
+    databases: list[DatabaseAccessGrant] = Field(default_factory=list, max_length=1000)
+    preserve_legacy_source_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
 class CreateUser(Credentials):
+    database_access: MemberDataAccess | None = None
     name: str = Field(min_length=1, max_length=100)
     role: Literal["devs", "president", "manager"] = "manager"
 
@@ -42,6 +55,7 @@ class UpdateUser(InputModel):
 
 
 class UpdateAccount(InputModel):
+    database_access: MemberDataAccess | None = None
     active: bool | None = None
     role: Literal["devs", "president", "manager"] | None = None
 
@@ -56,6 +70,7 @@ class NewConversation(InputModel):
 
 
 class ChatMessage(InputModel):
+    request_id: str | None = Field(default=None, min_length=1, max_length=100)
     reasoning_effort: ReasoningEffort | None = None
     retry_message_id: str | None = Field(default=None, min_length=1, max_length=100)
     content: str = Field(min_length=1, max_length=24000)
