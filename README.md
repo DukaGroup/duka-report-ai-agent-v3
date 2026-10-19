@@ -1,23 +1,16 @@
 # Duka Report Agent
 
-A custom conversation/reporting workspace with a **Python backend**, **React frontend**, **admin panel**, and one Docker application container.
+A custom conversation/reporting workspace with a **Python backend**, **React frontend**, and **admin panel**.
 
 Conversations and reports use either **ChatGPT through the official Codex CLI** or **Claude through the official Claude Agent SDK**, signed in with shared workspace subscriptions managed by Devs. Python talks to `codex app-server` over local stdio or the pinned Claude SDK's bundled CLI. There is no API-key configuration or API billing fallback. Each provider manages its own authentication and renewal; the corresponding subscription limits apply. Neither connection imports existing ChatGPT/Claude chats or memories.
 
-## VPS deployment guides
+## VPS deployment
 
-- [Deploy with Docker](docs/deploy-with-docker.md) — Docker Compose, Nginx, HTTPS, migration, backups and rollback.
-- [Deploy without Docker](docs/deploy-without-docker.md) — Python/Node installation, systemd, Nginx, HTTPS, migration, backups and rollback.
+[Deploy without Docker](docs/deploy-without-docker.md) — essential commands for installation, the app service and HTTPS.
 
 ## Start
 
-Create `.env` from `.env.example` if it does not exist. Keep your existing `.env` and credentials.
-
-```bash
-docker compose up --build -d
-```
-
-Open **http://localhost:8080**.
+Follow the deployment guide above, then open your configured HTTPS address.
 
 1. Create the first workspace administrator with your own password.
 2. Open **Cilësimet → Modeli**. Connect ChatGPT, Claude, or both; each has its own connection card.
@@ -88,7 +81,7 @@ Limits: 20 worksheets, 10,000 rows per table, 100 columns, 200,000 worksheet cel
 
 ## SQL Server setup
 
-1. Run `docker compose up --build -d` and sign in as administrator.
+1. Start the application service and sign in as administrator.
 2. Add a connection of type **SQL Server** using `SQLSERVER_HOST`, `SQLSERVER_PORT` (default 1433), `SQLSERVER_USER`, and `SQLSERVER_PASSWORD`. `SQLSERVER_DATABASE` is optional: leave automatic discovery enabled to discover every accessible online business database. Existing `.env` connections remain supported and private. Use a dedicated database login with SELECT permissions only.
 3. Save, then click **Test connection**. Existing sources have **Configure connection** so you can save settings without recreating the source or datasets. The form shows configuration presence and `.env` mode rather than exposing credential values. Blank form fields never delete stored settings. New form-configured connections always use their own `.env` profiles, even when a global `.env` connection exists. Legacy `.env` connections retain their private environment profile; additional named profiles apply only to environment-backed connections. Explicitly switching an environment connection to form credentials makes its settings independent. Administration shows connection status and sanitized errors.
 4. Administrators automatically have analysis access to connected SQL Server sources. Grant members source access using **Qasja te burimi**; this includes the online business databases and tables available to that source's SELECT-only login. No datasets or query files must be defined for automatic analysis.
