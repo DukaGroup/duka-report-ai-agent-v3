@@ -101,7 +101,6 @@ def test_reports_messages_uploads_and_stop_are_scoped_to_their_chat(client, admi
         files={"file": ("data.csv", b"name,revenue\nTest,10", "text/csv")},
     )
     assert upload.status_code == 201
-    assert client.delete(f"/api/conversations/{a}", headers=HEADERS).status_code == 409
     assert client.post(f"/api/conversations/{a}/stop", headers=HEADERS).status_code == 200
     assert client.get(f"/api/reports/{reports[0]}").json()["stage"] == "interrupted"
     assert client.get(f"/api/reports/{reports[1]}").json()["status"] in ("queued", "running")
@@ -118,7 +117,10 @@ def test_reports_messages_uploads_and_stop_are_scoped_to_their_chat(client, admi
         ).status_code
         == 409
     )
-    client.post(f"/api/conversations/{b}/stop", headers=HEADERS)
+    assert client.delete(f"/api/conversations/{b}", headers=HEADERS).status_code == 200
+    saved = client.get(f"/api/reports/{reports[1]}").json()
+    assert saved["stage"] == "interrupted" and saved["conversation_id"] is None
+    assert client.get(f"/api/conversations/{a}").status_code == 200
 
 
 def test_simultaneous_chat_streams_keep_separate_threads_and_stop_targets(client, admin, monkeypatch):

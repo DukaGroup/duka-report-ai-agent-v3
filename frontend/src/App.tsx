@@ -7,7 +7,6 @@ import {
   RotateCcw,
   Search,
   Check,
-  CircleHelp,
   Database,
   FileText,
   History,
@@ -29,11 +28,13 @@ import {
 } from "lucide-react";
 import { MarkdownContent } from "./MarkdownContent";
 import { Brand } from "./Brand";
+import { SubscriptionAccounts } from "./SubscriptionAccounts";
 import { Select } from "./Select";
 import { TrafficPanel } from "./TrafficPanel";
 import { DatabaseAccessPicker, emptyDataAccess } from "./DatabaseAccessPicker";
 import type { MemberDataAccess } from "./DatabaseAccessPicker";
 import { api, streamChat } from "./api";
+import { shouldCaptureTyping } from "./composerKeyboard";
 import { loadDrafts, saveDrafts } from "./drafts";
 import {
   PasswordChangeForm,
@@ -45,6 +46,7 @@ import {
   ConversationRuns,
   pendingAssistantMessages,
   messagesBeforeRestart,
+  messagesBeforeNextTurn,
   runningReports,
 } from "./conversationRuns";
 import { label, errorMessage, auditLabel } from "./locale";
@@ -68,13 +70,12 @@ import type {
   User,
 } from "./types";
 
-type Page =
-  | "conversations"
-  | "chat"
-  | "reports"
-  | "sources"
-  | "connection"
-  | "admin";
+import { MembersPanel } from "./MembersPanel";
+import { ThemeSettings } from "./ThemeSettings";
+import { settingsSections } from "./settings";
+import type { SettingsTab } from "./settings";
+
+type Page = "conversations" | "chat" | "reports" | "settings";
 function cReasoning(c: Conversation) {
   return c.reasoning_effort || "";
 }
@@ -131,15 +132,20 @@ function Modal({
   onClose,
   error,
   className,
+  dismissOnBackdrop = true,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   error?: string;
   className?: string;
+  dismissOnBackdrop?: boolean;
 }) {
   return (
-    <div className="modal-scrim" onClick={onClose}>
+    <div
+      className="modal-scrim"
+      onClick={dismissOnBackdrop ? onClose : undefined}
+    >
       <section
         className={`modal ${className || ""}`}
         role="dialog"
@@ -359,6 +365,8 @@ export default function App() {
 }
 
 function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const isDev = user.role === "devs";
+  const canManageMembers = isDev || user.role === "president";
   const [page, setPage] = useState<Page>("conversations"),
     [error, setError] = useState("");
   const [subscription, setSubscription] =
@@ -374,6 +382,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const providerName = selectedProvider === "claude" ? "Claude" : "ChatGPT";
   const [models, setModels] = useState<Model[]>([]),
     [model, setModel] = useState("");
+  const effectiveProviderName = model.startsWith("claude:")
+    ? "Claude"
+    : "ChatGPT";
   const subscriptionRequest = useRef<Promise<Subscription> | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]),
     [currentId, setCurrentId] = useState<string | null>(null),
@@ -410,10 +421,23 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     () => drafts.current.get("__new__")?.attachments || [],
   );
   const [uploading, setUploading] = useState(false);
+  const composerDraft = useRef({
+    draft,
+    attachments: pendingAttachments,
+    uploading,
+  });
+  composerDraft.current = { draft, attachments: pendingAttachments, uploading };
   const fileInput = useRef<HTMLInputElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const listeners = useRef(new Map<string, AbortController>());
+  const requestKeys = useRef(new Map<string, string>());
+  const submitting = useRef(new Set<string>());
   const [limits, setLimits] = useState<RateLimits | null>(null);
   const [reportsLoaded, setReportsLoaded] = useState(false);
   const [stoppingIds, setStoppingIds] = useState<Record<string, boolean>>({});
+  const stopping = useRef(new Set<string>());
+  const sendSequence = useRef(0);
+  const reportFetchVersion = useRef(0);
   const stoppingReports = !!stoppingIds[currentId || ""];
   const [reports, setReports] = useState<Report[]>([]),
     [report, setReport] = useState<Report | null>(null),
@@ -451,19 +475,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     </label>
   );
 
-  const reportBusyRef = useRef(false);
-  reportBusyRef.current = reportBusy;
   const [overview, setOverview] = useState<Overview | null>(null),
     [users, setUsers] = useState<User[]>([]),
     [sources, setSources] = useState<Source[]>([]),
     [adminDatasets, setAdminDatasets] = useState<Dataset[]>([]),
     [audit, setAudit] = useState<Audit[]>([]);
-  const [adminTab, setAdminTab] = useState("overview"),
-    [addUser, setAddUser] = useState(false),
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const availableSettings = settingsSections(user.role);
+  const settingsScroll = useRef<HTMLElement>(null);
+  const [addUser, setAddUser] = useState(false),
     [addSource, setAddSource] = useState(false),
     [addDataset, setAddDataset] = useState(false),
     [grant, setGrant] = useState<Dataset | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [businessSources, setBusinessSources] = useState<Source[]>([]);
   const [newMemberRole, setNewMemberRole] = useState<User["role"]>("manager");
   const [newMemberAccess, setNewMemberAccess] =
@@ -475,6 +498,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [savingAdmin, setSavingAdmin] = useState(false);
   const adminSaving = useRef(false);
   const [recoveryMember, setRecoveryMember] = useState<User | null>(null);
+  const [deleteMember, setDeleteMember] = useState<User | null>(null);
+  const [removingMember, setRemovingMember] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [sourceAccess, setSourceAccess] = useState<Source | null>(null);
   const [sourceGrants, setSourceGrants] = useState<string[]>([]);
@@ -537,6 +562,36 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     activeId.current = currentId;
   }, [currentId]);
+  useEffect(() => {
+    if (page !== "chat") return;
+    const type = (event: KeyboardEvent) => {
+      const input = composer.current;
+      if (
+        !input ||
+        input.disabled ||
+        !shouldCaptureTyping(
+          event,
+          window.getSelection()?.toString() || "",
+          !!document.querySelector('[role="dialog"], [aria-modal="true"]'),
+        )
+      )
+        return;
+      event.preventDefault();
+      input.focus();
+      const start = input.selectionStart,
+        end = input.selectionEnd;
+      setDraft((value) => value.slice(0, start) + event.key + value.slice(end));
+      requestAnimationFrame(() => {
+        if (document.activeElement === input)
+          input.setSelectionRange(
+            start + event.key.length,
+            start + event.key.length,
+          );
+      });
+    };
+    document.addEventListener("keydown", type);
+    return () => document.removeEventListener("keydown", type);
+  }, [page]);
   useEffect(() => {
     const draftId = currentId || (page === "chat" ? "__new__" : null);
     if (!draftId) return;
@@ -632,7 +687,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   async function fetchSubscription() {
     const result = await api<Subscription>("/subscription");
     if (!mounted.current) return result;
-    setSubscription(result);
+    setSubscription({
+      ...result,
+      connected: result.can_respond ?? result.connected,
+    });
     const provider = result.provider_id || "chatgpt";
     const other: Provider = provider === "chatgpt" ? "claude" : "chatgpt";
     const otherStatus = await api<Subscription>(
@@ -655,16 +713,23 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setLogin((prev) =>
       prev && statuses[prev.provider || "chatgpt"].connected ? null : prev,
     );
-    if (result.connected) {
+    if (result.can_respond ?? result.connected) {
       const list = await api<Model[]>(
-        `/subscription/models?provider=${provider}`,
+        "/subscription/models?all_providers=true",
       );
       if (!mounted.current) return result;
       setModels(list);
       setModel((prev) =>
         list.some((m) => m.model === prev)
           ? prev
-          : (list.find((m) => m.isDefault) || list[0])?.model || "",
+          : (
+              list.find(
+                (m) =>
+                  m.isDefault &&
+                  (m.model.startsWith("claude:") ? "claude" : "chatgpt") ===
+                    provider,
+              ) || list[0]
+            )?.model || "",
       );
     } else {
       setModels([]);
@@ -673,14 +738,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     return result;
   }
   async function loadReports() {
+    const version = ++reportFetchVersion.current;
     const next = await api<Report[]>("/reports");
-    reportBusyRef.current = runningReports(next, activeId.current).length > 0;
+    if (version !== reportFetchVersion.current) return;
     setReports(next);
     setReportsLoaded(true);
     if (reportTrash)
       setDeletedReports(await api<Report[]>("/reports?deleted=true"));
   }
   async function loadAdmin() {
+    if (!isDev) {
+      if (canManageMembers) setUsers(await api<User[]>("/admin/users"));
+      return;
+    }
     const [o, u, s, d, a] = await Promise.all([
       api<Overview>("/admin/overview"),
       api<User[]>("/admin/users"),
@@ -718,9 +788,26 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     ]).catch(fail);
   }, [user]);
   useEffect(() => {
-    if (user?.role === "devs" && (page === "admin" || page === "sources"))
+    if (
+      page === "settings" &&
+      ((isDev &&
+        ["sources", "members", "overview", "traffic", "activity"].includes(
+          settingsTab,
+        )) ||
+        (canManageMembers && settingsTab === "members"))
+    )
       void loadAdmin().catch(fail);
-  }, [page, user]);
+  }, [page, settingsTab, user]);
+  useLayoutEffect(() => {
+    if (page === "settings") settingsScroll.current?.scrollTo({ top: 0 });
+  }, [page, settingsTab]);
+  useEffect(() => {
+    const timer = setInterval(
+      () => void loadSubscription().catch(() => undefined),
+      30000,
+    );
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (subscription.available) return;
     return recoverSubscription(
@@ -780,8 +867,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           const detail = await api<Conversation & { messages: Message[] }>(
             `/conversations/${id}`,
           );
-          if (!disposed && activeId.current === id && !runs.current.has(id))
+          if (!disposed && activeId.current === id && !runs.current.has(id)) {
             setMessages(detail.messages);
+            if (detail.model) setModel(detail.model);
+            setReasoningEffort(cReasoning(detail));
+          }
         }
       } catch {
         /* The normal request path surfaces connection errors. */
@@ -1004,24 +1094,28 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   ) {
     if (
       (!text.trim() && !pendingAttachments.length) ||
-      chatLocked ||
+      uploading ||
+      !reportsLoaded ||
+      stoppingReports ||
+      stopping.current.has(currentId || "") ||
+      deleting ||
       openingConversation ||
-      runs.current.has(currentId) ||
-      reportBusyRef.current
+      submitting.current.has(currentId || "__new__")
     )
       return;
     text = text.trim() ? text : "Analizo skedarët e bashkëngjitur.";
+    ++sendSequence.current;
     const outgoing = [...(retryFiles ?? pendingAttachments)];
-    if (!subscription.connected) {
-      setError(`Lidhni abonimin ${providerName} për të nisur bisedën.`);
-      setPage("connection");
-      return;
-    }
+    submitting.current.add(currentId || "__new__");
     setError("");
     setDraft("");
     setPendingAttachments([]);
+    setRetryMessageId(null);
+    let token: symbol | undefined;
     let id = currentId,
       full = "";
+    const controller = new AbortController();
+    const ownsRun = () => !!id && !!token && runs.current.isCurrent(id, token);
     try {
       if (!id) {
         setOpeningConversation(true);
@@ -1038,12 +1132,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         setOpeningConversation(false);
       }
       const streamId = id;
-      setRetryMessageId(retryId);
+      submitting.current.delete("__new__");
+      submitting.current.add(id);
+      listeners.current.get(id)?.abort();
+      listeners.current.set(id, controller);
+      const requestKey = crypto.randomUUID();
+      requestKeys.current.set(id, requestKey);
       drafts.current.delete(id);
       drafts.current.delete("__new__");
       saveDrafts(user.id, drafts.current);
       const initialMessages: Message[] = [
-        ...(retryId ? messagesBeforeRestart(messages, retryId) : messages),
+        ...(retryId
+          ? messagesBeforeRestart(messages, retryId)
+          : messagesBeforeNextTurn(messages)),
         {
           id: retryId || `u-${Date.now()}`,
           role: "user",
@@ -1060,7 +1161,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           status: "streaming",
         },
       ];
-      runs.current.start(id, initialMessages);
+      token = runs.current.start(id, initialMessages, true);
       setMessages(initialMessages);
       refreshRuns((n) => n + 1);
       await streamChat(
@@ -1068,11 +1169,33 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         text,
         model,
         (event) => {
+          if (!ownsRun()) return;
+          if (event.type === "message") submitting.current.delete(streamId);
+          if (event.type === "message" && event.user_message_id)
+            runs.current.identifyUser(streamId, event.user_message_id, token);
           if (event.type === "message" && retryId)
             void loadReports().catch(fail);
           if (event.type === "delta") full += event.text;
           if (event.type === "snapshot") full = event.text || "";
-          if (event.type === "error") throw new Error(event.message);
+          if (event.type === "route") {
+            const saved = drafts.current.get(streamId);
+            if (saved && !saved.draft.trim()) {
+              drafts.current.set(streamId, {
+                ...saved,
+                model: event.model,
+                reasoningEffort: event.reasoning_effort || "",
+              });
+              saveDrafts(user.id, drafts.current);
+            }
+            if (activeId.current === streamId) {
+              setModel(event.model);
+              setReasoningEffort(event.reasoning_effort || "");
+            }
+          }
+          if (event.type === "error") {
+            full = event.text || event.message;
+            throw new Error(event.message);
+          }
           if (event.type === "done") {
             full = event.text || full;
           }
@@ -1082,26 +1205,37 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             event.type === "done" ? event.status : "streaming",
             event.type === "reconnecting"
               ? "Duke rilidhur përgjigjen…"
-              : event.type === "snapshot" && event.activity === "recovering"
-                ? "Duke rifilluar hetimin…"
+              : event.type === "snapshot" &&
+                  ["recovering", "switching"].includes(event.activity)
+                ? event.activity === "switching"
+                  ? "Duke kaluar te abonimi tjetër dhe ruajtur kontekstin…"
+                  : "Duke rifilluar hetimin…"
                 : event.type === "tool"
                   ? "Duke kontrolluar të dhënat"
                   : event.type === "delta"
                     ? "Duke shkruar"
                     : undefined,
+            token,
           );
           if (activeId.current === streamId && next) setMessages(next);
           refreshRuns((n) => n + 1);
         },
         outgoing.map((a) => a.id),
-        { reasoning_effort: effort || null, retry_message_id: retryId },
+        {
+          request_id: requestKey,
+          reasoning_effort: effort || null,
+          retry_message_id: retryId,
+          interrupt_current: true,
+        },
+        controller.signal,
       );
+      if (!ownsRun()) return;
       const [list, detail] = await Promise.all([
         api<Conversation[]>("/conversations"),
         api<Conversation & { messages: Message[] }>(`/conversations/${id}`),
       ]);
+      if (!ownsRun()) return;
       setConversations(list);
-      drafts.current.delete(id);
       if (activeId.current === id) {
         setMessages(detail.messages);
         setRetryMessageId(null);
@@ -1109,47 +1243,66 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setBusinessSources(await api<Source[]>("/sources"));
       await loadReports();
     } catch (e) {
+      if (controller.signal.aborted || (token && !ownsRun())) return;
+      const recoverDraft =
+        !composerDraft.current.draft &&
+        !composerDraft.current.attachments.length &&
+        !composerDraft.current.uploading;
       if (id) {
-        runs.current.update(id, full, "failed");
-        drafts.current.set(id, {
-          draft: text,
-          attachments: outgoing,
-          model,
-          reasoningEffort,
-          retryMessageId: retryId,
-        });
+        runs.current.update(id, full, "failed", undefined, token);
+        if (
+          recoverDraft &&
+          !drafts.current.get(id)?.draft &&
+          !drafts.current.get(id)?.attachments.length
+        )
+          drafts.current.set(id, {
+            draft: text,
+            attachments: outgoing,
+            model,
+            reasoningEffort,
+            retryMessageId: retryId,
+          });
       }
       if (activeId.current === id) {
         fail(e);
 
-        setDraft(text);
-        setPendingAttachments(outgoing);
+        if (recoverDraft) {
+          setDraft((value) => value || text);
+          setPendingAttachments((items) => (items.length ? items : outgoing));
+        }
         const next = id ? runs.current.snapshot(id) : undefined;
         if (next) setMessages(next);
         if (id) {
           try {
-            const detail = await api<Conversation & { messages: Message[] }>(
-              `/conversations/${id}`,
-            );
-            if (activeId.current === id) setMessages(detail.messages);
+            const [detail, list] = await Promise.all([
+              api<Conversation & { messages: Message[] }>(
+                `/conversations/${id}`,
+              ),
+              api<Conversation[]>("/conversations"),
+            ]);
+            if (!ownsRun()) return;
+            setConversations(list);
+            if (ownsRun() && activeId.current === id)
+              setMessages(detail.messages);
           } catch {
             /* Preserve the visible attempt until reconnection. */
           }
         }
       }
     } finally {
-      try {
-        await loadReports();
-      } catch (e) {
-        if (activeId.current === id) fail(e);
-      }
-      if (id) runs.current.finish(id);
+      if (token && !ownsRun()) return;
+      submitting.current.delete(id || "__new__");
+      if (id) listeners.current.delete(id);
+      if (id) requestKeys.current.delete(id);
+      if (id) runs.current.finish(id, token);
       refreshRuns((n) => n + 1);
+      void loadReports().catch(() => undefined);
+      void loadSubscription().catch(() => undefined);
       if (!id) setOpeningConversation(false);
     }
   }
   async function uploadFiles(files: FileList | null) {
-    if (!files || chatLocked) return;
+    if (!files || uploading || openingConversation || deleting) return;
     const selected = Array.from(files);
     if (selected.length + pendingAttachments.length > 5) {
       setError("Bashkëngjitni deri në 5 skedarë për mesazh.");
@@ -1236,7 +1389,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             type="button"
             className="attachment-template"
             aria-pressed={item.purpose === "template"}
-            disabled={chatLocked}
+            disabled={pending ? uploading || deleting : chatLocked}
             onClick={() => void toggleAttachmentTemplate(item)}
           >
             {item.purpose === "template"
@@ -1249,7 +1402,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             type="button"
             className="icon-button"
             aria-label={`Hiq skedarin ${item.name}`}
-            disabled={chatLocked}
+            disabled={uploading || deleting}
             onClick={() =>
               setPendingAttachments((items) =>
                 items.filter((a) => a.id !== item.id),
@@ -1264,17 +1417,121 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   }
   async function stopResponse() {
     const targetId = currentId;
+    const key = targetId || "";
+    if (stopping.current.has(key)) return;
+    stopping.current.add(key);
+    const token = targetId ? runs.current.token(targetId) : undefined;
+    const sequence = sendSequence.current;
+    const requestKey = targetId ? requestKeys.current.get(targetId) : undefined;
+    const outgoingUser = targetId
+      ? runs.current
+          .snapshot(targetId)
+          ?.slice()
+          .reverse()
+          .find((m) => m.role === "user")
+      : undefined;
+    // Stop consuming/retrying the old request immediately. The server remains
+    // authoritative; Send stays disabled until its cancellation is confirmed.
+    if (targetId) listeners.current.get(targetId)?.abort();
     setStoppingIds((ids) => ({ ...ids, [targetId || ""]: true }));
     try {
-      if (targetId)
-        await api(`/conversations/${targetId}/stop`, { method: "POST" });
-      else
-        for (const item of activeReports)
-          await api(`/reports/${item.id}/stop`, { method: "POST" });
-      await loadReports();
+      if (targetId) {
+        const result = await api<{
+          message: Pick<Message, "id" | "content" | "status"> | null;
+          cancelled_before_start: boolean;
+          user_message_id: string | null;
+          interrupted_report_ids: string[];
+        }>(`/conversations/${targetId}/stop`, {
+          method: "POST",
+          ...(requestKey
+            ? { body: JSON.stringify({ request_id: requestKey }) }
+            : {}),
+        });
+        if (
+          !token ||
+          !runs.current.has(targetId) ||
+          runs.current.isCurrent(targetId, token)
+        ) {
+          runs.current.finish(targetId, token);
+          listeners.current.delete(targetId);
+          requestKeys.current.delete(targetId);
+          submitting.current.delete(targetId);
+          if (activeId.current === targetId && result.cancelled_before_start) {
+            setMessages((items) =>
+              items.map((m) =>
+                m.status === "streaming" ? { ...m, status: "interrupted" } : m,
+              ),
+            );
+            if (
+              !composerDraft.current.draft &&
+              !composerDraft.current.attachments.length &&
+              !composerDraft.current.uploading &&
+              outgoingUser
+            ) {
+              setDraft(outgoingUser.content);
+              setPendingAttachments(outgoingUser.attachments || []);
+            }
+            void api<Conversation & { messages: Message[] }>(
+              `/conversations/${targetId}`,
+            )
+              .then((detail) => {
+                if (
+                  activeId.current === targetId &&
+                  sendSequence.current === sequence
+                )
+                  setMessages(detail.messages);
+              })
+              .catch(() => undefined);
+          } else if (activeId.current === targetId && result.message) {
+            const finalMessage = result.message;
+            setMessages((items) =>
+              items.map((m) =>
+                m.id === "streaming" || m.id === finalMessage.id
+                  ? { ...m, ...finalMessage }
+                  : m.id === outgoingUser?.id && result.user_message_id
+                    ? { ...m, id: result.user_message_id }
+                    : m,
+              ),
+            );
+          }
+        }
+        ++reportFetchVersion.current;
+        setReports((items) =>
+          items.map((r) =>
+            result.interrupted_report_ids.includes(r.id)
+              ? { ...r, status: "failed", stage: "interrupted" }
+              : r,
+          ),
+        );
+        setConversations((items) =>
+          items.map((c) => (c.id === targetId ? { ...c, running: false } : c)),
+        );
+        refreshRuns((n) => n + 1);
+      } else {
+        await Promise.all(
+          activeReports.map((item) =>
+            api(`/reports/${item.id}/stop`, { method: "POST" }),
+          ),
+        );
+      }
+      void loadReports().catch(() => undefined);
     } catch (e) {
       fail(e);
+      // Rehydrate server state if Stop failed; do not claim cancellation.
+      if (targetId)
+        void api<Conversation & { messages: Message[] }>(
+          `/conversations/${targetId}`,
+        )
+          .then((detail) => {
+            if (
+              activeId.current === targetId &&
+              sendSequence.current === sequence
+            )
+              setMessages(detail.messages);
+          })
+          .catch(() => undefined);
     } finally {
+      stopping.current.delete(key);
       setStoppingIds((ids) => {
         const next = { ...ids };
         delete next[targetId || ""];
@@ -1291,6 +1548,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       void api<Conversation[]>("/conversations")
         .then(setConversations)
         .catch(fail);
+  }
+
+  function openSettings(tab: SettingsTab) {
+    if (!availableSettings.some((section) => section.id === tab)) return;
+    setSettingsTab(tab);
+    navigate("settings");
   }
 
   async function createReport(e: FormEvent<HTMLFormElement>) {
@@ -1498,16 +1761,25 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   }
   async function removeConversation() {
     if (uploading) return;
-    if (!deleteChat || conversationRunning(deleteChat.id) || deleting) return;
+    if (!deleteChat || deleting) return;
     setDeleting(true);
+    // Retire the listener before cancellation emits its final event. A late
+    // completion must not restore this chat or its draft after deletion.
+    listeners.current.get(deleteChat.id)?.abort();
+    listeners.current.delete(deleteChat.id);
+    requestKeys.current.delete(deleteChat.id);
+    runs.current.finish(deleteChat.id);
+    submitting.current.delete(deleteChat.id);
+    refreshRuns((n) => n + 1);
     try {
       await api(`/conversations/${deleteChat.id}`, { method: "DELETE" });
-      if (currentId === deleteChat.id) {
+      if (activeId.current === deleteChat.id) {
         setCurrentId(null);
         activeId.current = null;
         setMessages([]);
         setRetryMessageId(null);
         setDraft("");
+        setPendingAttachments([]);
         setPage("conversations");
       }
       setConversations((items) => items.filter((c) => c.id !== deleteChat.id));
@@ -1570,19 +1842,62 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
   }
 
+  async function removeMember() {
+    if (!deleteMember || removingMember) return;
+    setRemovingMember(true);
+    try {
+      await api(`/admin/users/${deleteMember.id}`, { method: "DELETE" });
+      setDeleteMember(null);
+      await loadAdmin();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setRemovingMember(false);
+    }
+  }
+
+  const membersPanel = (
+    <MembersPanel
+      actor={user}
+      users={users}
+      onAdd={() => {
+        setNewMemberRole("manager");
+        setNewMemberAccess(emptyDataAccess());
+        setAddUser(true);
+      }}
+      onRole={(member, role) =>
+        void api(`/admin/users/${member.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ role }),
+        })
+          .then(loadAdmin)
+          .catch(fail)
+      }
+      onRestart={(member) =>
+        void api(`/admin/runtimes/${member.id}/restart`, { method: "POST" })
+          .then(loadAdmin)
+          .catch(fail)
+      }
+      onAccess={(member) => void openMemberAccess(member)}
+      onRecover={setRecoveryMember}
+      onToggle={(member) => void updateUser(member)}
+      onRemove={(member) => {
+        setError("");
+        setDeleteMember(member);
+      }}
+    />
+  );
+
   const nav = [
     { id: "conversations" as Page, label: "Bisedat", icon: MessageSquare },
     { id: "reports" as Page, label: "Raportet", icon: FileText },
-    { id: "sources" as Page, label: "Burimet e të dhënave", icon: Database },
   ];
   const current = conversations.find((c) => c.id === currentId);
   const caption = {
     conversations: "Bisedat",
     chat: current?.title || "Bisedë e re",
     reports: "Biblioteka e raporteve",
-    sources: "Burimet e të dhënave",
-    connection: "Modeli",
-    admin: "Administrimi",
+    settings: "Cilësimet",
   }[page];
   const conversationReports = currentId
     ? reports.filter((r) => r.conversation_id === currentId)
@@ -1657,7 +1972,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 type="button"
                 className="delete-conversation"
-                disabled={conversationRunning(c.id) || uploading || deleting}
+                disabled={uploading || deleting}
                 aria-label={`Fshi bisedën: ${c.title}`}
                 title="Fshi bisedën"
                 onClick={() => {
@@ -1675,36 +1990,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         </div>
         <div className="sidebar-bottom">
           <button
-            className="connection-mini"
-            onClick={() => navigate("connection")}
-          >
-            <span
-              className={`status-dot ${subscription.connected ? "online" : ""}`}
-            />
-            <span>
-              {" "}
-              Modeli · {providerName}{" "}
-              <small>
-                {subscription.connected
-                  ? `${subscription.account?.planType || "I lidhur"} · I lidhur`
-                  : "Lidh llogarinë"}
-              </small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-          {user.role === "devs" && (
-            <button
-              className={`nav-item ${page === "admin" ? "selected" : ""}`}
-              onClick={() => navigate("admin")}
-            >
-              <Settings size={18} /> Administrimi{" "}
-            </button>
-          )}
-          <button
-            className="nav-item"
+            className={`nav-item ${page === "settings" ? "selected" : ""}`}
             title="Cilësimet"
             aria-label="Cilësimet"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => navigate("settings")}
           >
             <Settings size={18} /> Cilësimet
           </button>
@@ -1750,13 +2039,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <span className="workspace-tag">
               <span /> Duka Group{" "}
             </span>
-            <button
-              className="icon-button"
-              aria-label="Ndihmë për lidhjen"
-              onClick={() => navigate("connection")}
-            >
-              <CircleHelp size={19} />
-            </button>
           </div>
         </header>
         {connectionLost && (
@@ -1843,9 +2125,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       className="icon-button conversation-card-delete"
                       title="Fshi bisedën"
                       aria-label={`Fshi bisedën: ${c.title}`}
-                      disabled={
-                        conversationRunning(c.id) || uploading || deleting
-                      }
+                      disabled={uploading || deleting}
                       onClick={() => {
                         setError("");
                         setDeleteChat(c);
@@ -1902,7 +2182,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   <Badge good={subscription.connected}>
                     {subscription.connected
                       ? "Abonimi është lidhur"
-                      : "Llogaria nuk është lidhur"}
+                      : "Asnjë abonim i përdorshëm"}
                   </Badge>
                   <button
                     className="button subtle small"
@@ -1969,7 +2249,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       ))}
                     </div>
                     <div className="welcome-note">
-                      <ShieldCheck size={15} /> Mundësuar nga abonimi juaj
+                      <ShieldCheck size={15} /> Mundësuar nga abonimi i
+                      përbashkët
                       {providerName}.{" "}
                     </div>
                   </section>
@@ -2107,7 +2388,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         </div>
                         <div className="message-body">
                           <div className="message-author">
-                            Asistenti Duka <span>{providerName}</span>
+                            Asistenti Duka <span>{effectiveProviderName}</span>
                           </div>
                           <ThinkingDots description={pendingDescription} />
                         </div>
@@ -2120,16 +2401,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 {!subscription.connected && (
                   <div className="connect-prompt">
                     <span>
-                      <Sparkles size={15} /> Lidhni abonimin {providerName} për
-                      të biseduar.{" "}
+                      <Sparkles size={15} /> Asnjë abonim nuk mund të vazhdojë
+                      tani.{" "}
+                      {isDev
+                        ? "Kontrolloni abonimet te Cilësimet → Modeli."
+                        : "Kërkojini Devs të kontrollojnë abonimet."}
                     </span>
-                    <button
-                      onClick={() => void connect()}
-                      disabled={connecting}
-                    >
-                      {connecting ? "Duke u lidhur…" : "Lidh llogarinë"}
-                      <ArrowRight size={14} />
-                    </button>
+                    {isDev && (
+                      <button onClick={() => openSettings("models")}>
+                        Hap abonimet
+                        <ArrowRight size={14} />
+                      </button>
+                    )}
                   </div>
                 )}
                 {retryMessageId && (
@@ -2163,7 +2446,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     multiple
                     accept=".xlsx,.csv,.pdf,.docx,.txt"
                     aria-label="Zgjidh skedarët për analizë"
-                    disabled={chatLocked}
+                    disabled={openingConversation || deleting}
                     onChange={(e) => void uploadFiles(e.target.files)}
                   />
                   {!!pendingAttachments.length && (
@@ -2178,13 +2461,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     </p>
                   )}
                   <textarea
+                    ref={composer}
                     aria-label="Mesazhi"
                     placeholder="Bëni një pyetje ose kërkoni analizë dhe raport nga databaza…"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    disabled={chatLocked}
+                    disabled={openingConversation || deleting}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
+                      if (
+                        e.key === "Enter" &&
+                        !e.shiftKey &&
+                        !e.nativeEvent.isComposing
+                      ) {
                         e.preventDefault();
                         void send(draft);
                       }
@@ -2195,10 +2483,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       <span className="model-picker">
                         <Sparkles size={14} />
                         <Select
-                          aria-label={`Modeli ${providerName}`}
+                          aria-label={`Modeli ${effectiveProviderName}`}
                           value={model}
                           onChange={(e) => setModel(e.target.value)}
-                          disabled={!subscription.connected || chatLocked}
+                          disabled={openingConversation || deleting}
                         >
                           {!models.length && (
                             <option value=""> Abonimi {providerName} </option>
@@ -2217,14 +2505,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         className="button outline small upload-button"
                         aria-label="Ngarko skedar"
                         title="Ngarko Excel, CSV, PDF, Word ose tekst (deri në 12 MB)"
-                        disabled={chatLocked || pendingAttachments.length >= 5}
+                        disabled={
+                          uploading ||
+                          openingConversation ||
+                          deleting ||
+                          pendingAttachments.length >= 5
+                        }
                         onClick={() => fileInput.current?.click()}
                       >
                         <Paperclip size={18} />
                         {uploading ? "Duke ngarkuar…" : "Ngarko skedar"}
                       </button>
                     </div>
-                    {busy || reportBusy ? (
+                    {(busy || reportBusy) && (
                       <button
                         type="button"
                         className="send-button stop"
@@ -2234,21 +2527,29 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         disabled={stoppingReports || (!busy && !reportBusy)}
                         onClick={() => void stopResponse()}
                       >
-                        <Square size={16} />
-                      </button>
-                    ) : (
-                      <button
-                        type="submit"
-                        className="send-button"
-                        aria-label="Dërgo mesazhin"
-                        disabled={
-                          chatLocked ||
-                          (!draft.trim() && !pendingAttachments.length)
-                        }
-                      >
-                        <ArrowRight size={21} />
+                        {stoppingReports ? (
+                          <LoaderCircle size={16} className="spin" />
+                        ) : (
+                          <Square size={16} />
+                        )}
                       </button>
                     )}
+                    <button
+                      type="submit"
+                      className="send-button"
+                      aria-label="Dërgo mesazhin"
+                      disabled={
+                        uploading ||
+                        !reportsLoaded ||
+                        stoppingReports ||
+                        deleting ||
+                        openingConversation ||
+                        submitting.current.has(currentId || "__new__") ||
+                        (!draft.trim() && !pendingAttachments.length)
+                      }
+                    >
+                      <ArrowRight size={21} />
+                    </button>
                   </div>
                 </form>
                 <div className="composer-footer">
@@ -2262,198 +2563,666 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </div>
         )}
 
-        {page === "connection" && (
-          <main className="page-content">
+        {page === "settings" && (
+          <main className="page-content settings-page" ref={settingsScroll}>
             <PageHeading
-              eyebrow="LLOGARIA DHE ABONIMI JUAJ"
-              title="Modeli"
-              text="Lidhni ChatGPT dhe Claude, pastaj zgjidhni cilin abonim të përdorni për biseda, analiza dhe raporte."
+              eyebrow="CILËSIMET E HAPËSIRËS"
+              title="Cilësimet"
+              text="Preferencat tuaja dhe kontrollet e hapësirës, në një vend."
             />
-            {(["chatgpt", "claude"] as Provider[]).map((provider) => {
-              const status = providerSubscriptions[provider];
-              const name = provider === "claude" ? "Claude" : "ChatGPT";
-              const selected = selectedProvider === provider;
-              return (
-                <section
-                  key={provider}
-                  className={`connection-card ${selected ? "selected-provider" : ""}`}
-                  aria-label={`Abonimi ${name}`}
-                >
-                  <div className="provider-logo">
-                    <Sparkles size={28} />
+            <div className="settings-layout">
+              <nav
+                className="settings-nav"
+                aria-label="Kategoritë e cilësimeve"
+              >
+                {availableSettings.map((section, index) => (
+                  <div key={section.id}>
+                    {(index === 0 ||
+                      section.group !== availableSettings[index - 1].group) && (
+                      <span className="settings-group-label">
+                        {section.group}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      aria-current={
+                        settingsTab === section.id ? "page" : undefined
+                      }
+                      onClick={() => openSettings(section.id)}
+                    >
+                      {section.label}
+                    </button>
                   </div>
-                  <div className="provider-details">
-                    <h2> Abonimi {name} </h2>
-                    <p>
-                      {status.connected
-                        ? status.account?.email || `Llogaria juaj ${name}`
-                        : `Hyni në llogarinë tuaj ${name} për të lidhur abonimin.`}
+                ))}
+              </nav>
+              <div className="settings-content">
+                {settingsTab === "appearance" && <ThemeSettings />}
+                {settingsTab === "account" && isDev && (
+                  <section className="panel account-settings">
+                    <h2>Llogaria</h2>
+                    <PasswordChangeForm />
+                  </section>
+                )}
+                {settingsTab === "models" && isDev && (
+                  <section className="settings-section">
+                    <PageHeading
+                      level={2}
+                      eyebrow="ABONIMET E PËRBASHKËTA TË HAPËSIRËS"
+                      title="Modeli"
+                      text="Lidhni ChatGPT dhe Claude për të gjithë anëtarët. Zgjidhni ofruesin për bisedat dhe raportet e reja; qasja në të dhëna mbetet e veçantë për çdo anëtar."
+                    />
+                    <SubscriptionAccounts onChange={loadSubscription} />
+                    <section className="panel">
+                      <h3>Ofruesi i parë për bisedat e reja</h3>
+                      <div className="provider-actions">
+                        {(["chatgpt", "claude"] as Provider[]).map(
+                          (provider) => (
+                            <button
+                              key={provider}
+                              className={`button ${selectedProvider === provider ? "provider-chosen" : "outline"}`}
+                              aria-pressed={selectedProvider === provider}
+                              disabled={choosingProvider || busy || reportBusy}
+                              onClick={() => void chooseProvider(provider)}
+                            >
+                              {provider === "chatgpt" ? "ChatGPT" : "Claude"}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                    </section>
+                    <section className="panel provider-model-panel">
+                      <label>
+                        Modeli për biseda dhe raporte
+                        <select
+                          aria-label="Zgjidh modelin"
+                          value={model}
+                          onChange={(e) => setModel(e.target.value)}
+                          disabled={
+                            !subscription.connected ||
+                            choosingProvider ||
+                            chatLocked
+                          }
+                        >
+                          {!models.length && (
+                            <option value="">
+                              Lidhni abonimin {providerName}
+                            </option>
+                          )}
+                          {models.map((m) => (
+                            <option key={m.id} value={m.model}>
+                              {m.displayName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p>
+                        Zgjedhja përdoret për mesazhet dhe raportet e ardhshme.
+                        Mund të mbani disa abonime për secilin ofrues.
+                      </p>
+                    </section>
+                    {!subscription.available && (
+                      <p className="error-box">
+                        {errorMessage(subscription.error || "")} Lidhja do të
+                        provohet përsëri automatikisht sapo rrjeti të jetë gati.
+                      </p>
+                    )}
+                    <section className="panel">{reasoningControl}</section>
+                    <div className="info-grid">
+                      <div className="info-card">
+                        <ShieldCheck size={21} />
+                        <h3> Abonim i përbashkët, biseda të veçanta </h3>
+                        <p>
+                          {" "}
+                          Anëtarët përdorin lidhjen që menaxhojnë Devs dhe
+                          ndajnë kufijtë e abonimit. Çdo anëtar ruan bisedat,
+                          raportet dhe qasjen e vet në databaza.{" "}
+                        </p>
+                      </div>
+                      <div className="info-card">
+                        <MessageSquare size={21} />
+                        <h3> Hapësirë e veçantë bisedash </h3>
+                        <p>
+                          {" "}
+                          Kjo hapësirë ruan bisedat e veta. Lidhja e llogarisë
+                          nuk importon bisedat ose kujtesën nga ChatGPT ose
+                          Claude.{" "}
+                        </p>
+                      </div>
+                    </div>
+                    {subscription.connected &&
+                      selectedProvider === "chatgpt" && (
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <h3> Përdorimi i abonimit </h3>
+                            <button
+                              className="button outline small"
+                              onClick={() =>
+                                void api<{ rateLimits: RateLimits }>(
+                                  "/subscription/usage",
+                                )
+                                  .then((r) => setLimits(r.rateLimits))
+                                  .catch(fail)
+                              }
+                            >
+                              {" "}
+                              Rifresko përdorimin{" "}
+                            </button>
+                          </div>
+                          {limits ? (
+                            <div className="usage-grid">
+                              {[limits.primary, limits.secondary]
+                                .filter(Boolean)
+                                .map((w, i) => (
+                                  <div key={i}>
+                                    <span>
+                                      {w!.windowDurationMins >= 1440
+                                        ? "Periudha më e gjatë"
+                                        : "Periudha aktuale"}
+                                    </span>
+                                    <strong>
+                                      {Math.max(0, 100 - w!.usedPercent)} % të
+                                      mbetura{" "}
+                                    </strong>
+                                    <progress
+                                      value={Math.max(0, 100 - w!.usedPercent)}
+                                      max={100}
+                                    />
+                                    <small>
+                                      {" "}
+                                      Rinovohet{" "}
+                                      {new Date(
+                                        w!.resetsAt * 1000,
+                                      ).toLocaleString("sq-AL")}
+                                    </small>
+                                  </div>
+                                ))}
+                            </div>
+                          ) : (
+                            <p>
+                              {" "}
+                              Rifreskoni për të parë kufijtë e llogarisë
+                              ChatGPT.{" "}
+                            </p>
+                          )}
+                        </section>
+                      )}
+                    {subscription.connected &&
+                      selectedProvider === "claude" && (
+                        <p className="footnote">
+                          Përdorimin dhe kufijtë e abonimit mund t’i kontrolloni
+                          te{" "}
+                          <a
+                            href="https://claude.ai/settings/usage"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            llogaria Claude
+                          </a>
+                          .
+                        </p>
+                      )}
+                    <p className="footnote">
+                      {selectedProvider === "chatgpt"
+                        ? "Hyrja me kod pajisjeje duhet të aktivizohet në cilësimet e sigurisë të ChatGPT ose të lejohet nga administratori."
+                        : "Për Claude, hyni në shfletues me abonimin tuaj dhe vendosni këtu kodin njëpërdorimësh që shfaqet pas hyrjes."}
                     </p>
-                    <Badge good={status.connected}>
-                      {status.connected
-                        ? `${status.account?.planType || "Abonimi"} · I lidhur`
-                        : "I palidhur"}
-                    </Badge>
-                  </div>
-                  <div className="provider-actions">
-                    <button
-                      className={`button ${status.connected ? "outline" : "primary"}`}
-                      onClick={() =>
-                        void (status.connected
-                          ? disconnect(provider)
-                          : connect(provider))
+                  </section>
+                )}
+                {settingsTab === "sources" && isDev && (
+                  <section className="settings-section">
+                    <PageHeading
+                      level={2}
+                      eyebrow="BAZA E RAPORTEVE TUAJA"
+                      title="Burimet e të dhënave tuaja."
+                      text="Menaxhoni lidhje SQL Server dhe SAP HANA. Çdo server mund të ketë shumë databaza."
+                      action={
+                        user.role === "devs" && (
+                          <button
+                            className="button primary"
+                            onClick={() => openSource()}
+                          >
+                            <Plus size={17} /> Shto lidhje{" "}
+                          </button>
+                        )
                       }
-                      disabled={
-                        connecting || choosingProvider || busy || reportBusy
-                      }
-                    >
-                      {connecting && (
-                        <LoaderCircle className="spin" size={17} />
-                      )}{" "}
-                      {status.connected ? `Shkëput ${name}` : `Lidh ${name}`}
-                    </button>
-                    <button
-                      className={`button ${selected ? "provider-chosen" : "outline"}`}
-                      aria-pressed={selected}
-                      onClick={() => void chooseProvider(provider)}
-                      disabled={
-                        selected ||
-                        choosingProvider ||
-                        connecting ||
-                        busy ||
-                        reportBusy
-                      }
-                    >
-                      {selected ? "Në përdorim" : `Përdor ${name}`}
-                    </button>
-                  </div>
-                </section>
-              );
-            })}
-            <section className="panel provider-model-panel">
-              <label>
-                Modeli për biseda dhe raporte
-                <select
-                  aria-label="Zgjidh modelin"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  disabled={
-                    !subscription.connected || choosingProvider || chatLocked
-                  }
-                >
-                  {!models.length && (
-                    <option value="">Lidhni abonimin {providerName}</option>
+                    />
+                    <div className="notice">
+                      <Database size={20} />
+                      <div>
+                        <strong>
+                          {" "}
+                          Raporte nga SQL Server dhe SAP HANA me kredenciale
+                          private.{" "}
+                        </strong>
+                        <p>
+                          {" "}
+                          Shtoni hostin, portin, përdoruesin dhe fjalëkalimin
+                          për çdo lidhje. Emri i databazës është opsional:
+                          asistenti zbulon databazat dhe tabelat që lejon secili
+                          përdorues SQL. Kredencialet mbeten private në
+                          backend.{" "}
+                        </p>
+                      </div>
+                    </div>
+                    {user.role === "devs" ? (
+                      <>
+                        {sources.length ? (
+                          <div className="source-grid">
+                            {sources.map((s) => (
+                              <div className="source-card" key={s.id}>
+                                <Database size={25} />
+                                <Badge good={s.status === "connected"}>
+                                  {label(s.status)}
+                                </Badge>
+                                <h3>{s.name}</h3>
+                                <span className="source-type">{s.kind}</span>
+                                {(s.kind === "sqlserver" ||
+                                  s.kind === "saphana") && (
+                                  <p className="source-scope">
+                                    {s.database_scope === "all"
+                                      ? "Zbulim automatik i databazave në server"
+                                      : "Databazë parazgjedhje dhe zbulim në server"}
+                                  </p>
+                                )}
+                                <p>
+                                  {s.description ||
+                                    (s.configuration_origin === "saved"
+                                      ? "Përdor cilësimet private të ruajtura të lidhjes."
+                                      : "Përdor konfigurimin nga .env në server; vlerat mbeten private.")}
+                                </p>
+                                {s.last_error && (
+                                  <p className="database-error" role="status">
+                                    {s.error_scope === "query" &&
+                                      "Gabim në pyetje: "}
+                                    {errorMessage(s.last_error || "")}
+                                  </p>
+                                )}
+                                {s.checked_at && (
+                                  <small>
+                                    {" "}
+                                    Kontrolluar më{" "}
+                                    {new Date(s.checked_at).toLocaleString(
+                                      "sq-AL",
+                                    )}
+                                  </small>
+                                )}
+                                {(s.kind === "sqlserver" ||
+                                  s.kind === "saphana") && (
+                                  <button
+                                    className="button outline small"
+                                    onClick={() => openSource(s)}
+                                  >
+                                    <Settings size={15} /> Konfiguro
+                                    lidhjen{" "}
+                                  </button>
+                                )}
+                                {(s.kind === "sqlserver" ||
+                                  s.kind === "saphana") && (
+                                  <button
+                                    className="button outline small"
+                                    onClick={() => void openSourceAccess(s)}
+                                  >
+                                    <ShieldCheck size={15} /> Qasja te
+                                    burimi{" "}
+                                  </button>
+                                )}
+                                {(s.kind === "sqlserver" ||
+                                  s.kind === "saphana") &&
+                                  s.enabled !== 0 && (
+                                    <button
+                                      className="button outline small"
+                                      disabled={
+                                        checkingSource === s.id ||
+                                        sourceActions[s.id]
+                                      }
+                                      onClick={() => void checkSource(s)}
+                                    >
+                                      {checkingSource === s.id ? (
+                                        <LoaderCircle
+                                          size={15}
+                                          className="spin"
+                                        />
+                                      ) : (
+                                        <Check size={15} />
+                                      )}{" "}
+                                      Kontrollo lidhjen{" "}
+                                    </button>
+                                  )}
+                                <div className="source-actions">
+                                  {(s.kind === "sqlserver" ||
+                                    s.kind === "saphana") &&
+                                    s.enabled !== 0 && (
+                                      <button
+                                        className="button outline small"
+                                        disabled={sourceActions[s.id]}
+                                        onClick={() => void browseDatabases(s)}
+                                      >
+                                        <Database size={15} /> Shiko databazat
+                                      </button>
+                                    )}
+                                  {(s.kind === "sqlserver" ||
+                                    s.kind === "saphana") && (
+                                    <button
+                                      className="button outline small"
+                                      disabled={
+                                        sourceActions[s.id] ||
+                                        checkingSource === s.id
+                                      }
+                                      onClick={() =>
+                                        void changeConnection(
+                                          s,
+                                          s.enabled === 0
+                                            ? "connect"
+                                            : "disconnect",
+                                        )
+                                      }
+                                    >
+                                      {sourceActions[s.id] ? (
+                                        <LoaderCircle
+                                          size={15}
+                                          className="spin"
+                                        />
+                                      ) : (
+                                        <Unplug size={15} />
+                                      )}
+                                      {s.enabled === 0 ? "Rilidh" : "Shkëput"}
+                                    </button>
+                                  )}
+                                  <button
+                                    className="button outline small danger-text"
+                                    disabled={sourceActions[s.id]}
+                                    onClick={() => {
+                                      setError("");
+                                      setDeleteSource(s);
+                                    }}
+                                  >
+                                    <Trash2 size={15} /> Hiq lidhjen
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <EmptyState
+                            icon={<Database size={30} />}
+                            title="Nuk ka ende burime të dhënash."
+                            text="Shtoni një databazë për të nisur analizat dhe raportet."
+                          />
+                        )}
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <h3> Dataset-e opsionale për raporte </h3>
+                            <button
+                              className="button outline small"
+                              disabled={!sources.length}
+                              onClick={() => setAddDataset(true)}
+                            >
+                              <Plus size={15} /> Përcakto dataset{" "}
+                            </button>
+                          </div>
+                          <DatasetTable
+                            datasets={adminDatasets}
+                            onGrant={setGrant}
+                            onToggle={(d) => void toggleDataset(d)}
+                          />
+                        </section>
+                      </>
+                    ) : (
+                      <section className="panel">
+                        <h3> Databazat ku keni qasje </h3>
+                        {businessSources.map((source) => (
+                          <div className="service-row" key={source.id}>
+                            <strong>{source.name}</strong>
+                            <Badge good={source.status === "connected"}>
+                              {label(source.status)}
+                            </Badge>
+                          </div>
+                        ))}
+                        {!businessSources.length && (
+                          <p className="muted">
+                            {" "}
+                            Kërkojini administratorit t’ju japë qasje në
+                            databazë.{" "}
+                          </p>
+                        )}
+                        <h3> Dataset-et ku keni qasje </h3>
+                        <DatasetTable datasets={datasets} />
+                      </section>
+                    )}
+                  </section>
+                )}
+                {settingsTab === "members" && canManageMembers && (
+                  <section className="settings-section">
+                    <div className="settings-section-heading">
+                      <h2>Anëtarët dhe qasja</h2>
+                      <p>
+                        Shtoni ose hiqni anëtarë. Konfigurimi i sistemit dhe
+                        ndryshimi i qasjes ekzistuese u takojnë Devs.
+                      </p>
+                    </div>
+                    {membersPanel}
+                  </section>
+                )}
+                {isDev &&
+                  ["overview", "traffic", "activity"].includes(settingsTab) && (
+                    <section className="settings-section">
+                      <div className="settings-section-heading">
+                        <h2>
+                          {
+                            availableSettings.find(
+                              (section) => section.id === settingsTab,
+                            )?.label
+                          }
+                        </h2>
+                      </div>
+                      {settingsTab === "overview" && overview && (
+                        <>
+                          <div className="stats-grid">
+                            {[
+                              {
+                                label: "Anëtarët e hapësirës",
+                                count: overview.counts.users,
+                                icon: ShieldCheck,
+                              },
+                              {
+                                label: "Bisedat",
+                                count: overview.counts.conversations,
+                                icon: MessageSquare,
+                              },
+                              {
+                                label: "Raporte të krijuara",
+                                count: overview.counts.reports,
+                                icon: FileText,
+                              },
+                              {
+                                label: "Burimet e të dhënave",
+                                count: overview.counts.data_sources,
+                                icon: Database,
+                              },
+                            ].map((s) => (
+                              <div className="stat-card" key={s.label}>
+                                <s.icon size={20} />
+                                <span>{s.label}</span>
+                                <strong>{s.count}</strong>
+                              </div>
+                            ))}
+                          </div>
+                          <section className="panel">
+                            <h3> Gjendja e shërbimeve </h3>
+                            <div className="service-row">
+                              <span>
+                                <Sparkles size={19} /> Lidhjet me modelet
+                                AI{" "}
+                              </span>
+                              <Badge good>ChatGPT · Claude</Badge>
+                            </div>
+                            <div className="service-row">
+                              <span>
+                                <Database size={19} /> Lidhjet me databazat e
+                                biznesit{" "}
+                              </span>
+                              <Badge
+                                good={overview.database_sources.some(
+                                  (s) => s.status === "connected",
+                                )}
+                              >
+                                {overview.database_sources.some(
+                                  (s) => s.status === "connected",
+                                )
+                                  ? "I lidhur"
+                                  : overview.database_sources.some(
+                                        (s) => s.status === "error",
+                                      )
+                                    ? "Gabim në lidhje"
+                                    : "Në pritje të konfigurimit"}
+                              </Badge>
+                            </div>
+                            <div className="service-row">
+                              <span>
+                                <LayoutDashboard size={19} /> Lidhje aktive me
+                                abonimin{" "}
+                              </span>
+                              <strong>
+                                {overview.active_runtimes} /{" "}
+                                {overview.max_runtimes}
+                              </strong>
+                            </div>
+                          </section>
+                          <section className="panel">
+                            <div className="panel-heading">
+                              <h3> Konfigurimi i databazave </h3>
+                              <button
+                                className="button outline small"
+                                onClick={() => void loadAdmin().catch(fail)}
+                              >
+                                {" "}
+                                Rifresko gjendjen{" "}
+                              </button>
+                            </div>
+                            <p className="muted">
+                              {" "}
+                              Lidhjet SQL Server dhe SAP HANA ruhen në .env të
+                              projektit. Çdo lidhje ka profilin e vet dhe përdor
+                              drejtuesin përkatës. Vlerat e kredencialeve nuk
+                              shfaqen në shfletues.{" "}
+                            </p>
+                            {Object.entries(
+                              overview.database_configuration.environment,
+                            ).map(([key, configured]) => (
+                              <div className="service-row" key={key}>
+                                <code>{key}</code>
+                                <Badge good={configured}>
+                                  {configured ? "Vendosur" : "Mungon"}
+                                </Badge>
+                              </div>
+                            ))}
+                            {overview.database_sources.map((source) => (
+                              <div className="database-status" key={source.id}>
+                                <div className="service-row">
+                                  <strong>{source.name}</strong>
+                                  <Badge good={source.status === "connected"}>
+                                    {label(source.status)}
+                                  </Badge>
+                                </div>
+                                {source.last_error && (
+                                  <p className="database-error" role="status">
+                                    {source.error_scope === "query" &&
+                                      "Gabim në pyetje: "}
+                                    {errorMessage(source.last_error || "")}
+                                  </p>
+                                )}
+                                {source.checked_at && (
+                                  <small>
+                                    {" "}
+                                    Kontrolluar më{" "}
+                                    {new Date(source.checked_at).toLocaleString(
+                                      "sq-AL",
+                                    )}
+                                  </small>
+                                )}
+                                {(source.kind === "sqlserver" ||
+                                  source.kind === "saphana") && (
+                                  <button
+                                    className="button outline small"
+                                    onClick={() => openSource(source)}
+                                  >
+                                    <Settings size={15} /> Konfiguro
+                                    lidhjen{" "}
+                                  </button>
+                                )}
+                                {(source.kind === "sqlserver" ||
+                                  source.kind === "saphana") && (
+                                  <button
+                                    className="button outline small"
+                                    disabled={checkingSource === source.id}
+                                    onClick={() => void checkSource(source)}
+                                  >
+                                    {checkingSource === source.id
+                                      ? "Duke kontrolluar…"
+                                      : "Kontrollo lidhjen"}
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            {!overview.database_sources.length && (
+                              <p className="muted">
+                                {" "}
+                                Shtoni një lidhje SQL Server ose SAP HANA për të
+                                kontrolluar lidhjen.{" "}
+                              </p>
+                            )}
+                          </section>
+                          <p className="footnote">
+                            {" "}
+                            Devs lidhin abonimet e përbashkëta ChatGPT ose
+                            Claude. Bisedat, raportet dhe qasja në të dhëna
+                            mbeten të veçanta për çdo anëtar.{" "}
+                          </p>
+                        </>
+                      )}
+                      {settingsTab === "traffic" && <TrafficPanel />}
+                      {settingsTab === "activity" && (
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <h3> Aktiviteti i fundit </h3>
+                            <button
+                              className="button outline small"
+                              onClick={() => void loadAdmin().catch(fail)}
+                            >
+                              {" "}
+                              Rifresko{" "}
+                            </button>
+                          </div>
+                          <div className="table-scroll">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th> Veprimi </th>
+                                  <th> Anëtar </th>
+                                  <th> Koha </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {audit.map((a) => (
+                                  <tr key={a.id}>
+                                    <td>{auditLabel(a.action)}</td>
+                                    <td>{a.actor_email || "Sistemi"}</td>
+                                    <td>
+                                      {new Date(a.created_at).toLocaleString(
+                                        "sq-AL",
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </section>
+                      )}
+                    </section>
                   )}
-                  {models.map((m) => (
-                    <option key={m.id} value={m.model}>
-                      {m.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p>
-                Zgjedhja përdoret për mesazhet dhe raportet e ardhshme. Të dyja
-                llogaritë mund të qëndrojnë të lidhura.
-              </p>
-            </section>
-            {!subscription.available && (
-              <p className="error-box">
-                {errorMessage(subscription.error || "")} Lidhja do të provohet
-                përsëri automatikisht sapo rrjeti të jetë gati.
-              </p>
-            )}
-            <section className="panel">{reasoningControl}</section>
-            <div className="info-grid">
-              <div className="info-card">
-                <ShieldCheck size={21} />
-                <h3> Biseda përdor abonimin tuaj </h3>
-                <p>
-                  {" "}
-                  Përdoret abonimi që keni zgjedhur dhe kufijtë e llogarisë
-                  përkatëse. Mund të ndërroni ofruesin duke ruajtur bisedat dhe
-                  raportet tuaja.{" "}
-                </p>
-              </div>
-              <div className="info-card">
-                <MessageSquare size={21} />
-                <h3> Hapësirë e veçantë bisedash </h3>
-                <p>
-                  {" "}
-                  Kjo hapësirë ruan bisedat e veta. Lidhja e llogarisë nuk
-                  importon bisedat ose kujtesën nga ChatGPT ose Claude.{" "}
-                </p>
               </div>
             </div>
-            {subscription.connected && selectedProvider === "chatgpt" && (
-              <section className="panel">
-                <div className="panel-heading">
-                  <h3> Përdorimi i abonimit </h3>
-                  <button
-                    className="button outline small"
-                    onClick={() =>
-                      void api<{ rateLimits: RateLimits }>(
-                        "/subscription/usage",
-                      )
-                        .then((r) => setLimits(r.rateLimits))
-                        .catch(fail)
-                    }
-                  >
-                    {" "}
-                    Rifresko përdorimin{" "}
-                  </button>
-                </div>
-                {limits ? (
-                  <div className="usage-grid">
-                    {[limits.primary, limits.secondary]
-                      .filter(Boolean)
-                      .map((w, i) => (
-                        <div key={i}>
-                          <span>
-                            {w!.windowDurationMins >= 1440
-                              ? "Periudha më e gjatë"
-                              : "Periudha aktuale"}
-                          </span>
-                          <strong>
-                            {Math.max(0, 100 - w!.usedPercent)} % të
-                            mbetura{" "}
-                          </strong>
-                          <progress
-                            value={Math.max(0, 100 - w!.usedPercent)}
-                            max={100}
-                          />
-                          <small>
-                            {" "}
-                            Rinovohet{" "}
-                            {new Date(w!.resetsAt * 1000).toLocaleString(
-                              "sq-AL",
-                            )}
-                          </small>
-                        </div>
-                      ))}
-                  </div>
-                ) : (
-                  <p> Rifreskoni për të parë kufijtë e llogarisë ChatGPT. </p>
-                )}
-              </section>
-            )}
-            {subscription.connected && selectedProvider === "claude" && (
-              <p className="footnote">
-                Përdorimin dhe kufijtë e abonimit mund t’i kontrolloni te{" "}
-                <a
-                  href="https://claude.ai/settings/usage"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  llogaria Claude
-                </a>
-                .
-              </p>
-            )}
-            <p className="footnote">
-              {selectedProvider === "chatgpt"
-                ? "Hyrja me kod pajisjeje duhet të aktivizohet në cilësimet e sigurisë të ChatGPT ose të lejohet nga administratori."
-                : "Për Claude, hyni në shfletues me abonimin tuaj dhe vendosni këtu kodin njëpërdorimësh që shfaqet pas hyrjes."}
-            </p>
           </main>
         )}
 
@@ -2622,538 +3391,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             )}
           </main>
         )}
-
-        {page === "sources" && (
-          <main className="page-content">
-            <PageHeading
-              eyebrow="BAZA E RAPORTEVE TUAJA"
-              title="Burimet e të dhënave tuaja."
-              text="Menaxhoni lidhje SQL Server dhe SAP HANA. Çdo server mund të ketë shumë databaza."
-              action={
-                user.role === "devs" && (
-                  <button
-                    className="button primary"
-                    onClick={() => openSource()}
-                  >
-                    <Plus size={17} /> Shto lidhje{" "}
-                  </button>
-                )
-              }
-            />
-            <div className="notice">
-              <Database size={20} />
-              <div>
-                <strong>
-                  {" "}
-                  Raporte nga SQL Server dhe SAP HANA me kredenciale
-                  private.{" "}
-                </strong>
-                <p>
-                  {" "}
-                  Shtoni hostin, portin, përdoruesin dhe fjalëkalimin për çdo
-                  lidhje. Emri i databazës është opsional: asistenti zbulon
-                  databazat dhe tabelat që lejon secili përdorues SQL.
-                  Kredencialet mbeten private në backend.{" "}
-                </p>
-              </div>
-            </div>
-            {user.role === "devs" ? (
-              <>
-                {sources.length ? (
-                  <div className="source-grid">
-                    {sources.map((s) => (
-                      <div className="source-card" key={s.id}>
-                        <Database size={25} />
-                        <Badge good={s.status === "connected"}>
-                          {label(s.status)}
-                        </Badge>
-                        <h3>{s.name}</h3>
-                        <span className="source-type">{s.kind}</span>
-                        {(s.kind === "sqlserver" || s.kind === "saphana") && (
-                          <p className="source-scope">
-                            {s.database_scope === "all"
-                              ? "Zbulim automatik i databazave në server"
-                              : "Databazë parazgjedhje dhe zbulim në server"}
-                          </p>
-                        )}
-                        <p>
-                          {s.description ||
-                            (s.configuration_origin === "saved"
-                              ? "Përdor cilësimet private të ruajtura të lidhjes."
-                              : "Përdor konfigurimin nga .env në server; vlerat mbeten private.")}
-                        </p>
-                        {s.last_error && (
-                          <p className="database-error" role="status">
-                            {s.error_scope === "query" && "Gabim në pyetje: "}
-                            {errorMessage(s.last_error || "")}
-                          </p>
-                        )}
-                        {s.checked_at && (
-                          <small>
-                            {" "}
-                            Kontrolluar më{" "}
-                            {new Date(s.checked_at).toLocaleString("sq-AL")}
-                          </small>
-                        )}
-                        {(s.kind === "sqlserver" || s.kind === "saphana") && (
-                          <button
-                            className="button outline small"
-                            onClick={() => openSource(s)}
-                          >
-                            <Settings size={15} /> Konfiguro lidhjen{" "}
-                          </button>
-                        )}
-                        {(s.kind === "sqlserver" || s.kind === "saphana") && (
-                          <button
-                            className="button outline small"
-                            onClick={() => void openSourceAccess(s)}
-                          >
-                            <ShieldCheck size={15} /> Qasja te burimi{" "}
-                          </button>
-                        )}
-                        {(s.kind === "sqlserver" || s.kind === "saphana") &&
-                          s.enabled !== 0 && (
-                            <button
-                              className="button outline small"
-                              disabled={
-                                checkingSource === s.id || sourceActions[s.id]
-                              }
-                              onClick={() => void checkSource(s)}
-                            >
-                              {checkingSource === s.id ? (
-                                <LoaderCircle size={15} className="spin" />
-                              ) : (
-                                <Check size={15} />
-                              )}{" "}
-                              Kontrollo lidhjen{" "}
-                            </button>
-                          )}
-                        <div className="source-actions">
-                          {(s.kind === "sqlserver" || s.kind === "saphana") &&
-                            s.enabled !== 0 && (
-                              <button
-                                className="button outline small"
-                                disabled={sourceActions[s.id]}
-                                onClick={() => void browseDatabases(s)}
-                              >
-                                <Database size={15} /> Shiko databazat
-                              </button>
-                            )}
-                          {(s.kind === "sqlserver" || s.kind === "saphana") && (
-                            <button
-                              className="button outline small"
-                              disabled={
-                                sourceActions[s.id] || checkingSource === s.id
-                              }
-                              onClick={() =>
-                                void changeConnection(
-                                  s,
-                                  s.enabled === 0 ? "connect" : "disconnect",
-                                )
-                              }
-                            >
-                              {sourceActions[s.id] ? (
-                                <LoaderCircle size={15} className="spin" />
-                              ) : (
-                                <Unplug size={15} />
-                              )}
-                              {s.enabled === 0 ? "Rilidh" : "Shkëput"}
-                            </button>
-                          )}
-                          <button
-                            className="button outline small danger-text"
-                            disabled={sourceActions[s.id]}
-                            onClick={() => {
-                              setError("");
-                              setDeleteSource(s);
-                            }}
-                          >
-                            <Trash2 size={15} /> Hiq lidhjen
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon={<Database size={30} />}
-                    title="Nuk ka ende burime të dhënash."
-                    text="Shtoni një databazë për të nisur analizat dhe raportet."
-                  />
-                )}
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h3> Dataset-e opsionale për raporte </h3>
-                    <button
-                      className="button outline small"
-                      disabled={!sources.length}
-                      onClick={() => setAddDataset(true)}
-                    >
-                      <Plus size={15} /> Përcakto dataset{" "}
-                    </button>
-                  </div>
-                  <DatasetTable
-                    datasets={adminDatasets}
-                    onGrant={setGrant}
-                    onToggle={(d) => void toggleDataset(d)}
-                  />
-                </section>
-              </>
-            ) : (
-              <section className="panel">
-                <h3> Databazat ku keni qasje </h3>
-                {businessSources.map((source) => (
-                  <div className="service-row" key={source.id}>
-                    <strong>{source.name}</strong>
-                    <Badge good={source.status === "connected"}>
-                      {label(source.status)}
-                    </Badge>
-                  </div>
-                ))}
-                {!businessSources.length && (
-                  <p className="muted">
-                    {" "}
-                    Kërkojini administratorit t’ju japë qasje në databazë.{" "}
-                  </p>
-                )}
-                <h3> Dataset-et ku keni qasje </h3>
-                <DatasetTable datasets={datasets} />
-              </section>
-            )}
-          </main>
-        )}
-
-        {page === "admin" && user.role === "devs" && (
-          <main className="page-content">
-            <PageHeading
-              eyebrow="ADMINISTRIMI I HAPËSIRËS"
-              title="Kontrollet e hapësirës tuaj."
-              text="Menaxhoni anëtarët, kontrolloni shërbimet dhe ndiqni aktivitetin."
-            />
-            <div className="tabs">
-              {["overview", "users", "traffic", "activity"].map((t) => (
-                <button
-                  className={adminTab === t ? "active" : ""}
-                  key={t}
-                  onClick={() => setAdminTab(t)}
-                >
-                  {t === "overview"
-                    ? "Përmbledhje"
-                    : t === "users"
-                      ? "Anëtarët dhe qasja"
-                      : t === "traffic"
-                        ? "Trafiku"
-                        : "Regjistri i aktivitetit"}
-                </button>
-              ))}
-            </div>
-            {adminTab === "overview" && overview && (
-              <>
-                <div className="stats-grid">
-                  {[
-                    {
-                      label: "Anëtarët e hapësirës",
-                      count: overview.counts.users,
-                      icon: ShieldCheck,
-                    },
-                    {
-                      label: "Bisedat",
-                      count: overview.counts.conversations,
-                      icon: MessageSquare,
-                    },
-                    {
-                      label: "Raporte të krijuara",
-                      count: overview.counts.reports,
-                      icon: FileText,
-                    },
-                    {
-                      label: "Burimet e të dhënave",
-                      count: overview.counts.data_sources,
-                      icon: Database,
-                    },
-                  ].map((s) => (
-                    <div className="stat-card" key={s.label}>
-                      <s.icon size={20} />
-                      <span>{s.label}</span>
-                      <strong>{s.count}</strong>
-                    </div>
-                  ))}
-                </div>
-                <section className="panel">
-                  <h3> Gjendja e shërbimeve </h3>
-                  <div className="service-row">
-                    <span>
-                      <Sparkles size={19} /> Lidhjet me modelet AI{" "}
-                    </span>
-                    <Badge good>ChatGPT · Claude</Badge>
-                  </div>
-                  <div className="service-row">
-                    <span>
-                      <Database size={19} /> Lidhjet me databazat e
-                      biznesit{" "}
-                    </span>
-                    <Badge
-                      good={overview.database_sources.some(
-                        (s) => s.status === "connected",
-                      )}
-                    >
-                      {overview.database_sources.some(
-                        (s) => s.status === "connected",
-                      )
-                        ? "I lidhur"
-                        : overview.database_sources.some(
-                              (s) => s.status === "error",
-                            )
-                          ? "Gabim në lidhje"
-                          : "Në pritje të konfigurimit"}
-                    </Badge>
-                  </div>
-                  <div className="service-row">
-                    <span>
-                      <LayoutDashboard size={19} /> Lidhje aktive me
-                      abonimin{" "}
-                    </span>
-                    <strong>
-                      {overview.active_runtimes} / {overview.max_runtimes}
-                    </strong>
-                  </div>
-                </section>
-                <section className="panel">
-                  <div className="panel-heading">
-                    <h3> Konfigurimi i databazave </h3>
-                    <button
-                      className="button outline small"
-                      onClick={() => void loadAdmin().catch(fail)}
-                    >
-                      {" "}
-                      Rifresko gjendjen{" "}
-                    </button>
-                  </div>
-                  <p className="muted">
-                    {" "}
-                    Lidhjet SQL Server dhe SAP HANA ruhen në .env të projektit.
-                    Çdo lidhje ka profilin e vet dhe përdor drejtuesin përkatës.
-                    Vlerat e kredencialeve nuk shfaqen në shfletues.{" "}
-                  </p>
-                  {Object.entries(
-                    overview.database_configuration.environment,
-                  ).map(([key, configured]) => (
-                    <div className="service-row" key={key}>
-                      <code>{key}</code>
-                      <Badge good={configured}>
-                        {configured ? "Vendosur" : "Mungon"}
-                      </Badge>
-                    </div>
-                  ))}
-                  {overview.database_sources.map((source) => (
-                    <div className="database-status" key={source.id}>
-                      <div className="service-row">
-                        <strong>{source.name}</strong>
-                        <Badge good={source.status === "connected"}>
-                          {label(source.status)}
-                        </Badge>
-                      </div>
-                      {source.last_error && (
-                        <p className="database-error" role="status">
-                          {source.error_scope === "query" &&
-                            "Gabim në pyetje: "}
-                          {errorMessage(source.last_error || "")}
-                        </p>
-                      )}
-                      {source.checked_at && (
-                        <small>
-                          {" "}
-                          Kontrolluar më{" "}
-                          {new Date(source.checked_at).toLocaleString("sq-AL")}
-                        </small>
-                      )}
-                      {(source.kind === "sqlserver" ||
-                        source.kind === "saphana") && (
-                        <button
-                          className="button outline small"
-                          onClick={() => openSource(source)}
-                        >
-                          <Settings size={15} /> Konfiguro lidhjen{" "}
-                        </button>
-                      )}
-                      {(source.kind === "sqlserver" ||
-                        source.kind === "saphana") && (
-                        <button
-                          className="button outline small"
-                          disabled={checkingSource === source.id}
-                          onClick={() => void checkSource(source)}
-                        >
-                          {checkingSource === source.id
-                            ? "Duke kontrolluar…"
-                            : "Kontrollo lidhjen"}
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  {!overview.database_sources.length && (
-                    <p className="muted">
-                      {" "}
-                      Shtoni një lidhje SQL Server ose SAP HANA për të
-                      kontrolluar lidhjen.{" "}
-                    </p>
-                  )}
-                </section>
-                <p className="footnote">
-                  {" "}
-                  Çdo anëtar lidh abonimet e veta ChatGPT ose Claude.
-                  Administratori nuk sheh kredencialet e anëtarëve të
-                  tjerë.{" "}
-                </p>
-              </>
-            )}
-            {adminTab === "users" && (
-              <section className="panel">
-                <div className="panel-heading">
-                  <h3> Anëtarët e hapësirës </h3>
-                  <button
-                    className="button primary small"
-                    onClick={() => {
-                      setNewMemberRole("manager");
-                      setNewMemberAccess(emptyDataAccess());
-                      setAddUser(true);
-                    }}
-                  >
-                    <Plus size={16} /> Shto anëtar{" "}
-                  </button>
-                </div>
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th> Anëtar </th>
-                        <th> Roli </th>
-                        <th> Gjendja </th>
-                        <th> Lidhja </th>
-                        <th> Databazat dhe kompanitë </th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map((u) => (
-                        <tr key={u.id}>
-                          <td>
-                            <strong>{u.name}</strong>
-                            <small>{u.email}</small>
-                          </td>
-                          <td>
-                            <Select
-                              aria-label={`Roli i ${u.name}`}
-                              value={u.role}
-                              disabled={u.id === user.id}
-                              onChange={(e) =>
-                                void api(`/admin/users/${u.id}`, {
-                                  method: "PATCH",
-                                  body: JSON.stringify({
-                                    role: e.target.value,
-                                  }),
-                                })
-                                  .then(loadAdmin)
-                                  .catch(fail)
-                              }
-                            >
-                              <option value="devs">Devs</option>
-                              <option value="president">President</option>
-                              <option value="manager">Manager</option>
-                            </Select>
-                          </td>
-                          <td>
-                            <Badge good={!!u.active}>
-                              {u.active ? "Aktiv" : "Joaktiv"}
-                            </Badge>
-                          </td>
-                          <td>
-                            <button
-                              className="text-button"
-                              onClick={() =>
-                                void api(`/admin/runtimes/${u.id}/restart`, {
-                                  method: "POST",
-                                })
-                                  .then(loadAdmin)
-                                  .catch(fail)
-                              }
-                            >
-                              {" "}
-                              Rinis{" "}
-                            </button>
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="text-button"
-                              onClick={() => void openMemberAccess(u)}
-                            >
-                              {u.role === "manager"
-                                ? "Zgjidh qasjen"
-                                : "Qasje në të gjitha"}
-                            </button>
-                          </td>
-                          <td>
-                            <button
-                              className="text-button"
-                              disabled={!u.active}
-                              onClick={() => setRecoveryMember(u)}
-                            >
-                              Rikupero llogarinë
-                            </button>
-                            <button
-                              className="button outline small"
-                              disabled={u.id === user.id}
-                              onClick={() => void updateUser(u)}
-                            >
-                              {u.active ? "Çaktivizo" : "Aktivizo"}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            )}
-            {adminTab === "traffic" && <TrafficPanel />}
-            {adminTab === "activity" && (
-              <section className="panel">
-                <div className="panel-heading">
-                  <h3> Aktiviteti i fundit </h3>
-                  <button
-                    className="button outline small"
-                    onClick={() => void loadAdmin().catch(fail)}
-                  >
-                    {" "}
-                    Rifresko{" "}
-                  </button>
-                </div>
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th> Veprimi </th>
-                        <th> Anëtar </th>
-                        <th> Koha </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {audit.map((a) => (
-                        <tr key={a.id}>
-                          <td>{auditLabel(a.action)}</td>
-                          <td>{a.actor_email || "Sistemi"}</td>
-                          <td>
-                            {new Date(a.created_at).toLocaleString("sq-AL")}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            )}
-          </main>
-        )}
       </div>
 
       {databaseBrowser && (
@@ -3233,7 +3470,37 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         </Modal>
       )}
 
-      {recoveryMember && (
+      {deleteMember && canManageMembers && (
+        <Modal
+          title="Të hiqet anëtari?"
+          error={error}
+          onClose={() => {
+            if (!removingMember) setDeleteMember(null);
+          }}
+        >
+          <p>
+            Hiqni {deleteMember.name} nga hapësira? Qasja do të ndërpritet
+            menjëherë. Bisedat, raportet dhe regjistrat ekzistues do të ruhen.
+          </p>
+          <div className="modal-actions">
+            <button
+              className="button outline"
+              disabled={removingMember}
+              onClick={() => setDeleteMember(null)}
+            >
+              Anulo
+            </button>
+            <button
+              className="button danger"
+              disabled={removingMember}
+              onClick={() => void removeMember()}
+            >
+              {removingMember ? "Duke hequr…" : "Hiq anëtarin"}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {recoveryMember && isDev && (
         <Modal
           title={`Rikuperimi: ${recoveryMember.name}`}
           onClose={() => setRecoveryMember(null)}
@@ -3268,25 +3535,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           />
         </Modal>
       )}
-      {settingsOpen && (
-        <Modal title="Cilësimet" onClose={() => setSettingsOpen(false)}>
-          {reasoningControl}
-          <p>
-            Zgjidhni sa arsyetim përdor modeli. Nivelet varen nga modeli i
-            zgjedhur dhe zbatohen për mesazhet dhe raportet e ardhshme.
-          </p>
-          <PasswordChangeForm />
-          <div className="modal-actions">
-            <button
-              className="button primary"
-              onClick={() => setSettingsOpen(false)}
-            >
-              Mbyll
-            </button>
-          </div>
-        </Modal>
-      )}
-
       {page === "reports" && report && (
         <Modal
           title={report.title}
@@ -3505,7 +3753,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 className="delete-conversation"
                 aria-label={`Fshi bisedën: ${c.title}`}
-                disabled={conversationRunning(c.id) || uploading || deleting}
+                disabled={uploading || deleting}
                 onClick={() => {
                   setChatHistory(false);
                   setDeleteChat(c);
@@ -3530,8 +3778,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         >
           <p>
             {" "}
-            Fshi “ {deleteChat.title} ” dhe mesazhet e saj nga hapësira?
-            Raportet e ruajtura do të mbeten.{" "}
+            Fshi “ {deleteChat.title} ” dhe mesazhet e saj nga hapësira? Puna në
+            vazhdim do të ndërpritet. Raportet e ruajtura do të mbeten.{" "}
           </p>
           <div className="modal-actions">
             <button
@@ -3544,7 +3792,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </button>
             <button
               className="button danger"
-              disabled={deleting || conversationRunning(deleteChat.id)}
+              disabled={deleting}
               onClick={() => void removeConversation()}
             >
               {deleting ? "Duke fshirë…" : "Fshi bisedën"}
@@ -3697,8 +3945,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </form>
         </Modal>
       )}
-      {addUser && (
+      {addUser && canManageMembers && (
         <Modal
+          dismissOnBackdrop={false}
           error={error}
           title="Shto një anëtar"
           onClose={() => {
@@ -3737,7 +3986,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               >
                 <option value="manager">Manager</option>
                 <option value="president">President</option>
-                <option value="devs">Devs</option>
+                {isDev && <option value="devs">Devs</option>}
               </Select>
             </label>
             <DatabaseAccessPicker
@@ -3752,7 +4001,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </form>
         </Modal>
       )}
-      {accessMember && (
+      {accessMember && isDev && (
         <Modal
           title={`Qasja: ${accessMember.name}`}
           error={error}
@@ -4270,17 +4519,20 @@ function PageHeading({
   title,
   text,
   action,
+  level = 1,
 }: {
   eyebrow: string;
   title: string;
   text: string;
   action?: ReactNode;
+  level?: 1 | 2;
 }) {
+  const Heading = level === 2 ? "h2" : "h1";
   return (
     <div className="page-heading">
       <div>
         <span className="eyebrow">{eyebrow}</span>
-        <h1>{title}</h1>
+        <Heading>{title}</Heading>
         <p>{text}</p>
       </div>
       {action}

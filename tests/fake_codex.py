@@ -13,6 +13,11 @@ assert not any(key.startswith("SQLSERVER_") for key in os.environ)
 
 account_path = Path(os.environ["CODEX_HOME"]) / "fixture-account.json"
 config = tomllib.loads((account_path.parent / "config.toml").read_text())
+for index, value in enumerate(sys.argv):
+    if value == '--config':
+        key, setting = sys.argv[index + 1].split('=', 1)
+        assert key == 'permissions.duka_read_only.filesystem'
+        config['permissions']['duka_read_only']['filesystem'] = tomllib.loads('value=' + setting)['value']
 assert "sandbox_mode" not in config
 assert config["default_permissions"] == "duka_read_only"
 assert config["project_doc_max_bytes"] == 0
@@ -108,11 +113,22 @@ for line in sys.stdin:
         assert "sandboxPolicy" not in params
         result = {"turn": {"id": turn_id}}
         emit({"id": identifier, "result": result})
+        quota_path = account_path.parent / "quota.json"
+        if quota_path.exists():
+            quota = json.loads(quota_path.read_text())
+            emit({"method": "item/agentMessage/delta", "params": {"threadId": thread_id, "turnId": turn_id, "delta": quota.get("partial", "UNFINISHED FIXTURE")}})
+            emit({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "failed", "error": {"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}}}})
+            continue
         if params.get("outputSchema") and (account_path.parent / "hold-reports").exists():
             held_turns[thread_id] = turn_id
             continue
         text = "Protocol fixture reply."
         content = params["input"][-1]["text"]
+        if '"handoff_checkpoint"' in content:
+            envelope = json.loads(content)
+            context = envelope.get("context", {})
+            content = context.get("current_request", content)
+            params["input"][-1]["text"] = content
         slow = account_path.parent / "long-investigation.json"
         if content.startswith("Long investigation fixture") and slow.exists():
             delay = json.loads(slow.read_text())["seconds"]

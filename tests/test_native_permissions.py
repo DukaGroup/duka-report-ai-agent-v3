@@ -12,6 +12,31 @@ from app.provider import CodexRuntime, ProviderError, READ_ONLY_PROFILE
 
 
 @pytest.mark.asyncio
+async def test_native_shared_login_keeps_each_process_filesystem_policy(tmp_path):
+    binary = os.getenv("NATIVE_CODEX_BINARY") or shutil.which("codex")
+    if not binary:
+        pytest.skip("Set NATIVE_CODEX_BINARY to exercise the installed Codex CLI.")
+    settings = Settings(data_dir=tmp_path / "shared-native", codex_binary=str(Path(binary).resolve()))
+    settings.prepare()
+    runtimes = [CodexRuntime(settings, member, None) for member in ("alice", "bob")]
+    for runtime in runtimes:
+        runtime.home = settings.data_dir / "shared-provider-home"
+    try:
+        for runtime in runtimes:
+            await runtime.start()
+        # Read native effective config after both workers have started and written
+        # their common config file. The other user's workspace must not appear.
+        for runtime in runtimes:
+            response = await runtime.rpc("config/read", {"includeLayers": False})
+            filesystem = response["config"]["permissions"][READ_ONLY_PROFILE]["filesystem"]
+            paths = {key: value for key, value in filesystem.items() if key.startswith("/")}
+            assert paths == {str(runtime.workspace_root): "read"}
+    finally:
+        for runtime in runtimes:
+            await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_native_codex_accepts_restricted_turn_permissions(tmp_path):
     binary = os.getenv("NATIVE_CODEX_BINARY") or shutil.which("codex")
     if not binary:

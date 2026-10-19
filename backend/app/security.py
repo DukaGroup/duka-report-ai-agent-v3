@@ -70,6 +70,13 @@ def admin_user(request: Request):
     return user
 
 
+def member_administrator(request: Request):
+    user = current_user(request)
+    if user["role"] not in ("devs", "president"):
+        raise HTTPException(403, "Devs or President access is required to manage members.")
+    return user
+
+
 class LoginLimiter:
     def __init__(self):
         self.attempts = defaultdict(deque)

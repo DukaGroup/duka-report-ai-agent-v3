@@ -3,7 +3,10 @@ import type { Message, Report } from "./types";
 // Streams continue when the user opens a different conversation. Their output
 // stays keyed by the originating conversation rather than the current page.
 export class ConversationRuns {
-  private runs = new Map<string, { messages: Message[]; activity: string }>();
+  private runs = new Map<
+    string,
+    { messages: Message[]; activity: string; token: symbol }
+  >();
   get size() {
     return this.runs.size;
   }
@@ -16,22 +19,44 @@ export class ConversationRuns {
   activity(id: string | null) {
     return id ? this.runs.get(id)?.activity || "" : "";
   }
-  start(id: string, messages: Message[]) {
-    if (this.runs.has(id))
+  start(id: string, messages: Message[], replace = false) {
+    if (this.runs.has(id) && !replace)
       throw new Error("A response is already running in this conversation.");
-    this.runs.set(id, { messages, activity: "Duke menduar" });
+    const token = Symbol(id);
+    this.runs.set(id, { messages, activity: "Duke menduar", token });
+    return token;
   }
-  update(id: string, content: string, status: string, activity?: string) {
+  isCurrent(id: string, token: symbol) {
+    return this.runs.get(id)?.token === token;
+  }
+  token(id: string) {
+    return this.runs.get(id)?.token;
+  }
+  identifyUser(id: string, messageId: string, token?: symbol) {
     const run = this.runs.get(id);
-    if (!run) return;
+    if (!run || (token && run.token !== token)) return;
+    const lastUser = run.messages.map((m) => m.role).lastIndexOf("user");
+    run.messages = run.messages.map((m, i) =>
+      i === lastUser ? { ...m, id: messageId } : m,
+    );
+  }
+  update(
+    id: string,
+    content: string,
+    status: string,
+    activity?: string,
+    token?: symbol,
+  ) {
+    const run = this.runs.get(id);
+    if (!run || (token && run.token !== token)) return;
     if (activity) run.activity = activity;
     run.messages = run.messages.map((m) =>
       m.id === "streaming" ? { ...m, content, status } : m,
     );
     return run.messages;
   }
-  finish(id: string) {
-    this.runs.delete(id);
+  finish(id: string, token?: symbol) {
+    if (!token || this.isCurrent(id, token)) this.runs.delete(id);
   }
 }
 
@@ -74,4 +99,13 @@ export function messagesBeforeRestart(
   );
   if (index < 0) throw new Error("Mesazhi nuk u gjet në këtë bisedë.");
   return messages.slice(0, index);
+}
+
+/** Retire the previous placeholder before another stream takes its place. */
+export function messagesBeforeNextTurn(messages: Message[]): Message[] {
+  return messages.map((m) => ({
+    ...m,
+    id: m.id === "streaming" ? `previous-${crypto.randomUUID()}` : m.id,
+    status: m.status === "streaming" ? "interrupted" : m.status,
+  }));
 }

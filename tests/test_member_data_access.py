@@ -273,7 +273,7 @@ def test_president_and_devs_have_all_database_company_access_without_grants(clie
     assert [s["id"] for s in client.app.state.connectors.accessible_sources(member["id"])] == [source["id"]]
     assert read(client, member, source, query(table="Beta$Sales"), database="Archive")["rows"] == [{"total": 9000}]
     sign_in_member(client)
-    assert client.get("/api/admin/users").status_code == (200 if role == "devs" else 403)
+    assert client.get("/api/admin/users").status_code == 200
 
 
 def test_grant_validation_rejects_unknown_choices_and_does_not_create_partial_user(client, admin, database):
@@ -373,11 +373,11 @@ def test_both_provider_report_tools_export_only_granted_companies(client, admin,
     source, _ = database
     alpha = next(u for u in catalog(client, database) if u["kind"] == "table_prefix" and u["prefix"] == "Alpha$")
     member = create_scoped(client, source, [alpha])
-    sign_in_member(client)
     subscribe(client)
     if provider == "claude":
         connect_claude(client)
         choose(client, provider)
+    sign_in_member(client)
     result = call_tool(
         client,
         member,

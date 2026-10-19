@@ -87,7 +87,7 @@ class ClaudeRuntime:
 
     async def require_account(self):
         if not (await self.account())["connected"]:
-            raise ProviderError("Connect your Claude subscription before sending a message.")
+            raise ProviderError("Connect your Claude subscription before sending a message.", category="auth")
 
     async def begin_login(self):
         async with self.login_lock:
@@ -188,9 +188,18 @@ class ClaudeRuntime:
                 info = await client.get_server_info()
             self.model_catalog = [{"id": "claude:" + model["value"], "model": "claude:" + model["value"],
                      "displayName": model.get("displayName") or model["value"], "isDefault": index == 0,
+                     "description": model.get("description", ""),
+                     "resolved_model": 'claude:' + model['resolvedModel'] if model.get('resolvedModel') else None,
                      "supported_reasoning_efforts": model.get("supportedEffortLevels", []) if model.get("supportsEffort") else [],
                      "default_reasoning_effort": None}
                     for index, model in enumerate((info or {}).get("models", []))]
+            # Native CLI catalogs usually advertise aliases (default/opus), not
+            # version IDs. Add the verified resolved target so handoff can pin
+            # Opus 5.5 and the same ID stays selectable/valid after reopening.
+            target = 'claude:claude-opus-5-5'
+            resolved = next((m for m in self.model_catalog if m.get('resolved_model') == target), None)
+            if resolved and not any(m['model'] == target for m in self.model_catalog):
+                self.model_catalog.append({**resolved, 'id': target, 'model': target, 'displayName': 'Claude Opus 5.5', 'isDefault': False})
             if not self.model_catalog:
                 raise ProviderError("Claude returned no available models. Check your subscription connection.")
             return self.model_catalog
@@ -234,6 +243,7 @@ class ClaudeRuntime:
 
     async def _stream(self, thread_id, content, model=None, output_schema=None, reasoning_effort=None):
         from claude_agent_sdk import ClaudeSDKClient, AssistantMessage, TextBlock, ToolUseBlock, StreamEvent, ResultMessage
+        from claude_agent_sdk.types import RateLimitEvent
         if thread_id in self.active_turns:
             raise ProviderError("A response is already running in this conversation.")
         session = thread_id.removeprefix("claude:")
@@ -248,11 +258,15 @@ class ClaudeRuntime:
                                **({"resume": session} if persisted else {"session_id": session}))
         fragments, partial = [], False
         try:
-            async with ClaudeSDKClient(options) as client:
-                self.clients[thread_id] = client
+            client = ClaudeSDKClient(options)
+            # Include initialization in the stop path, before __aenter__ awaits.
+            self.clients[thread_id] = client
+            async with client:
                 await client.query(content)
                 yield {"type": "started", "turn_id": turn}
                 async for message in client.receive_response():
+                    if isinstance(message, RateLimitEvent) and message.rate_limit_info.status == "rejected":
+                        raise ProviderError("Claude subscription usage limit reached.", category="quota", reset_at=message.rate_limit_info.resets_at)
                     if isinstance(message, StreamEvent):
                         delta = message.event.get("delta", {})
                         if delta.get("type") == "text_delta":
@@ -260,6 +274,10 @@ class ClaudeRuntime:
                             fragments.append(delta["text"])
                             yield {"type": "delta", "text": delta["text"]}
                     elif isinstance(message, AssistantMessage):
+                        if message.error:
+                            from .provider import native_error
+                            error_text = ' '.join(block.text for block in message.content if isinstance(block, TextBlock))
+                            raise native_error({"error": message.error, "message": error_text or "Claude subscription: " + message.error})
                         for block in message.content:
                             if isinstance(block, ToolUseBlock):
                                 yield {"type": "tool", "name": block.name.removeprefix("mcp__duka_reporting__")}
@@ -268,7 +286,9 @@ class ClaudeRuntime:
                                 yield {"type": "delta", "text": block.text}
                     elif isinstance(message, ResultMessage):
                         if message.is_error:
-                            raise ProviderError("Claude could not complete this response. Check your subscription limits and retry.")
+                            from .provider import native_error
+                            raise native_error({"subtype": message.subtype, "message": message.result or "Claude could not complete this response.",
+                                                "error": "rate_limit" if message.api_error_status == 429 else "authentication_failed" if message.api_error_status == 401 else ""})
                         text = json.dumps(message.structured_output, ensure_ascii=False) if message.structured_output is not None else message.result or "".join(fragments)
                         self.sessions.add(thread_id)
                         status = "interrupted" if message.terminal_reason in ("aborted_streaming", "aborted_tools") else "completed"
@@ -279,6 +299,12 @@ class ClaudeRuntime:
             raise
         except Exception as exc:
             # SDK/CLI exceptions can contain auth material; never expose them.
+            from claude_agent_sdk import ProcessError
+            if isinstance(exc, ProcessError):
+                from .provider import native_error
+                error = native_error({'message': str(exc)})
+                if error.category in ('quota', 'auth'):
+                    raise ProviderError('Claude subscription is unavailable.', category=error.category) from exc
             raise ProviderError("Claude connection failed. Check your subscription connection and try again.") from exc
         finally:
             self.clients.pop(thread_id, None)
@@ -288,6 +314,14 @@ class ClaudeRuntime:
         client = self.clients.get(thread_id)
         if client:
             await client.interrupt()
+
+    def request_stop(self):
+        from .process_stop import request_process_stop
+        for client in list(self.clients.values()):
+            # Pinned SDK 0.2.168 owns this subprocess. Only signal it here;
+            # SDK connect/receive/disconnect still unwind in their owning task.
+            transport = getattr(client, "_transport", None)
+            request_process_stop(getattr(transport, "_process", None))
 
     async def close(self):
         await self.cancel_login()

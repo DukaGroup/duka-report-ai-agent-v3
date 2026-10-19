@@ -19,6 +19,7 @@ from .reports import csv_snapshot, generate_report, markdown_report, save_excel
 from .report_exports import public_snapshot
 from .schemas import (
     ChatMessage,
+    ChatStop,
     CreateUser,
     Credentials,
     NewConversation,
@@ -35,6 +36,7 @@ from .security import (
     COOKIE,
     LoginLimiter,
     admin_user,
+    member_administrator,
     create_session,
     current_user,
     hash_password,
@@ -52,6 +54,7 @@ from .reasoning import saved_effort, validate_effort
 from .chat_jobs import ChatJobs
 from .accounts import register_accounts
 from .branches import register_branches
+from .subscriptions import register_subscriptions
 
 
 def create_app(settings=None, manager_factory=SubscriptionManager):
@@ -78,6 +81,10 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.voice = VoiceService(settings)
         app.state.limiter = LoginLimiter()
         app.state.locks = {}
+        # Short mutations serialize acceptance, replacement, uploads and deletion.
+        # The separate response lock remains held throughout native inference.
+        app.state.conversation_mutations = {}
+        app.state.pending_chat_submissions = {}
         app.state.jobs = set()
         app.state.report_jobs = {}
         app.state.manager.report_threads = {}
@@ -105,6 +112,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     app.add_middleware(TrafficMiddleware)
     register_accounts(app, settings)
     register_branches(app)
+    register_subscriptions(app)
 
     @app.middleware("http")
     async def boundaries(request, call_next):
@@ -199,50 +207,73 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         manager = request.app.state.manager
         provider = provider or manager.selected_provider(user["id"])
         try:
-            result = await manager.for_user(user["id"], provider).account()
-            return {**result, "available": True, "provider": provider + "-subscription", "provider_id": provider}
+            try:
+                result = await manager.for_user(user["id"], provider).account()
+            except ProviderError as exc:
+                if exc.category not in ('auth', 'quota'):
+                    raise
+                result = {'connected': False, 'account': None, 'login': None}
+            connected = await manager.pool.available_control(provider, same_provider_only=True)
+            available = connected or await manager.pool.available_control(provider)
+            result['connected'] = bool(result['connected'] or connected is not None)
+            result['can_respond'] = available is not None
+            result['active_provider'] = available.provider if available else provider
+            if provider in manager.provider_changes or (result.get('login') and result['login'].get('status') == 'pending'):
+                result['connected'] = False
+            if user['role'] != 'devs':
+                result = {"connected": result['connected'], "can_respond": result['can_respond'], "active_provider": result['active_provider'], "account": None, "login": None}
+            return {**result, "shared": True, "available": True, "provider": provider + "-subscription", "provider_id": provider}
         except ProviderError as exc:
             return {"connected": False, "available": False, "error": str(exc), "provider": provider + "-subscription", "provider_id": provider}
 
     @app.post("/api/subscription/select")
-    async def select_provider(body: ProviderChoice, request: Request, user=Depends(current_user)):
-        request.app.state.db.execute("INSERT INTO model_preferences(user_id,provider) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider", (user["id"], body.provider))
+    async def select_provider(body: ProviderChoice, request: Request, user=Depends(admin_user)):
+        request.app.state.db.execute("INSERT INTO workspace_model_preferences(id,provider) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET provider=excluded.provider", (body.provider,))
         request.app.state.db.audit(user["id"], "subscription.provider_selected", body.provider)
         return {"provider": body.provider}
 
     @app.post("/api/subscription/login")
-    async def subscription_login(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(current_user)):
+    async def subscription_login(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(admin_user)):
         provider = provider or request.app.state.manager.selected_provider(user["id"])
-        result = await request.app.state.manager.for_user(user["id"], provider).begin_login()
+        manager = request.app.state.manager
+        async with manager.changing_provider(provider):
+            await manager.release_provider(provider)
+            manager.invalidate_provider_context(provider)
+            result = await manager.for_user(user["id"], provider).begin_login()
         request.app.state.db.audit(user["id"], "subscription.login_started", provider)
         return {**result, "provider": provider}
 
     @app.post("/api/subscription/login/code")
-    async def subscription_login_code(body: SubscriptionLoginCode, request: Request, user=Depends(current_user)):
+    async def subscription_login_code(body: SubscriptionLoginCode, request: Request, user=Depends(admin_user)):
         runtime = request.app.state.manager.for_user(user["id"], "claude")
         return await runtime.finish_login(body.login_id, body.code.get_secret_value())
 
     @app.post("/api/subscription/disconnect")
-    async def subscription_disconnect(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(current_user)):
+    async def subscription_disconnect(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(admin_user)):
         provider = provider or request.app.state.manager.selected_provider(user["id"])
-        runtime = request.app.state.manager.for_user(user["id"], provider)
-        if request.app.state.manager.has_active(user["id"]):
-            raise HTTPException(409, "Stop active responses before disconnecting.")
-        await runtime.logout()
-        # Clear only this provider's native histories on account changes.
-        condition = "model LIKE 'claude:%'" if provider == "claude" else "(model IS NULL OR model NOT LIKE 'claude:%')"
-        request.app.state.db.execute("UPDATE conversations SET provider_thread_id=NULL WHERE user_id=? AND " + condition, (user["id"],))
-        request.app.state.db.execute("DELETE FROM conversation_provider_threads WHERE provider=? AND conversation_id IN (SELECT id FROM conversations WHERE user_id=?)", (provider, user["id"]))
-        await request.app.state.manager.release(user["id"], provider)
+        manager = request.app.state.manager
+        async with manager.changing_provider(provider):
+            await manager.for_user(user['id'], provider).logout()
+            manager.invalidate_provider_context(provider)
+            await manager.release_provider(provider)
         request.app.state.db.audit(user["id"], "subscription.disconnected", provider)
         return {"ok": True}
 
     @app.get("/api/subscription/models")
-    async def models(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(current_user)):
-        return await request.app.state.manager.for_user(user["id"], provider).models()
+    async def models(request: Request, provider: Literal["chatgpt", "claude"] | None = None, all_providers: bool = False, user=Depends(current_user)):
+        manager = request.app.state.manager
+        if all_providers:
+            catalog = []
+            for name in ('chatgpt', 'claude'):
+                control = await manager.pool.available_control(name, same_provider_only=True, include_exhausted=True)
+                if control:
+                    catalog.extend(await control.models())
+            return catalog
+        runtime = await manager.pool.available_control(provider or manager.selected_provider(user['id']), include_exhausted=True)
+        return await runtime.models() if runtime else []
 
     @app.get("/api/subscription/usage")
-    async def usage(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(current_user)):
+    async def usage(request: Request, provider: Literal["chatgpt", "claude"] | None = None, user=Depends(admin_user)):
         runtime = request.app.state.manager.for_user(user["id"], provider)
         await runtime.require_account()
         if runtime.provider == "claude":
@@ -322,12 +353,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         conversation_id: str, request: Request, file: UploadFile = File(...), user=Depends(current_user)
     ):
         owned_conversation(request, conversation_id, user["id"])
-        lock = request.app.state.locks.setdefault(conversation_id, asyncio.Lock())
-        if lock.locked() or request.app.state.db.one(
-            "SELECT id FROM reports WHERE user_id=? AND conversation_id=? AND status IN ('queued','running')",
-            (user["id"], conversation_id),
-        ):
-            raise HTTPException(409, "Wait for this response to finish, or stop it first.")
+        lock = request.app.state.conversation_mutations.setdefault(conversation_id, asyncio.Lock())
         async with lock:
             owned_conversation(request, conversation_id, user["id"])
             return await request.app.state.attachments.upload(user["id"], conversation_id, file)
@@ -360,28 +386,64 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @app.delete("/api/conversations/{conversation_id}")
     async def delete_conversation(conversation_id: str, request: Request, user=Depends(current_user)):
         owned_conversation(request, conversation_id, user["id"])
-        lock = request.app.state.locks.setdefault(conversation_id, asyncio.Lock())
-        if lock.locked():
-            raise HTTPException(409, "Stop the current response before deleting this conversation.")
-        if request.app.state.db.one(
-            "SELECT id FROM reports WHERE user_id=? AND conversation_id=? AND status IN ('queued','running')",
-            (user["id"], conversation_id),
-        ):
-            raise HTTPException(409, "Stop the current report before deleting this conversation.")
-        async with lock:
-            request.app.state.db.delete_conversation(conversation_id, user["id"])
-            request.app.state.db.audit(user["id"], "conversation.deleted", conversation_id)
+        cancel_pending_submission(conversation_id, user)
+        mutation = request.app.state.conversation_mutations.setdefault(conversation_id, asyncio.Lock())
+        async with mutation:
+            await stop_conversation(conversation_id, request, user)
+            await request.app.state.manager.discard_worker(user["id"], "chat", conversation_id)
+            lock = request.app.state.locks.setdefault(conversation_id, asyncio.Lock())
+            async with lock:
+                request.app.state.db.delete_conversation(conversation_id, user["id"])
+                request.app.state.db.audit(user["id"], "conversation.deleted", conversation_id)
         return {"ok": True}
 
     @app.post("/api/conversations/{conversation_id}/messages")
     async def send_message(conversation_id: str, body: ChatMessage, request: Request, user=Depends(current_user)):
+        owned_conversation(request, conversation_id, user["id"])
+        mutation = request.app.state.conversation_mutations.setdefault(conversation_id, asyncio.Lock())
+        async with mutation:
+            pending = {"task": asyncio.current_task(), "user_id": user["id"], "request_id": body.request_id, "cancelled": False}
+            app.state.pending_chat_submissions[conversation_id] = pending
+            try:
+                return await accept_message(conversation_id, body, request, user)
+            except asyncio.CancelledError:
+                if pending["cancelled"]:
+                    raise HTTPException(410, "Kërkesa u ndërpre para se të fillonte.") from None
+                raise
+            finally:
+                if app.state.pending_chat_submissions.get(conversation_id) is pending:
+                    app.state.pending_chat_submissions.pop(conversation_id, None)
+
+    async def accept_message(conversation_id, body, request, user):
         row = owned_conversation(request, conversation_id, user["id"])
+        if body.request_id:
+            cancelled = app.state.db.one(
+                'SELECT conversation_id FROM chat_request_cancellations WHERE user_id=? AND request_key=?',
+                (user['id'], body.request_id),
+            )
+            if cancelled:
+                raise HTTPException(410, "Kërkesa u ndërpre para se të fillonte.")
         if body.request_id:
             accepted = app.state.db.one('SELECT run_id,conversation_id FROM chat_request_keys WHERE user_id=? AND request_key=?', (user['id'], body.request_id))
             if accepted and accepted['conversation_id'] != conversation_id:
                 raise HTTPException(422, 'This request key belongs to another conversation.')
             if accepted:
                 return StreamingResponse(app.state.chat_jobs.events(accepted['run_id']), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
+        selected_model = request.app.state.manager.model_for_user(user["id"], body.model or row["model"])
+        selected_provider = request.app.state.manager.model_provider(selected_model)
+        runtime = await request.app.state.manager.pool.available_control(selected_provider)
+        effort = body.reasoning_effort if "reasoning_effort" in body.model_fields_set else saved_effort(request.app.state.db, conversation_id)
+        if runtime and runtime.provider == selected_provider:
+            await validate_effort(runtime, selected_model, effort)
+        # Invalid replacements must not stop valid work already in progress.
+        request.app.state.attachments.message_files(user["id"], conversation_id, body.attachment_ids)
+        if body.retry_message_id and not request.app.state.db.one(
+            "SELECT id FROM messages WHERE id=? AND conversation_id=? AND role='user'",
+            (body.retry_message_id, conversation_id),
+        ):
+            raise HTTPException(404, "Message not found in this conversation.")
+        if body.interrupt_current:
+            await stop_conversation(conversation_id, request, user)
         if request.app.state.db.one("SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')", (conversation_id,)):
             raise HTTPException(409, "Wait for this response to finish, or stop it first.")
         if request.app.state.db.one(
@@ -389,12 +451,6 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             (user["id"], conversation_id),
         ):
             raise HTTPException(409, "Wait for your report to finish, or interrupt it first.")
-        selected_model = request.app.state.manager.model_for_user(user["id"], body.model or row["model"])
-        selected_provider = request.app.state.manager.model_provider(selected_model)
-        runtime = request.app.state.manager.for_user(user["id"], selected_provider)
-        await runtime.require_account()
-        effort = body.reasoning_effort if "reasoning_effort" in body.model_fields_set else saved_effort(request.app.state.db, conversation_id)
-        await validate_effort(runtime, selected_model, effort)
         lock = request.app.state.locks.setdefault(conversation_id, asyncio.Lock())
         if lock.locked():
             raise HTTPException(409, "Wait for this response to finish, or stop it first.")
@@ -433,6 +489,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             runtime = await manager.acquire_worker(user["id"], "chat", conversation_id, model)
             worker_acquired = True
             thread_id = await runtime.thread(None if retry_user else native_thread, model)
+            selected_provider = runtime.provider
             # Local history is replayed if the provider thread was cleared at disconnect.
             content = body.content
             previous_files = request.app.state.attachments.sent_files(user["id"], conversation_id, body.retry_message_id)
@@ -482,6 +539,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                     c.execute("INSERT INTO message_attachments VALUES(?,?)", (user_message_id, identifier))
                 c.execute("INSERT INTO messages VALUES(?,?,?,?,?,?)", (assistant_id, conversation_id, "assistant", "", "streaming", now()))
                 app.state.chat_jobs.enqueue(c, assistant_id, conversation_id, user['id'], {
+                    'user_message_id': user_message_id,
                     'thread': thread_id, 'content': content, 'wrapped': content != body.content,
                     'model': model, 'effort': effort,
                 })
@@ -496,44 +554,92 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.chat_jobs.start(assistant_id, runtime, lock)
         return StreamingResponse(app.state.chat_jobs.events(assistant_id), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
+    def cancel_pending_submission(conversation_id, user):
+        # Stop also covers discovery/authentication before a chat is accepted.
+        pending = app.state.pending_chat_submissions.get(conversation_id)
+        if pending and pending['user_id'] == user['id'] and not pending['cancelled']:
+            pending['cancelled'] = True
+            if pending['request_id']:
+                app.state.db.execute('INSERT OR IGNORE INTO chat_request_cancellations VALUES(?,?,?)',
+                                     (user['id'], pending['request_id'], conversation_id))
+            pending['task'].cancel()
+            runtime = app.state.manager.workers.get((user['id'], 'chat', conversation_id))
+            if runtime:
+                runtime.request_stop()
+        return pending
+
     @app.post("/api/conversations/{conversation_id}/stop")
-    async def stop_message(conversation_id: str, request: Request, user=Depends(current_user)):
+    async def stop_message(conversation_id: str, request: Request, user=Depends(current_user), body: ChatStop | None = None):
+        owned_conversation(request, conversation_id, user["id"])
+        cancelled_before_start = False
+        if body and body.request_id:
+            accepted = app.state.db.one('SELECT conversation_id FROM chat_request_keys WHERE user_id=? AND request_key=?',
+                                        (user['id'], body.request_id))
+            cancelled = app.state.db.one('SELECT conversation_id FROM chat_request_cancellations WHERE user_id=? AND request_key=?',
+                                         (user['id'], body.request_id))
+            if (accepted or cancelled) and (accepted or cancelled)['conversation_id'] != conversation_id:
+                raise HTTPException(422, 'This request key belongs to another conversation.')
+            if not accepted:
+                # A Stop can overtake the message POST on a different HTTP
+                # connection. Persist its key so that late POST cannot start.
+                app.state.db.execute('INSERT OR IGNORE INTO chat_request_cancellations VALUES(?,?,?)',
+                                     (user['id'], body.request_id, conversation_id))
+                cancelled_before_start = True
+        pending = cancel_pending_submission(conversation_id, user)
+        mutation = request.app.state.conversation_mutations.setdefault(conversation_id, asyncio.Lock())
+        async with mutation:
+            await stop_conversation(conversation_id, request, user)
+            if pending:
+                await app.state.manager.discard_worker(user['id'], 'chat', conversation_id)
+            message = request.app.state.db.one(
+                "SELECT id,content,status FROM messages WHERE conversation_id=? AND role='assistant' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                (conversation_id,),
+            )
+            reports = request.app.state.db.all(
+                "SELECT id FROM reports WHERE user_id=? AND conversation_id=? AND stage='interrupted'",
+                (user["id"], conversation_id),
+            )
+        user_message = request.app.state.db.one(
+            "SELECT id FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            (conversation_id,),
+        )
+        return {"ok": True, "message": message, "user_message_id": user_message['id'] if user_message else None,
+                "cancelled_before_start": bool(pending) or cancelled_before_start,
+                "interrupted_report_ids": [r["id"] for r in reports]}
+
+    async def stop_conversation(conversation_id, request, user):
         row = owned_conversation(request, conversation_id, user["id"])
-        if row["provider_thread_id"]:
+        active = request.app.state.db.one(
+            "SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')",
+            (conversation_id,),
+        )
+        if active and row["provider_thread_id"]:
             runtime = request.app.state.manager.workers.get((user["id"], "chat", conversation_id))
             turn = runtime.active_turns.get(row["provider_thread_id"]) if runtime else None
             if turn:
                 request.app.state.manager.cancelled_report_turns.add((user["id"], row["provider_thread_id"], turn))
+        # Cancel independent jobs together. Neither provider's network interrupt
+        # acknowledgement is needed to stop an owned, isolated native process.
+        await asyncio.gather(
+            app.state.chat_jobs.stop(conversation_id),
+            stop_reports(user["id"], conversation_id=conversation_id),
+        )
+        if active:
+            await request.app.state.manager.discard_worker(user["id"], "chat", conversation_id)
             await stop_reports(user["id"], conversation_id=conversation_id)
-            try:
-                await request.app.state.manager.interrupt_worker(
-                    user["id"], "chat", conversation_id, row["provider_thread_id"]
-                )
-            except ProviderError:
-                pass
-        await stop_reports(user["id"], conversation_id=conversation_id)
-        await app.state.chat_jobs.stop(conversation_id)
-        return {"ok": True}
 
     async def stop_reports(user_id, identifier=None, conversation_id=None):
         state = app.state
         reports = state.db.all(
             "SELECT id,conversation_id FROM reports WHERE user_id=? AND status IN ('queued','running')", (user_id,)
         )
-        for report in reports:
-            if conversation_id is not None and report["conversation_id"] != conversation_id:
-                continue
-            if identifier and report["id"] != identifier:
-                continue
-            thread_id = state.manager.report_threads.get(report["id"])
+        async def stop_one(report):
             task = state.report_jobs.get(report["id"])
             if task:
                 task.cancel()
-            if thread_id:
-                try:
-                    await state.manager.interrupt_worker(user_id, "report", report["id"], thread_id)
-                except ProviderError:
-                    pass
+            runtime = state.manager.workers.get((user_id, "report", report["id"]))
+            if runtime:
+                runtime.request_stop()
             if task:
                 await asyncio.gather(task, return_exceptions=True)
             # Also covers cancellation before the coroutine gets its first scheduling turn.
@@ -541,6 +647,11 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 "UPDATE reports SET status='failed',stage='interrupted',error=?,completed_at=? WHERE id=? AND status IN ('queued','running')",
                 ("Report generation was interrupted by the user.", now(), report["id"]),
             )
+        await asyncio.gather(*(
+            stop_one(report) for report in reports
+            if (conversation_id is None or report["conversation_id"] == conversation_id)
+            and (not identifier or report["id"] == identifier)
+        ))
 
     @app.post("/api/reports/{identifier}/stop")
     async def stop_report(identifier: str, request: Request, user=Depends(current_user)):
@@ -667,7 +778,9 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 raise HTTPException(404, "Conversation not found.")
         if "reasoning_effort" not in body.model_fields_set:
             body.reasoning_effort = saved_effort(db, body.conversation_id)
-        await validate_effort(state.manager.for_user(user_id, state.manager.model_provider(body.model)), body.model, body.reasoning_effort)
+        control = await state.manager.pool.available_control(state.manager.model_provider(body.model))
+        if control and control.provider == state.manager.model_provider(body.model):
+            await validate_effort(control, body.model, body.reasoning_effort)
         if sum((body.rows is not None, bool(body.dataset_id), bool(body.source_id), bool(body.attachment_id), bool(body.calculation_id))) > 1:
             raise HTTPException(422, "Choose one data source: database query, dataset, or manual rows.")
         if body.balance_reconciliation is not None:
@@ -806,6 +919,10 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         serialized = await asyncio.to_thread(json.dumps, rows or [], allow_nan=False, ensure_ascii=False, separators=(",", ":"))
         if (user_id, origin_thread, origin_turn) in state.manager.cancelled_report_turns:
             raise HTTPException(409, "Report generation was interrupted by the user.")
+        if body.conversation_id and not db.one(
+            "SELECT id FROM conversations WHERE id=? AND user_id=?", (body.conversation_id, user_id)
+        ):
+            raise HTTPException(404, "Conversation not found.")
         provenance.setdefault("analysis", body.analysis.model_dump())
         if not provenance.get("columns") and rows:
             fields = list(dict.fromkeys(k for row in rows for k in row))
@@ -846,7 +963,6 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             )
         identifier, snapshot_id = uid(), None
         if not error:
-            await state.manager.for_user(user["id"], state.manager.model_provider(body.model)).require_account()
             in_flight = db.one(
                 "SELECT count(*) AS count FROM reports WHERE user_id=? AND conversation_id IS ? AND status IN ('queued','running')",
                 (user["id"], body.conversation_id),
@@ -1014,11 +1130,11 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return resolved,legacy
 
     @app.get('/api/admin/access-catalog')
-    async def access_catalog(user=Depends(admin_user)):
+    async def access_catalog(user=Depends(member_administrator)):
         return await app.state.connectors.database_inventory(user['id'])
 
     @app.get('/api/admin/access-catalog/{source_id}/companies')
-    async def access_companies(source_id: str, database: str = Query(min_length=1,max_length=128), user=Depends(admin_user)):
+    async def access_companies(source_id: str, database: str = Query(min_length=1,max_length=128), user=Depends(member_administrator)):
         from .data_access import discover_companies
         registry = app.state.connectors
         try:
@@ -1049,12 +1165,14 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return DataAccess(app.state.db).saved(identifier)
 
     @app.get("/api/admin/users")
-    async def users(request: Request, user=Depends(admin_user)):
-        return [public_user(row) for row in request.app.state.db.all("SELECT * FROM users ORDER BY created_at")]
+    async def users(request: Request, user=Depends(member_administrator)):
+        return [public_user(row) for row in request.app.state.db.all("SELECT * FROM users WHERE id NOT IN (SELECT user_id FROM removed_members) ORDER BY created_at")]
 
     @app.post("/api/admin/users", status_code=201)
-    async def add_user(body: CreateUser, request: Request, user=Depends(admin_user)):
+    async def add_user(body: CreateUser, request: Request, user=Depends(member_administrator)):
         from .data_access import DataAccess
+        if user['role'] != 'devs' and body.role == 'devs':
+            raise HTTPException(403, 'Only Devs can create Devs accounts.')
         selections,legacy = await validated_access(user['id'],body.database_access or MemberDataAccess())
         identifier = uid()
         try:
@@ -1066,6 +1184,33 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         request.app.state.db.audit(user["id"], "user.created", identifier)
         return public_user(request.app.state.db.one("SELECT * FROM users WHERE id=?", (identifier,)))
 
+    @app.delete("/api/admin/users/{identifier}")
+    async def remove_user(identifier: str, request: Request, user=Depends(member_administrator)):
+        from .accounts import revoke_work
+        from .data_access import DataAccess
+        db = request.app.state.db
+        with db.connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            target = c.execute('SELECT * FROM users WHERE id=?', (identifier,)).fetchone()
+            if not target:
+                raise HTTPException(404, 'User not found.')
+            if identifier == user['id']:
+                raise HTTPException(422, 'You cannot remove your own account.')
+            if user['role'] != 'devs' and target['role'] == 'devs':
+                raise HTTPException(403, 'Only Devs can remove Devs accounts.')
+            if target['role'] == 'devs' and target['active']:
+                if c.execute("SELECT count(*) FROM users WHERE role='devs' AND active=1").fetchone()[0] <= 1:
+                    raise HTTPException(422, 'Keep at least one active Devs account.')
+            # Remove membership without erasing business records or saved grants.
+            c.execute('UPDATE users SET active=0 WHERE id=?', (identifier,))
+            c.execute('INSERT OR IGNORE INTO removed_members VALUES(?,?,?)', (identifier, now(), user['id']))
+            c.execute('DELETE FROM sessions WHERE user_id=?', (identifier,))
+            c.execute('DELETE FROM password_resets WHERE user_id=?', (identifier,))
+            DataAccess.bump(c, identifier)
+        await revoke_work(app.state, identifier)
+        db.audit(user['id'], 'user.removed', identifier)
+        return {'ok': True}
+
     @app.patch("/api/admin/users/{identifier}")
     async def update_user(identifier: str, body: UpdateAccount, request: Request, user=Depends(admin_user)):
         db = request.app.state.db
@@ -1075,6 +1220,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             target = c.execute("SELECT * FROM users WHERE id=?", (identifier,)).fetchone()
             if not target:
                 raise HTTPException(404, "User not found.")
+            if c.execute('SELECT 1 FROM removed_members WHERE user_id=?', (identifier,)).fetchone():
+                raise HTTPException(409, 'This member has been removed.')
             active = int(body.active) if body.active is not None else target["active"]
             role = body.role or target["role"]
             if identifier == user["id"] and (not active or role != "devs"):

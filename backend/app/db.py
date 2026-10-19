@@ -63,6 +63,9 @@ class Database:
         with self.connect() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript((Path(__file__).parent / "schema.sql").read_text())
+            c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(13,?)', (now(),))
+            c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(12,?)', (now(),))
+            c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(11,?)', (now(),))
             traffic_columns = {row[1] for row in c.execute('PRAGMA table_info(traffic_events)')}
             if 'payload_json' not in traffic_columns:
                 c.execute('ALTER TABLE traffic_events ADD COLUMN payload_json TEXT')
@@ -152,6 +155,10 @@ class Database:
         # Saved reports keep their snapshots and exports in the Reports library.
         c.execute("UPDATE reports SET conversation_id=NULL WHERE conversation_id=? AND created_at>=?", (conversation_id, target["created_at"]))
         c.executemany("INSERT INTO archived_calculations VALUES(?,?)", [(identifier, branch_id) for identifier in calculations])
+        # Evidence from the discarded future must not enter a new investigation.
+        # Retain it as archived audit data, inaccessible to active model tools.
+        for table in ('model_tool_journal', 'model_checkpoints'):
+            c.execute(f"UPDATE {table} SET scope_id=? WHERE kind='chat' AND scope_id=?", ('archived:' + branch_id, conversation_id))
         return branch_id
 
     def delete_conversation(self, conversation_id, user_id):
@@ -162,6 +169,8 @@ class Database:
             ).fetchone():
                 return False
             c.execute("UPDATE reports SET conversation_id=NULL WHERE conversation_id=?", (conversation_id,))
+            for table in ('model_tool_journal', 'model_checkpoints'):
+                c.execute(f"DELETE FROM {table} WHERE user_id=? AND kind='chat' AND (scope_id=? OR scope_id IN (SELECT 'archived:'||id FROM conversation_branches WHERE conversation_id=?))", (user_id, conversation_id, conversation_id))
             c.execute("DELETE FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id))
             return True
 

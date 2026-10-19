@@ -69,7 +69,12 @@ class NewConversation(InputModel):
     model: str | None = Field(default=None, max_length=100)
 
 
+class ChatStop(InputModel):
+    request_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class ChatMessage(InputModel):
+    interrupt_current: bool = False
     request_id: str | None = Field(default=None, min_length=1, max_length=100)
     reasoning_effort: ReasoningEffort | None = None
     retry_message_id: str | None = Field(default=None, min_length=1, max_length=100)

@@ -58,11 +58,12 @@ def test_member_cannot_manage_workspace_or_read_other_users(client, admin):
     assert client.get("/api/auth/status").json()["user"]["id"] == member["id"]
 
 
-def test_subscription_stream_and_account_isolation(client, admin):
+def test_shared_subscription_stream_and_conversation_isolation(client, admin):
     member = create_member(client)
     conversation = client.post("/api/conversations", json={}, headers=HEADERS).json()
     path = f"/api/conversations/{conversation['id']}/messages"
-    assert client.post(path, json={"content": "Hello"}, headers=HEADERS).status_code == 409
+    missing = client.post(path, json={"content": "Hello"}, headers=HEADERS)
+    assert missing.status_code == 200 and '"type": "error"' in missing.text
     assert client.post("/api/subscription/login", headers=HEADERS).json()["userCode"] == "TEST-CODE"
     for _ in range(20):
         if client.get("/api/subscription").json()["connected"]:
@@ -75,11 +76,13 @@ def test_subscription_stream_and_account_isolation(client, admin):
     assert events[-1]["status"] == "completed"
     assert "WRONG" not in response.text
     detail = client.get(f"/api/conversations/{conversation['id']}").json()
-    assert detail["messages"][1]["content"] == "Protocol fixture reply."
-    assert detail["messages"][1]["status"] == "completed"
-    # Another user never inherits the logged-in user's ChatGPT runtime.
+    assert detail["messages"][-1]["content"] == "Recovered context: Hello"
+    assert detail["messages"][-1]["status"] == "completed"
+    # Members use the workspace subscription without inheriting another user's chats.
     sign_in_member(client)
-    assert client.get("/api/subscription").json()["connected"] is False
+    assert client.get("/api/subscription").json()["connected"] is True
+    assert client.get("/api/subscription").json()["account"] is None
+    assert client.get(f"/api/conversations/{conversation['id']}").status_code == 404
     assert (client.app.state.settings.data_dir / "codex" / admin["id"] / "fixture-account.json").exists()
     assert not (client.app.state.settings.data_dir / "codex" / member["id"] / "fixture-account.json").exists()
 

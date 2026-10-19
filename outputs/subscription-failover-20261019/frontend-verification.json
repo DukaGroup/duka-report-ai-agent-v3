@@ -1,0 +1,67 @@
+{
+  "workspace": "isolated synthetic subscriptions, port 8083",
+  "real_subscriptions_used": false,
+  "reopened_native_thread_unchanged": true,
+  "conversations": [
+    {
+      "id": "b805b54f-c8ee-4d43-a9ee-a3e8f641e3ea",
+      "title": "Frontend failover test A: use SAP 400 only; include August 2",
+      "model": "fixture",
+      "provider_thread_id": "thread-245937-0",
+      "label": "ChatGPT 3 \u2014 Test"
+    },
+    {
+      "id": "e05e05ef-2599-4b46-bbd5-97fc4f1818ae",
+      "title": "Frontend failover test B: preserve all exclusions from this ",
+      "model": "fixture",
+      "provider_thread_id": "thread-248324-0",
+      "label": "ChatGPT 3 \u2014 Test"
+    },
+    {
+      "id": "5a7b4ade-9f76-4f6a-9483-2bd911e1c0bc",
+      "title": "All subscriptions exhausted frontend test: finish with a sav",
+      "model": "fixture",
+      "provider_thread_id": "thread-248625-0",
+      "label": "ChatGPT 3 \u2014 Test"
+    },
+    {
+      "id": "ac2ebeb3-e259-4704-8618-583726d6c2a9",
+      "title": "Final exhausted-subscriptions test: return only a clear save",
+      "model": "fixture",
+      "provider_thread_id": "thread-252861-0",
+      "label": "ChatGPT 3 \u2014 Test"
+    },
+    {
+      "id": "16b4c98a-1088-4acd-9f55-7fec39162461",
+      "title": "Recovery test: start a new frontend conversation after resto",
+      "model": "fixture",
+      "provider_thread_id": "thread-263775-0",
+      "label": "ChatGPT 3 \u2014 Test"
+    }
+  ],
+  "checked_flows": [
+    "register 3 ChatGPT + 2 Claude accounts",
+    "ChatGPT same-provider fallback",
+    "ChatGPT to Claude Opus 5.5",
+    "Claude same-provider fallback",
+    "Claude to ChatGPT",
+    "all exhausted produces saved error",
+    "new chat works after recovery",
+    "reopening existing chat preserves native session",
+    "enable/disable account checkbox",
+    "atomic subscription priority reorder"
+  ],
+  "automated_checks": {
+    "backend_tests_passed": 341,
+    "optional_native_tests_skipped_in_full_suite": 2,
+    "separate_installed_codex_tests_passed": 2,
+    "frontend_tests_passed": 29,
+    "focused_failover_tests_passed": 20
+  },
+  "native_claude_catalog_observation": {
+    "subscription_authentication_used": false,
+    "inference_requested": false,
+    "alias": "opus",
+    "resolvedModel": "claude-opus-5-5"
+  }
+}

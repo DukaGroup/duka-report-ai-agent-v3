@@ -14,6 +14,7 @@ class ChatJobs:
         self.state = state
         self.db = state.db
         self.tasks = {}
+        self.pending_resources = {}
         self.closing = False
 
     def enqueue(self, connection, identifier, conversation, user, payload):
@@ -25,6 +26,7 @@ class ChatJobs:
     def start(self, identifier, runtime=None, lock=None):
         if identifier in self.tasks:
             return
+        self.pending_resources[identifier] = (runtime, lock)
         task = asyncio.create_task(self.run(identifier, runtime, lock))
         self.tasks[identifier] = task
         task.add_done_callback(lambda done: self.tasks.pop(identifier, None))
@@ -51,6 +53,7 @@ class ChatJobs:
                 c.execute("UPDATE chat_runs SET updated_at=? WHERE id=?", (now(), identifier))
 
     async def run(self, identifier, runtime=None, lock=None):
+        self.pending_resources.pop(identifier, None)
         row = self.db.one("SELECT * FROM chat_runs WHERE id=?", (identifier,))
         if not row or row["status"] not in ACTIVE:
             return
@@ -79,8 +82,8 @@ class ChatJobs:
                     await asyncio.gather(*pending, return_exceptions=True)
                 runtime = await self.state.manager.acquire_worker(user, "chat", cid, payload["model"])
                 acquired = True
-                await runtime.require_account()
                 thread = await runtime.thread(None, payload["model"])
+                runtime.pending_handoff = True
                 history = self.db.all(
                     "SELECT role,content FROM messages WHERE conversation_id=? AND id<>? AND status='completed' ORDER BY created_at,rowid",
                     (cid, identifier),
@@ -107,7 +110,7 @@ class ChatJobs:
                     },
                     ensure_ascii=False,
                 )
-                provider = self.state.manager.model_provider(payload["model"])
+                provider = runtime.provider
                 with self.db.connect() as c:
                     c.execute("UPDATE conversations SET provider_thread_id=? WHERE id=?", (thread, cid))
                     c.execute("DELETE FROM conversation_provider_threads WHERE conversation_id=?", (cid,))
@@ -119,7 +122,7 @@ class ChatJobs:
                 )
                 text = ""
                 self.record(identifier, {"type": "snapshot", "text": "", "activity": "recovering"}, text)
-            self.record(identifier, {"type": "message", "id": identifier})
+            self.record(identifier, {"type": "message", "id": identifier, "user_message_id": payload.get('user_message_id')})
             async for event in runtime.stream(
                 payload["thread"],
                 payload["content"],
@@ -128,6 +131,8 @@ class ChatJobs:
             ):
                 if event["type"] == "delta":
                     text += event["text"]
+                elif event["type"] == "snapshot":
+                    text = event.get("text", "")
                 elif event["type"] == "done":
                     status = "completed" if event["status"] == "completed" else "interrupted"
                     text = event.get("text") or text
@@ -146,7 +151,8 @@ class ChatJobs:
         except Exception as exc:
             status = "failed"
             message = str(exc) if isinstance(exc, ProviderError) else "The response could not finish. Please try again."
-            self.record(identifier, {"type": "error", "message": message}, text, status)
+            text = message
+            self.record(identifier, {"type": "error", "message": message, "text": message}, text, status)
         finally:
             if not self.closing:
                 self.db.execute("UPDATE messages SET content=?,status=? WHERE id=?", (text, status, identifier))
@@ -195,7 +201,11 @@ class ChatJobs:
             task = self.tasks.get(row["id"])
             if task:
                 task.cancel()
+            if runtime:
+                runtime.request_stop()
+            if task:
                 await asyncio.gather(task, return_exceptions=True)
+            await self.release_pending(row["id"], row["user_id"], conversation)
             job = self.db.one("SELECT status FROM chat_runs WHERE id=?", (row["id"],))
             if job and job["status"] in ACTIVE:
                 message = self.db.one("SELECT content FROM messages WHERE id=?", (row["id"],))
@@ -207,8 +217,22 @@ class ChatJobs:
                 )
                 self.db.execute("UPDATE chat_runs SET status='interrupted' WHERE id=?", (row["id"],))
 
+    async def release_pending(self, identifier, user, conversation):
+        # Cancelling a task before its first scheduling turn skips its finally.
+        resources = self.pending_resources.pop(identifier, None)
+        if resources:
+            runtime, lock = resources
+            if lock and lock.locked():
+                lock.release()
+            if runtime:
+                await self.state.manager.release_worker(user, "chat", conversation)
+
     async def close(self):
         self.closing = True
         for task in list(self.tasks.values()):
             task.cancel()
         await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
+        for identifier in list(self.pending_resources):
+            row = self.db.one("SELECT user_id,conversation_id FROM chat_runs WHERE id=?", (identifier,))
+            if row:
+                await self.release_pending(identifier, row["user_id"], row["conversation_id"])

@@ -1,0 +1,19 @@
+{
+  "http_status": 200,
+  "preserved_tables": [
+    "conversations",
+    "data_access_versions",
+    "database_grants",
+    "dataset_grants",
+    "foreign_key_errors",
+    "model_preferences",
+    "reports",
+    "source_access_policies",
+    "source_grants",
+    "users"
+  ],
+  "users": 3,
+  "foreign_key_errors": 0,
+  "env_unchanged": true,
+  "backup_validated": true
+}

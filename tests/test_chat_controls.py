@@ -146,7 +146,8 @@ def test_roles_keep_source_grants_and_do_not_grant_president_admin(client, admin
     assert client.patch(f"/api/admin/users/{admin['id']}", headers=HEADERS, json={'role': 'manager'}).status_code == 422
     sign_in_member(client)
     assert client.get('/api/auth/status').json()['user']['role'] == 'president'
-    assert client.get('/api/admin/users').status_code == 403
+    assert client.get('/api/admin/users').status_code == 200
+    assert client.get('/api/admin/overview').status_code == 403
     assert [s['id'] for s in client.get('/api/sources').json()] == [source['id']]
 
 

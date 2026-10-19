@@ -1,0 +1,23 @@
+{
+  "environment": "Synthetic companies, branch and dated sales records; real ChatGPT subscription and frontend. Original-style tool catalog compatibility path.",
+  "results": [
+    {
+      "date": "2026-10-19",
+      "branch": "M08",
+      "amount": "300",
+      "records": 2,
+      "other_branch_excluded": true
+    },
+    {
+      "date": "2026-10-18",
+      "branch": "M08",
+      "amount": "100",
+      "records": 2,
+      "other_branch_excluded": true
+    }
+  ],
+  "restricted_company_still_denied": true,
+  "unrelated_incomplete_catalog_did_not_block": true,
+  "scope_permission_and_qualifier_remained_separate": true,
+  "claude": "Acting-manager scope resolution tested through shared Claude tool handler; live Claude subscription not connected."
+}

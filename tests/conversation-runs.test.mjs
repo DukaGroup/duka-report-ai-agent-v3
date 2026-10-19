@@ -71,3 +71,43 @@ test('restart keeps only the prefix before any selected user message', async () 
   assert.throws(() => messagesBeforeRestart(messages,'a1'));
   assert.throws(() => messagesBeforeRestart(messages,'other-chat'));
 });
+
+test('late output and cleanup from a replaced or deleted run cannot change its successor', () => {
+  const runs = new ConversationRuns();
+  const old = runs.start('a', question('Original'));
+  const next = runs.start('a', question('Replacement'), true);
+  assert.equal(runs.isCurrent('a', old), false);
+  assert.equal(runs.update('a', 'Old late error', 'failed', undefined, old), undefined);
+  runs.finish('a', old);
+  assert.equal(runs.isCurrent('a', next), true);
+  assert.equal(runs.snapshot('a')[0].content, 'Replacement');
+  runs.update('a', 'New answer', 'completed', undefined, next);
+  assert.equal(runs.snapshot('a')[1].content, 'New answer');
+  runs.finish('a');
+  assert.equal(runs.update('a', 'Late text after delete', 'streaming', undefined, next), undefined);
+  assert.equal(runs.has('a'), false);
+});
+
+test('replacement keeps the interrupted partial answer separate from the next assistant placeholder', async () => {
+  const {messagesBeforeNextTurn} = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+  const previous = question('Original'); previous[1].content='Partial original';
+  const messages=[...messagesBeforeNextTurn(previous), ...question('Next')];
+  const runs=new ConversationRuns(); const token=runs.start('chat',messages);
+  runs.update('chat','New answer','streaming',undefined,token);
+  assert.equal(runs.snapshot('chat')[1].content,'Partial original');
+  assert.equal(runs.snapshot('chat')[1].status,'interrupted');
+  assert.notEqual(runs.snapshot('chat')[1].id,'streaming');
+  assert.equal(runs.snapshot('chat')[3].content,'New answer');
+});
+
+test('acceptance assigns the real user message ID before Stop so edit and resend remain valid', () => {
+  const runs=new ConversationRuns();
+  const old=runs.start('chat',question('Original'));
+  runs.identifyUser('chat','saved-user-id',old);
+  assert.equal(runs.snapshot('chat')[0].id,'saved-user-id');
+  const next=runs.start('chat',question('Next'),true);
+  runs.identifyUser('chat','late-old-id',old);
+  assert.equal(runs.snapshot('chat')[0].id,'user');
+  runs.identifyUser('chat','next-saved-id',next);
+  assert.equal(runs.snapshot('chat')[0].id,'next-saved-id');
+});

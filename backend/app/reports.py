@@ -6,6 +6,7 @@ import hashlib
 from uuid import uuid4
 
 from .db import now
+from .provider import ProviderError
 from .schemas import ReportDocument, WorkbookScriptRepair, strict_report_schema
 from .workbooks import ReportDataError, excel_report
 from .connectors import DatabaseUnavailable
@@ -27,7 +28,7 @@ s.compare(left_dataset,left_column,right_dataset,right_column,label,currency=Non
 s.table(dataset,columns=None,currency=None,currency_column=None) writes every matching row of that dataset, in aligned columns with translated headers. No row sampling/limit arguments. Full source sheets are ALWAYS added by the backend, independent of your script. Avoid unnecessarily duplicating huge source tables in output views.
 s.chart(dataset,category,measures,title,chart_type='column',currency=None,currency_column=None) creates line/column/bar/area using 1–4 numeric source fields. It shows at most 1000 categories with an explicit scope note; all source rows remain in Excel. Separate money, counts and percentages into suitable charts. Chart placement and text/table rows advance automatically, preventing overlaps.
 Select one actual currency for metrics/charts when datasets contain several; iterate report.currencies(index) and label currencies separately. Never combine EUR/USD with ALL. If more than one currency column exists, select the actual currency_column explicitly.
-Only use field names from the dataset descriptors. Translate all authored titles, labels and explanations into the user's requested language; preserve exact source column identifiers in helper arguments. Follow available template colors/structure and column ordering; output text stays readable without merged cells crossing tables.
+Only use field names from the dataset descriptors. Translate all authored titles, labels and explanations into Albanian; preserve exact source column identifiers in helper arguments. Follow available template colors/structure and column ordering; output text stays readable without merged cells crossing tables.
 Create a useful main output with headline metrics, relevant comparisons and charts, then concise explanations. Keep required supporting breakdowns. Do not create duplicate dashboards. s.narrative() is available to include the generated report analysis.
 All reports must preserve the requested scope throughout narrative, metrics, tables, charts and source sheets. Never add excluded records or unsolicited reconciliation datasets. Use model-authored captured results as supplied; no backend accounting rule selects or recalculates them. Decide any presentation arithmetic explicitly in your script and avoid aggregating non-additive measures. Disclose missing historical evidence without certifying a reconstruction as an original export.
 For example: def build(report):\n    s = report.sheet('Sales review')\n    s.title()\n    s.metric(0, 'revenue', 'Sales', currency='ALL')\n    s.narrative()
@@ -162,14 +163,14 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
         )
         prompt = json.dumps(
             {
-                "task": "Write a thorough business report in the language of user_request, or the report instructions when no original user request is supplied. Honor an explicit user request for a different language. Ignore the language of this task, JSON keys and database labels. Use only the supplied query results and model-authored calculation outputs, within the user's requested scope and exclusions. Analyze relevant performance, trends, breakdowns, exceptions and financial metrics supported by these sources. Comparisons outside that scope, later adjustments, revised balances and reconciliation require an explicit user request; asking for detail does not authorize them. State scope, missing inputs and limitations; never infer unavailable costs, VAT rates, exchange rates, or invent forecasts. Follow the supplied confirmed currency context. Return only the required JSON document. Write the workbook script yourself. The backend renders your chosen operations and preserves captured results; it supplies no hidden accounting formulas. Never infer full-data totals from samples. If a required total was not captured, state that limitation instead of inventing it.",
+                "task": "Write a thorough business report in Albanian (shqip), regardless of the language of user_request, report instructions, earlier replies, this task, JSON keys or database labels. The workspace response language is fixed to Albanian. Use only the supplied query results and model-authored calculation outputs, within the user's requested scope and exclusions. Analyze relevant performance, trends, breakdowns, exceptions and financial metrics supported by these sources. Comparisons outside that scope, later adjustments, revised balances and reconciliation require an explicit user request; asking for detail does not authorize them. State scope, missing inputs and limitations; never infer unavailable costs, VAT rates, exchange rates, or invent forecasts. Follow the supplied confirmed currency context. Return only the required JSON document. Write the workbook script yourself. The backend renders your chosen operations and preserves captured results; it supplies no hidden accounting formulas. Never infer full-data totals from samples. If a required total was not captured, state that limitation instead of inventing it.",
                 "user_request": user_request["content"] if user_request else None,
                 "conversation_history": db.all("SELECT role,content FROM messages WHERE conversation_id=? AND status='completed' ORDER BY created_at,rowid", (report['conversation_id'],)),
                 "base_currency": BASE_CURRENCY,
                 "workbook_script_api": WORKBOOK_SCRIPT_API,
                 "currency_instructions": "Albanian lek (ALL) is the confirmed workspace base currency. Blank, null or whitespace-only currency codes mean ALL, not an unknown currency. Samples display these codes as ALL; the original snapshot remains unchanged. Use ALL in base-currency headings, monetary totals, chart axes and explanations. Preserve explicit foreign currencies and distinguish document amounts from local-currency amounts. Do not combine incompatible currencies or invent conversion rates. Counts, quantities and percentages are not currencies.",
                 "currency_columns": sorted(currency_fields(rows, provenance.get("columns", []), provenance.get("query"))),
-                "workbook_translation_instructions": "Always fill workbook with the same language as the original user request. Translate every sheet name, table heading, chart title/legend/axis, explanatory note, calculation label and narrative. Supply analyses for index 0 (primary) and every additional analysis, with a translated name, scope, query_explanation, and columns mapping every exact source column to its translated human-readable label. Do not translate source values, identifiers, amounts, or formulas. For en/sq the backend has built-in labels; for any other language supply every standard label key translated in workbook.labels. Preserve {rows} and {missing} placeholders. Language must be an ISO code. A format reference controls style/layout, but all text still follows the user's language.",
+                "workbook_translation_instructions": "Always fill workbook with Albanian presentation text and set workbook.language to 'sq'. Translate every sheet name, table heading, chart title/legend/axis, explanatory note, calculation label and narrative. Supply analyses for index 0 (primary) and every additional analysis, with a translated name, scope, query_explanation, and columns mapping every exact source column to its translated human-readable label. Do not translate source values, identifiers, amounts, or formulas. The backend has built-in Albanian standard labels. Preserve {rows} and {missing} placeholders. A format reference controls style/layout, but all authored text stays in Albanian.",
                 "standard_workbook_labels": {"en": EN, "sq": SQ},
                 "format_reference": provenance.get("format_reference"),
                 "source_warnings": provenance.get("warnings", []),
@@ -210,6 +211,8 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
         fragments = report.get('content_json') or ""
         if not fragments:
             async for event in runtime.stream(thread_id, prompt, report["model"], strict_report_schema(), **effort_options):
+                if event["type"] == "snapshot":
+                    fragments = ""
                 if event["type"] == "delta":
                     fragments += event["text"]
                 if event["type"] == "done":
@@ -245,6 +248,8 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
                                      "previous_script": document.workbook.python_script}, ensure_ascii=False)
                 fixed = ""
                 async for event in runtime.stream(thread_id, repair, report["model"], strict_report_schema(WorkbookScriptRepair), **effort_options):
+                    if event["type"] == "snapshot":
+                        fixed = ""
                     if event["type"] == "delta":
                         fixed += event["text"]
                     if event["type"] == "done":
@@ -274,6 +279,9 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
             "UPDATE reports SET status='failed',stage='failed',error=?,completed_at=? WHERE id=?",
             (str(exc), now(), report_id),
         )
+        db.audit(user_id, "report.failed", report_id)
+    except ProviderError as exc:
+        db.execute("UPDATE reports SET status='failed',stage='failed',error=?,completed_at=? WHERE id=?", (str(exc), now(), report_id))
         db.audit(user_id, "report.failed", report_id)
     except Exception as exc:
         # Credentials/provider exceptions never become report content or audit payloads.

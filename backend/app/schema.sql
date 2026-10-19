@@ -12,6 +12,39 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS removed_members (
+    user_id TEXT PRIMARY KEY REFERENCES users(id),
+    removed_at TEXT NOT NULL, actor_id TEXT NOT NULL REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS workspace_subscriptions (
+    provider TEXT PRIMARY KEY CHECK(provider IN ('chatgpt','claude')),
+    owner_id TEXT NOT NULL REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS workspace_model_preferences (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    provider TEXT NOT NULL CHECK(provider IN ('chatgpt','claude'))
+);
+CREATE TABLE IF NOT EXISTS subscription_accounts (
+    id TEXT PRIMARY KEY, provider TEXT NOT NULL CHECK(provider IN ('chatgpt','claude')),
+    label TEXT NOT NULL, credential_key TEXT NOT NULL, position INTEGER NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1, unavailable_reason TEXT, retry_at REAL,
+    created_at TEXT NOT NULL, UNIQUE(provider,credential_key)
+);
+CREATE TABLE IF NOT EXISTS subscription_thread_accounts (
+    thread_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES subscription_accounts(id)
+);
+CREATE TABLE IF NOT EXISTS model_checkpoints (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL, scope_id TEXT NOT NULL, access_revision INTEGER NOT NULL,
+    content_json TEXT NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_tool_journal (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL, scope_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+    request_json TEXT NOT NULL, response_json TEXT NOT NULL, sha256 TEXT NOT NULL,
+    access_revision INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS model_journal_scope ON model_tool_journal(user_id,kind,scope_id,seq);
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL,
     model TEXT, provider_thread_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -194,4 +227,10 @@ CREATE TABLE IF NOT EXISTS chat_request_keys (
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     run_id TEXT NOT NULL REFERENCES chat_runs(id) ON DELETE CASCADE,
     PRIMARY KEY(user_id,request_key)
+);
+CREATE TABLE IF NOT EXISTS chat_request_cancellations (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  request_key TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  PRIMARY KEY(user_id, request_key)
 );

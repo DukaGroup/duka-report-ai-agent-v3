@@ -34,17 +34,21 @@ export async function streamChat(
   onEvent: (event: Record<string, string>) => void,
   attachmentIds: string[] = [],
   options: {
+    request_id?: string;
     reasoning_effort?: string | null;
     retry_message_id?: string | null;
+    interrupt_current?: boolean;
   } = {},
+  signal?: AbortSignal,
 ) {
-  const requestId = crypto.randomUUID();
+  const requestId = options.request_id || crypto.randomUUID();
   let runId = "";
   let after = 0;
   let terminal = false;
   let first = true;
   let reconnects = 0;
   while (!terminal) {
+    signal?.throwIfAborted();
     try {
       const response = await fetch(
         first
@@ -57,6 +61,7 @@ export async function streamChat(
             "X-Duka-Request": "1",
           },
           credentials: "same-origin",
+          signal,
           ...(first
             ? {
                 body: JSON.stringify({
@@ -115,6 +120,7 @@ export async function streamChat(
       }
       if (!terminal) throw new Error("Lidhja u ndërpre.");
     } catch (e) {
+      if (signal?.aborted) throw e;
       if (terminal) throw e;
       // A persistent request key identifies this exact submission after a lost response.
       // Retrying its POST is idempotent; it cannot create a second user message.
@@ -122,6 +128,7 @@ export async function streamChat(
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(5000, 500 * ++reconnects)),
       );
+      signal?.throwIfAborted();
       if (!runId) {
         try {
           const accepted = await api<{ run_id: string }>(

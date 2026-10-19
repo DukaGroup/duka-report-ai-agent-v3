@@ -12,6 +12,29 @@ const {streamChat} = await compile('api', s=>s.replace('import { errorMessage } 
 const {loadDrafts,saveDrafts} = await compile('drafts');
 const ndjson = events => new Response(events.map(e=>JSON.stringify(e)+'\n').join(''));
 
+test('subscription handoff resets an abandoned draft and reconnects without resubmitting', async t=>{
+  const urls=[], events=[];let text='';
+  t.mock.method(globalThis,'fetch',async (url,options)=>{
+    urls.push([url, options?.method]);
+    if(urls.length===1)return ndjson([
+      {type:'message',id:'run',seq:1},
+      {type:'delta',text:'Unverified partial totals',seq:2},
+      {type:'snapshot',text:'',activity:'switching',seq:3},
+      {type:'route',provider:'claude',model:'claude:claude-opus-5-5',reasoning_effort:'max',seq:4},
+    ]);
+    assert.match(url,/events\?after=4$/);
+    return ndjson([{type:'delta',text:'Verified result',seq:5},{type:'done',text:'Verified result',status:'completed',seq:6}]);
+  });
+  await streamChat('chat','Original request','fixture',event=>{
+    events.push(event);
+    if(event.type==='delta')text+=event.text;
+    if(event.type==='snapshot')text=event.text||'';
+  });
+  assert.equal(text,'Verified result');
+  assert.deepEqual(urls.map(x=>x[1]),['POST','GET']);
+  assert.equal(events.find(e=>e.type==='route').model,'claude:claude-opus-5-5');
+});
+
 test('frontend reconnect resumes after the last event without duplicating the POST or text', async t=>{
   const urls=[], events=[];
   t.mock.method(globalThis,'fetch',async (url,options)=>{
@@ -64,4 +87,38 @@ test('drafts preserve edit targets, attachments and model effort across refresh,
   assert.equal(loadDrafts('alice').get('__new__').draft,'New conversation draft');
   assert.equal(loadDrafts('bob').size,0);
   values.set('duka.drafts.alice','corrupt');assert.equal(loadDrafts('alice').size,0);
+});
+
+test('replacing a response cancels its obsolete listener without retrying its POST', async t=>{
+  const controller=new AbortController(); const calls=[], events=[];
+  t.mock.method(globalThis,'fetch', async (url,options)=>{
+    calls.push(url);
+    assert.equal(options.signal,controller.signal);
+    const body=JSON.parse(options.body);
+    assert.equal(body.interrupt_current,true);
+    return new Response(new ReadableStream({
+      start(stream){
+        stream.enqueue(new TextEncoder().encode(JSON.stringify({type:'message',id:'old',seq:1})+'\n'));
+        options.signal.addEventListener('abort',()=>stream.error(new DOMException('Stopped listener','AbortError')));
+      }
+    }));
+  });
+  await assert.rejects(streamChat('chat','Next request','fixture', e=>{
+    events.push(e);
+    controller.abort();
+  }, [], {interrupt_current:true}, controller.signal), {name:'AbortError'});
+  assert.equal(calls.length,1);
+  assert.deepEqual(events.map(e=>e.type),['message']);
+});
+
+test('caller-provided submission key remains stable so Stop can cancel a POST before acceptance', async t=>{
+  const bodies=[];
+  t.mock.method(globalThis,'fetch', async (url,options)=>{
+    if(url.includes('/requests/')) return Response.json({detail:'Not accepted'},{status:404});
+    bodies.push(JSON.parse(options.body));
+    if(bodies.length===1)return Response.json({detail:'Temporarily offline'},{status:503});
+    return ndjson([{type:'message',id:'run',seq:1},{type:'done',text:'Done',status:'completed',seq:2}]);
+  });
+  await streamChat('chat','Request','fixture',()=>{},[],{request_id:'known-before-send'});
+  assert.deepEqual(bodies.map(b=>b.request_id),['known-before-send','known-before-send']);
 });

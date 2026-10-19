@@ -17,6 +17,7 @@ export interface Login {
   requiresCode?: boolean;
 }
 export interface Subscription {
+  can_respond?: boolean;
   connected: boolean;
   available: boolean;
   error?: string;

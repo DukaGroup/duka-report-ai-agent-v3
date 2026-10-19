@@ -1,4 +1,16 @@
 const labels: Record<string, string> = {
+  "Devs or President access is required to manage members.":
+    "Menaxhimi i anëtarëve lejohet vetëm për Devs ose President.",
+  "Only Devs can create Devs accounts.":
+    "Vetëm Devs mund të krijojnë llogari Devs.",
+  "Only Devs can remove Devs accounts.":
+    "Vetëm Devs mund të heqin llogari Devs.",
+  "You cannot remove your own account.": "Nuk mund të hiqni llogarinë tuaj.",
+  "This member has been removed.": "Ky anëtar është hequr nga hapësira.",
+  "Stop active workspace responses before changing a shared subscription.":
+    "Ndërprisni përgjigjet aktive të hapësirës para ndryshimit të abonimit të përbashkët.",
+  "The shared subscription is being connected. Try again after Devs finish signing in.":
+    "Abonimi i përbashkët po lidhet. Provoni përsëri pasi Devs të përfundojnë hyrjen.",
   recovering: "Duke rifilluar punën",
   "Connect your Claude subscription before sending a message.":
     "Lidhni abonimin Claude para se të dërgoni mesazh.",
@@ -319,6 +331,7 @@ export function auditLabel(action: string): string {
     "attachment.uploaded": "Skedar i ngarkuar",
     "user.created": "Anëtar i shtuar",
     "user.updated": "Anëtar i ndryshuar",
+    "user.removed": "Anëtar i hequr",
     "user.password_changed": "Fjalëkalim i ndryshuar",
     "user.password_reset_issued": "Kod rikuperimi i krijuar",
     "user.password_reset": "Fjalëkalim i rivendosur",

@@ -109,7 +109,7 @@ def send(client, chat, text="Hello", model=None):
     return events
 
 
-def test_both_accounts_stay_connected_and_selection_is_per_user_and_persistent(client, admin, claude):
+def test_both_accounts_stay_connected_and_selection_is_workspace_wide(client, admin, claude):
     subscribe(client)
     status = connect_claude(client)
     assert status["account"]["email"] == "claude@example.com"
@@ -124,10 +124,10 @@ def test_both_accounts_stay_connected_and_selection_is_per_user_and_persistent(c
     choose(client, "claude")
     member = create_member(client)
     sign_in_member(client)
-    assert client.get("/api/subscription").json()["provider_id"] == "chatgpt"
-    assert client.get("/api/subscription?provider=claude").json()["connected"] is False
+    assert client.get("/api/subscription").json()["provider_id"] == "claude"
+    assert client.get("/api/subscription?provider=claude").json()["connected"] is True
     assert client.app.state.manager.selected_provider(admin["id"]) == "claude"
-    assert client.app.state.manager.selected_provider(member["id"]) == "chatgpt"
+    assert client.app.state.manager.selected_provider(member["id"]) == "claude"
 
 
 def test_two_new_claude_chats_are_isolated_reopening_keeps_id_and_provider_switch_restores_each_session(client, admin, claude):
@@ -193,7 +193,7 @@ def test_disconnect_is_provider_specific_and_new_login_cannot_reuse_previous_acc
     assert "previous_messages" in claude[-1].content
 
 
-def test_claude_auth_code_is_csrf_protected_scoped_to_login_and_missing_account_does_not_fallback(client, admin, claude):
+def test_claude_auth_code_is_csrf_protected_and_pending_account_uses_connected_chatgpt(client, admin, claude):
     assert client.post("/api/subscription/select", json={"provider": "claude"}).status_code == 403
     login = client.post("/api/subscription/login?provider=claude", headers=HEADERS).json()
     assert client.post("/api/subscription/login/code", headers=HEADERS, json={"login_id": "wrong", "code": "private-code"}).status_code == 409
@@ -202,9 +202,9 @@ def test_claude_auth_code_is_csrf_protected_scoped_to_login_and_missing_account_
     choose(client, "claude")
     chat = client.post("/api/conversations", headers=HEADERS, json={}).json()["id"]
     response = client.post(f"/api/conversations/{chat}/messages", headers=HEADERS, json={"content": "Hello"})
-    assert response.status_code == 409 and "Claude" in response.text
-    assert claude == []  # No inference was attempted on either provider.
-    assert client.app.state.db.all("SELECT * FROM messages") == []
+    assert response.status_code == 200 and '"status": "completed"' in response.text
+    assert claude == []  # A pending Claude login does not block connected ChatGPT inference.
+    assert len(client.app.state.db.all("SELECT * FROM messages")) == 2
 
 
 async def test_tools_forward_original_schemas_and_user_chat_context_without_builtin_tools(tmp_path, monkeypatch):
