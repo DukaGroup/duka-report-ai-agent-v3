@@ -396,8 +396,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [reasoningEffort, setReasoningEffort] = useState(
     () => loadDrafts(user.id).get("__new__")?.reasoningEffort || "",
   );
-  const supportedEfforts =
-    models.find((m) => m.model === model)?.supported_reasoning_efforts || [];
+  const selectedModel = models.find((m) => m.model === model);
+  const supportedEfforts = selectedModel?.supported_reasoning_efforts || [];
   const effort = supportedEfforts.includes(reasoningEffort)
     ? reasoningEffort
     : "";
@@ -409,7 +409,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     high: "I lartë",
     xhigh: "Shumë i lartë",
     max: "Maksimal",
+    ultra: "Ultra",
   };
+  const defaultEffort = selectedModel?.default_reasoning_effort;
+  const automaticEffortLabel = defaultEffort
+    ? `Automatik (${effortLabels[defaultEffort] || defaultEffort})`
+    : "Automatik (parazgjedhja e modelit)";
   const runs = useRef(new ConversationRuns());
   const [, refreshRuns] = useState(0);
   const busy =
@@ -465,7 +470,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         disabled={chatLocked || !subscription.connected}
         onChange={(e) => setReasoningEffort(e.target.value)}
       >
-        <option value="">Automatik</option>
+        <option value="">{automaticEffortLabel}</option>
         {supportedEfforts.map((level) => (
           <option key={level} value={level}>
             {effortLabels[level] || level}
@@ -2633,7 +2638,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     <section className="panel provider-model-panel">
                       <label>
                         Modeli për biseda dhe raporte
-                        <select
+                        <Select
                           aria-label="Zgjidh modelin"
                           value={model}
                           onChange={(e) => setModel(e.target.value)}
@@ -2653,7 +2658,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                               {m.displayName}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       </label>
                       <p>
                         Zgjedhja përdoret për mesazhet dhe raportet e ardhshme.

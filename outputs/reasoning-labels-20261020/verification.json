@@ -1,0 +1,7 @@
+{
+  "mediumDefault": "Automatik (Mesatar)",
+  "highDefault": "Automatik (I lartë)",
+  "unknownDefault": "Automatik (parazgjedhja e modelit)",
+  "ultra": "Ultra",
+  "environment": "isolated frontend with synthetic model catalog"
+}

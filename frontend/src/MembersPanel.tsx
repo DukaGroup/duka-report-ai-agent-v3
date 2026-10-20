@@ -1,5 +1,6 @@
 import { Plus, Trash2 } from "lucide-react";
 import type { User } from "./types";
+import { Select } from "./Select";
 
 export function MembersPanel({
   actor,
@@ -56,7 +57,7 @@ export function MembersPanel({
                 </td>
                 <td>
                   {isDev ? (
-                    <select
+                    <Select
                       aria-label={`Roli i ${member.name}`}
                       value={member.role}
                       disabled={member.id === actor.id}
@@ -67,7 +68,7 @@ export function MembersPanel({
                       <option value="devs">Devs</option>
                       <option value="president">President</option>
                       <option value="manager">Manager</option>
-                    </select>
+                    </Select>
                   ) : member.role === "devs" ? (
                     "Devs"
                   ) : member.role === "president" ? (

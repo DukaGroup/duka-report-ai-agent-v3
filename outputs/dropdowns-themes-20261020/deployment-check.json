@@ -1,0 +1,13 @@
+{
+  "health": {
+    "status": "ok",
+    "provider": "chatgpt-subscription",
+    "version": "0.1.0"
+  },
+  "served_assets": {
+    "/assets/index-Bg3w5u1l.js": "2acb590c866c9f15c14ec8d14d591bbfa0725435b1af48dfcf0f5925e390bb2b",
+    "/assets/index-mAQuG_wB.css": "3a3d274f55504d4cbec095c6aae509adf7ab0cfa95b8fcbbf840e08f5c592768"
+  },
+  "data_fingerprints_unchanged": true,
+  "environment_unchanged": true
+}

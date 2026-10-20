@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { ArrowDown, ArrowUp, Plus, X } from "lucide-react";
 import { api } from "./api";
 import type { Login, Provider } from "./types";
+import { Select } from "./Select";
 
 type Account = {
   id: string;
@@ -264,10 +265,10 @@ export function SubscriptionAccounts({
             <form onSubmit={(e) => void add(e)}>
               <label>
                 Ofruesi
-                <select name="provider">
+                <Select name="provider" aria-label="Ofruesi">
                   <option value="chatgpt">ChatGPT</option>
                   <option value="claude">Claude</option>
-                </select>
+                </Select>
               </label>
               <label>
                 Emri i abonimit
