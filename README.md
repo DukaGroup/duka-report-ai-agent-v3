@@ -6,7 +6,7 @@ Conversations and reports use either **ChatGPT through the official Codex CLI** 
 
 ## VPS deployment
 
-[Deploy without Docker](docs/deploy-without-docker.md) — essential commands for installation, the app service and HTTPS.
+[Deploy without Docker](docs/deploy-without-docker.md) — installation under `/var`, with separate service/Nginx configuration files and setup scripts.
 
 ## Start
 
@@ -127,7 +127,7 @@ Copy `.env.example` to `.env` only when overriding defaults. The project-root `.
 | `SQLSERVER_ENCRYPTION` | `require` | Require encrypted database transport |
 | `SQLSERVER_TIMEOUT_SECONDS` | `15` | Login and query timeout |
 
-Application SQLite, the legacy credential migration key, shared subscription credentials/native history, and speech models live in the sensitive `workspace-data` volume. Database connection settings live in the project-root `.env`; back up both the volume and this file privately. Keep the legacy key for recovery of older backups. The `.env` contains plaintext secrets, protected by filesystem permissions and excluded from Git, image builds, browser responses, and model workers. `docker compose down` preserves it; `down -v` deletes it permanently.
+On the native VPS, SQLite, keys, uploads, reports, shared subscription credentials/native history and caches live under `/var/lib/duka-agent`. Configuration is read from the repository's `.env`. Back up this data directory and `.env` together, retaining the legacy credential key for older backups. `.env` is allowed in Git for this deployment and remains excluded from image builds, browser responses and model workers.
 
 The app uses Docker's `unless-stopped` restart policy and explicit upstream DNS from the two `DOCKER_DNS_*` settings. This avoids inheriting an empty resolver list when Docker starts before the laptop's network is ready. On Linux, Docker itself must start at boot (`systemctl is-enabled docker`). Saved ChatGPT credentials are reused after startup. If the browser opens while the backend or account-routing service is temporarily unavailable, it checks again every five seconds and on network-online/page-visible events; requests do not overlap. Recovery stops once the connection service is available. This does not automatically initiate new logins or override expired credentials. If you deliberately stop the container, start it with `docker compose up -d`.
 
