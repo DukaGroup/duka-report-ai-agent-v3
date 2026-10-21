@@ -392,6 +392,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             raise HTTPException(422, "Choose analysis or template for the uploaded file.")
         if body["purpose"] == "template":
             try:
+                await request.app.state.attachments.ensure_format_reference(user["id"], identifier, row["conversation_id"])
                 request.app.state.attachments.format_reference(user["id"], identifier, row["conversation_id"])
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
@@ -1038,6 +1039,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             template_id = selected["id"] if selected else None
         if template_id:
             try:
+                await state.attachments.ensure_format_reference(user_id, template_id, body.conversation_id)
                 provenance["format_reference"] = state.attachments.format_reference(
                     user_id, template_id, body.conversation_id
                 )

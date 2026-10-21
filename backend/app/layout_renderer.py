@@ -9,6 +9,7 @@ from xlsxwriter.utility import xl_col_to_name
 from .currencies import currency_fields, display_currency
 from .workbooks import NUMERIC_TYPES, ReportDataError, excel_number
 from .workbook_contract import datasets, select_currency, metric, comparison
+from .reference_renderer import reference_table, FORMATS
 
 
 def render_layout(book, document, snapshot, layout, labels):
@@ -63,7 +64,11 @@ def render_layout(book, document, snapshot, layout, labels):
             sheet.set_column(index, index, width)
         sheet.set_landscape()
         sheet.fit_to_pages(1, 0)
-        row, width, chart_column = 1, max(2, min(7, len(plan["widths"])-1)), 30
+        reference_item = next((item for item in plan["items"] if item["kind"] == "reference_table"), None)
+        profile = next((p for p in reference.get("sheet_layouts",[]) if reference_item and p["name"]==reference_item["reference_sheet"]), None)
+        left = profile["start_column"] if profile else 0
+        sheet_title = book.add_format({**reference["styles"][profile["title_style"]],"text_wrap":True,"valign":"vcenter"}) if profile and "title_style" in profile else title
+        row, width, chart_column = 1, left+max(2,min(11 if profile else 7,len(profile["column_widths"] if profile else plan["widths"])-1)), max(30,(left+len(profile["column_widths"])+2) if profile else 30)
         for item in plan["items"]:
             kind = item["kind"]
             if row >= 1048000:
@@ -77,7 +82,7 @@ def render_layout(book, document, snapshot, layout, labels):
                 # Long text uses several rows; no merge range crosses a later table/chart.
                 for start in range(0, max(1, len(value)), 900):
                     chunk = value[start:start+900]
-                    sheet.merge_range(row, 0, row, width, chunk, title if kind == "title" else heading if kind == "heading" else text)
+                    sheet.merge_range(row, left, row, width, chunk, sheet_title if kind == "title" else heading if kind == "heading" else text)
                     line_height = 25 if kind == "title" else 20 if kind == "heading" else 17
                     sheet.set_row(row, min(300, max(32, line_height * (math.ceil(len(chunk)/85) + chunk.count("\n")))))
                     row += 2
@@ -108,6 +113,9 @@ def render_layout(book, document, snapshot, layout, labels):
                     sheet.write_formula(row, 2, "=" + formula, fmt, float(result))
                 checks.append({"kind": kind, "sheet": name, "row": row+1, "column": 3, "request": item, "expected": expected})
                 row += 2
+            elif kind == "reference_table":
+                row, check = reference_table(book, sheet, reference, data[item["dataset"]], item, row)
+                checks.append(check)
             elif kind == "table":
                 source = data[item["dataset"]]
                 fields = item.get("columns") or source["fields"]
@@ -118,6 +126,10 @@ def render_layout(book, document, snapshot, layout, labels):
                     raise ReportDataError("Output table exceeds Excel worksheet capacity.")
                 currency_columns = currency_fields(source["rows"], source.get("columns", []), source.get("query"))
                 headers = [source["column_labels"].get(field, field) for field in fields]
+                requested_formats = item.get("formats") or {}
+                if not isinstance(requested_formats,dict) or set(requested_formats)-set(fields) or any(value not in FORMATS for value in requested_formats.values()):
+                    raise ReportDataError("Table formats must use decimal, integer or percent for actual source fields.")
+                field_formats = {field:book.add_format({"font_name":font,"font_size":11,"align":"right","num_format":FORMATS[value]}) for field,value in requested_formats.items()}
                 widths = []
                 for column, field in enumerate(fields):
                     chosen = plan["widths"][column] if column < len(plan["widths"]) else min(46, max(18, len(headers[column])+2))
@@ -132,7 +144,7 @@ def render_layout(book, document, snapshot, layout, labels):
                         converted = excel_number(value, True) if source["types"].get(original_field) in NUMERIC_TYPES or isinstance(value, (int, float)) and not isinstance(value, bool) else None
                         if converted is None and isinstance(value, (int, float)) and not isinstance(value, bool):
                             value = str(value)
-                        sheet.write(offset, column, converted if converted is not None else value, amount if converted is not None else text)
+                        sheet.write(offset, column, converted if converted is not None else value, field_formats.get(original_field, amount if converted is not None else text))
                 if rows:
                     table_id += 1
                     sheet.add_table(row, 0, row+len(rows), len(fields)-1, {"name": f"View_{table_id}", "columns": [{"header": h, "header_format": table_header} for h in headers], "style": table_style})
@@ -178,4 +190,8 @@ def render_layout(book, document, snapshot, layout, labels):
                 if len(selected) > 1000:
                     sheet.merge_range(row, 0, row, width, labels["chart_limit"].replace("40", "1000"), text)
                     row += 2
+        reference_items = [item for item in plan["items"] if item["kind"] == "reference_table"]
+        if reference_items:
+            max_column = max(next(p for p in reference["sheet_layouts"] if p["name"] == item["reference_sheet"])["start_column"] + len(item.get("columns") or data[item["dataset"]]["fields"])-1 for item in reference_items)
+            sheet.print_area(0,0,max(0,row-1),max_column)
     return checks

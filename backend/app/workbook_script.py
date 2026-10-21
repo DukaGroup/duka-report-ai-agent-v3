@@ -1,13 +1,14 @@
 """Restricted generated Python, with report helpers instead of raw library access."""
 
 import ast
+import json
 from itertools import chain
 
 from .currencies import currency_fields, display_currency
 from .workbooks import ReportDataError, analysis_data
 
 METHODS = {"sheet", "title", "paragraph", "heading", "metric", "compare", "table", "chart", "space", "widths",
-           "default_layout", "currencies", "columns", "analysis_count", "narrative"}
+           "default_layout", "currencies", "columns", "analysis_count", "narrative", "reference_table"}
 BUILTINS = {"len": len, "range": range, "enumerate": enumerate, "zip": zip, "str": str, "int": int,
             "float": float, "round": round, "abs": abs, "min": min, "max": max, "sum": sum,
             "sorted": sorted, "list": list, "tuple": tuple, "dict": dict, "bool": bool}
@@ -58,6 +59,7 @@ class ReportLayout:
     def __init__(self, document, snapshot):
         self._document, self._datasets = document, analysis_data(snapshot)
         self._sheets, self._commands, self._default = [], 0, False
+        self._reference = json.loads(snapshot["provenance_json"]).get("format_reference", {})
 
     def default_layout(self):
         if self._sheets:
@@ -101,9 +103,20 @@ class ReportLayout:
 
     def _export(self):
         if self._default:
+            if any(len(profile["headers"])>1 and any(len(profile["column_widths"])==len(self.columns(index)) for index in range(self.analysis_count()))
+                   for profile in self._reference.get("sheet_layouts", [])):
+                raise ReportDataError("The selected grouped reference requires a custom layout using s.reference_table; default_layout would flatten it.")
             return None
         if not self._sheets or not any(sheet._items for sheet in self._sheets):
             raise ReportDataError("Workbook script produced no output sheets.")
+        items = [item for sheet in self._sheets for item in sheet._items]
+        referenced = {item["dataset"] for item in items if item["kind"] == "reference_table"}
+        for item in items:
+            if item["kind"] == "table" and item["dataset"] not in referenced:
+                fields = item.get("columns") or self.columns(item["dataset"])
+                if any(len(profile["headers"])>1 and len(profile["column_widths"])==len(fields)
+                       for profile in self._reference.get("sheet_layouts", [])):
+                    raise ReportDataError("A compatible grouped format reference is selected. Use s.reference_table with authored current-period headers instead of flattening it into s.table.")
         return [{"name": sheet._name, "items": sheet._items, "widths": sheet._widths} for sheet in self._sheets]
 
 
@@ -156,9 +169,14 @@ class LayoutSheet:
         self._add("compare", left_dataset=left_dataset, left_column=left_column, right_dataset=right_dataset, right_column=right_column,
                   label=str(label), currency=currency, operation=operation, currency_column=currency_column)
 
-    def table(self, dataset, columns=None, currency=None, currency_column=None):
+    def table(self, dataset, columns=None, currency=None, currency_column=None, formats=None):
         self._report._dataset(dataset)
-        self._add("table", dataset=dataset, columns=columns, currency=currency, currency_column=currency_column)
+        self._add("table", dataset=dataset, columns=columns, currency=currency, currency_column=currency_column, formats=formats)
+
+    def reference_table(self, dataset, reference_sheet, headers, columns=None, formats=None):
+        self._report._dataset(dataset)
+        self._add("reference_table", dataset=dataset, reference_sheet=str(reference_sheet), headers=headers,
+                  columns=columns, formats=formats)
 
     def chart(self, dataset, category, measures, title, chart_type="column", currency=None, currency_column=None):
         self._report._dataset(dataset)

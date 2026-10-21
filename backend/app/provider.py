@@ -24,6 +24,7 @@ from .currencies import BASE_CURRENCY as BASE_CURRENCY
 from .workbook_runner import WorkbookRunner
 from .calculations import CalculationPlan, CalculationService, CALCULATION_API
 from .investigation import INVESTIGATION_INSTRUCTIONS, investigation_hint
+from .analysis_explanation import ANALYSIS_EXPLANATION
 
 log = logging.getLogger(__name__)
 READ_ONLY_PROFILE = "duka_read_only"
@@ -109,7 +110,7 @@ SQL error 208 means a table/view dependency is unavailable, even when login and 
 Explain that specific query failure; do not suggest credentials were deleted. Prefer a working base table or ask for the view's dependencies to be repaired.
 """
 
-BASE_INSTRUCTIONS += INVESTIGATION_INSTRUCTIONS
+BASE_INSTRUCTIONS += INVESTIGATION_INSTRUCTIONS + ANALYSIS_EXPLANATION
 
 REPORT_TOOLS = [
     {
@@ -1105,6 +1106,7 @@ class SubscriptionManager:
                 if tool == "list_attachments":
                     result = {"attachments": self.attachments.sent_files(user_id, cid)}
                 elif tool == "read_attachment":
+                    await self.attachments.ensure_format_reference(user_id, arguments.get("attachment_id"), cid)
                     result = self.attachments.read(
                         user_id,
                         arguments.get("attachment_id"),

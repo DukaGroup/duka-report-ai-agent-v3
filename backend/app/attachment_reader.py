@@ -176,6 +176,8 @@ def extract(path, extension):
                                 "chart_type": "column",
                                 "table_style": "Table Style Medium 4",
                             }
+        from .reference_layout import workbook_layout
+        layout.update(workbook_layout(wb))
         wb.close()
         warnings.append(
             "Only cached Excel formula results are read; formulas and macros are never executed. Missing caches remain missing data."
@@ -247,7 +249,19 @@ def main():
     resource.setrlimit(resource.RLIMIT_CPU, (20, 20))
     resource.setrlimit(resource.RLIMIT_FSIZE, (12 * 1024 * 1024, 12 * 1024 * 1024))
     try:
-        result = extract(sys.argv[1], sys.argv[2])
+        if len(sys.argv)>4 and sys.argv[4]=='--format-only':
+            from openpyxl import load_workbook
+            from .reference_layout import workbook_layout
+            guard_zip(sys.argv[1])
+            book = load_workbook(sys.argv[1],data_only=True,keep_links=False)
+            try:
+                if len(book.worksheets)>20 or sum(s.max_row*s.max_column for s in book)>MAX_CELLS or any(s.max_row>MAX_ROWS+50 or s.max_column>MAX_COLS for s in book):
+                    raise ValueError("The reference exceeds parsing limits.")
+                result = {"format":workbook_layout(book)}
+            finally:
+                book.close()
+        else:
+            result = extract(sys.argv[1], sys.argv[2])
         content = json.dumps(result, ensure_ascii=False, allow_nan=False)
         if len(content.encode()) > 10 * 1024 * 1024:
             raise ValueError("The extracted upload exceeds the data limit.")

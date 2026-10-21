@@ -123,7 +123,7 @@ def validate_workbook(content, document, snapshot, checks, custom=False):
                 if check["row_count"] != len(rows):
                     raise ReportDataError("Generated output table is incomplete.")
                 if rows:
-                    for source_row, actual in zip(rows, sheet.iter_rows(min_row=check["row"], max_row=check["row"]+len(rows)-1, max_col=len(fields), values_only=True), strict=True):
+                    for source_row, actual in zip(rows, sheet.iter_rows(min_row=check["row"], max_row=check["row"]+len(rows)-1, min_col=check.get("column",1), max_col=check.get("column",1)+len(fields)-1, values_only=True), strict=True):
                         if any(not equivalent(value, source_value(source, source_row, field, True)) for field, value in zip(fields, actual, strict=True)):
                             raise ReportDataError("Generated output table rows are misaligned.")
             else:

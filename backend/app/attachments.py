@@ -20,6 +20,45 @@ class AttachmentStore:
         self.directory = settings.data_dir / "uploads"
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.semaphore = asyncio.Semaphore(2)
+        self.format_locks = {}
+
+    async def ensure_format_reference(self, user_id, identifier, conversation_id):
+        row = self.owned(user_id, identifier, conversation_id)
+        if row['extension'] != '.xlsx':
+            return
+        async with self.format_locks.setdefault(identifier, asyncio.Lock()):
+            parsed = self.parsed(row)
+            if parsed.get('format', {}).get('layout_version', 0) >= 2:
+                return
+            output = self.directory / (uid() + '.format.json')
+            replacement = self.directory / (uid() + '.format.tmp')
+            process = None
+            try:
+                async with self.semaphore:
+                    env = {'PATH': os.environ.get('PATH',''), 'LANG':'C.UTF-8',
+                           'PYTHONPATH':str(Path(__file__).resolve().parent.parent),
+                           'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1'}
+                    process = await asyncio.create_subprocess_exec(
+                        sys.executable, '-m', 'app.attachment_reader', str(self.directory/(identifier+'.xlsx')),
+                        '.xlsx', str(output), '--format-only', env=env,
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    await asyncio.wait_for(process.wait(),25)
+                result = json.loads(output.read_text()) if output.exists() else {}
+                if process.returncode or not result.get('format'):
+                    raise ValueError('The Excel reference layout could not be refreshed. Check the uploaded workbook.')
+                # Upgrade presentation metadata only; captured data/text stay unchanged.
+                parsed['format'].update(result['format'])
+                replacement.write_text(json.dumps(parsed,ensure_ascii=False,allow_nan=False))
+                replacement.chmod(0o600)
+                replacement.replace(self.directory/(identifier+'.json'))
+            except TimeoutError:
+                raise ValueError('The Excel reference exceeded its parsing time limit.') from None
+            finally:
+                if process and process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                output.unlink(missing_ok=True)
+                replacement.unlink(missing_ok=True)
 
     def owned(self, user_id, identifier, conversation_id=None):
         row = self.db.one("SELECT * FROM attachments WHERE id=? AND user_id=?", (identifier, user_id))
@@ -202,6 +241,6 @@ class AttachmentStore:
     def format_reference(self, user_id, identifier, conversation_id):
         row = self.owned(user_id, identifier, conversation_id)
         parsed = self.parsed(row)
-        if row["extension"] != ".xlsx" or not parsed["format"]:
+        if row["extension"] != ".xlsx" or not parsed["format"] or parsed["format"].get("layout_version",0)>=2 and not parsed["format"].get("sheet_layouts"):
             raise ValueError("Use an Excel file with a formatted table as the format reference.")
         return {"attachment_id": identifier, "name": row["name"], **parsed["format"]}
