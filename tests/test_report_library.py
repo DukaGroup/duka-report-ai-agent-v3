@@ -26,7 +26,7 @@ def test_deleting_conversation_preserves_saved_report_snapshot_and_exact_excel_d
     assert client.get(f"/api/conversations/{chat['id']}").status_code == 404
     saved = client.get(f"/api/reports/{report['id']}")
     assert saved.status_code == 200
-    assert saved.json()["conversation_id"] is None
+    assert saved.json()["conversation_id"] == chat["id"]
     assert saved.json()["snapshot_id"] == report["snapshot_id"]
     assert db.one("SELECT id FROM dataset_snapshots WHERE id=?", (report["snapshot_id"],))
     assert any(r["id"] == report["id"] for r in client.get("/api/reports").json())

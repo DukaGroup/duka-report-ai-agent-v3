@@ -1,0 +1,32 @@
+{
+  "health": "ok",
+  "container": "healthy",
+  "assets": [
+    "/assets/index-DpDKWKl2.js",
+    "/assets/index-B0WwBH7V.css"
+  ],
+  "existing_credentials_configuration_grants_reports_preserved": true,
+  "environment_unchanged": true,
+  "backend_matches": true,
+  "frontend_tests_passed": 69,
+  "backend_tests_passed": 90,
+  "environment_checks_skipped": 2,
+  "browser": {
+    "partial_sql_update_preserves_other_fields": true,
+    "partial_hana_update_preserves_other_fields": true,
+    "selected_reports_only_moved_to_trash": true,
+    "running_report_checkbox_disabled": true,
+    "select_all_skips_running_reports": true,
+    "trash_selection_and_permanent_confirmation": true,
+    "permanent_deletion_executed_in_browser": false,
+    "permanent_deletion_tested_in_isolated_backend_tests": true,
+    "restoring_prunes_selection": true,
+    "view_change_clears_selection": true,
+    "mobile_overflow": false,
+    "themes": [
+      "dark",
+      "light",
+      "system"
+    ]
+  }
+}

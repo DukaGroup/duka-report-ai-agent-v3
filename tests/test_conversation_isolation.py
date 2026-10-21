@@ -119,7 +119,7 @@ def test_reports_messages_uploads_and_stop_are_scoped_to_their_chat(client, admi
     )
     assert client.delete(f"/api/conversations/{b}", headers=HEADERS).status_code == 200
     saved = client.get(f"/api/reports/{reports[1]}").json()
-    assert saved["stage"] == "interrupted" and saved["conversation_id"] is None
+    assert saved["stage"] == "interrupted" and saved["conversation_id"] == b
     assert client.get(f"/api/conversations/{a}").status_code == 200
 
 

@@ -2,7 +2,7 @@ from typing import Any, Literal
 import math
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from .database_tools import DatabaseQuery
 from .upload_queries import UploadQuery
 from .balance_reconciliation import BalanceRequest
@@ -103,6 +103,7 @@ class NewSource(InputModel):
     name: str = Field(min_length=1, max_length=120)
     kind: Literal["postgresql", "mysql", "sqlserver", "saphana", "sqlite", "other"]
     description: str = Field(default="", max_length=1000)
+    discover_databases: bool | None = None
     SQLSERVER_HOST: str | None = Field(default=None, min_length=1, max_length=255, repr=False)
     SQLSERVER_PORT: int | None = Field(default=None, ge=1, le=65535, repr=False)
     SQLSERVER_USER: str | None = Field(default=None, min_length=1, max_length=255, repr=False)
@@ -159,6 +160,10 @@ class NewSource(InputModel):
                 values[f"{prefix}_{name}"] = str(value)
         if prefix + "_DATABASE" in self.model_fields_set:
             values[prefix + "_DATABASE"] = getattr(self, prefix + "_DATABASE") or ""
+        if self.discover_databases:
+            if values.get(prefix + "_DATABASE"):
+                raise ValueError("Choose automatic discovery or a database name, not both.")
+            values[prefix + "_DATABASE"] = ""
         if prefix == "HANA":
             for name in ("TLS_CA_CERTIFICATE", "TLS_SERVER_NAME"):
                 if "HANA_" + name in self.model_fields_set:
@@ -169,6 +174,48 @@ class NewSource(InputModel):
                 if value is not None:
                     values["HANA_" + name] = str(value).lower()
         return values
+
+
+class UpdateSource(NewSource):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    kind: Literal["postgresql", "mysql", "sqlserver", "saphana", "sqlite", "other"] | None = None
+    description: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_blank_connection_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        # A PATCH only replaces supplied nonblank connection values. Clearing
+        # the database scope requires the explicit discovery control instead.
+        return {key: item for key, item in value.items()
+                if not (key in cls.model_fields and key not in {"name", "kind", "description", "discover_databases"} and
+                        (item is None or isinstance(item, str) and
+                         (item == "" if key.endswith("_PASSWORD") else not item.strip())))}
+
+
+class ConversationSelection(InputModel):
+    permanent: bool = False
+    conversation_ids: list[str] = Field(min_length=1, max_length=5000)
+
+    @field_validator("conversation_ids")
+    @classmethod
+    def valid_conversation_ids(cls, values):
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) for value in values):
+            raise ValueError("Invalid conversation selection.")
+        return list(dict.fromkeys(values))
+
+
+class ReportSelection(InputModel):
+    report_ids: list[str] = Field(min_length=1, max_length=5000)
+    permanent: bool = False
+
+    @field_validator("report_ids")
+    @classmethod
+    def valid_report_ids(cls, values):
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value) for value in values):
+            raise ValueError("Invalid report selection.")
+        return list(dict.fromkeys(values))
 
 
 class NewDataset(InputModel):

@@ -342,3 +342,23 @@ def test_old_failed_report_does_not_block_a_later_request_in_the_same_conversati
     monkeypatch.setattr(client.app.state.notifications, "send", lambda sub, data: calls.append(data))
     client.portal.call(client.app.state.notifications.deliver)
     assert [call["messageId"] for call in calls] == [current["id"]]
+
+
+def test_trashed_chat_suppresses_queued_alerts_and_restoring_does_not_replay_them(client, admin, monkeypatch):
+    enable(client)
+    service = client.app.state.notifications
+    calls = []
+    monkeypatch.setattr(service, 'send', lambda sub, data: calls.append(data))
+    cid = prepare(client, 'chatgpt')
+    post(client, cid, content='Synthetic completion')
+    message_id = client.get(f'/api/conversations/{cid}').json()['messages'][-1]['id']
+    assert client.app.state.db.one('SELECT status FROM web_push_deliveries')['status'] == 'queued'
+    assert client.delete(f'/api/conversations/{cid}', headers=HEADERS).status_code == 200
+    service.enqueue()
+    client.portal.call(service.deliver)
+    assert not calls
+    assert client.get('/api/notifications/messages/'+message_id).status_code == 404
+    assert client.post(f'/api/conversations/{cid}/restore',headers=HEADERS).status_code == 200
+    service.enqueue()
+    client.portal.call(service.deliver)
+    assert not calls

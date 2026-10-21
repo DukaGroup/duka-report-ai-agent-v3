@@ -946,7 +946,7 @@ class SubscriptionManager:
             )
         body = ReportRequest.model_validate(arguments)
         conversation = self.db.one(
-            "SELECT id,model FROM conversations WHERE user_id=? AND provider_thread_id=?",
+            "SELECT id,model FROM conversations WHERE user_id=? AND provider_thread_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)",
             (user_id, params.get("threadId")),
         )
         if not conversation:
@@ -1066,7 +1066,7 @@ class SubscriptionManager:
             }
         elif tool in ("calculate_data", "create_calculation_report"):
             try:
-                conversation = self.db.one("SELECT id FROM conversations WHERE user_id=? AND provider_thread_id=?",
+                conversation = self.db.one("SELECT id FROM conversations WHERE user_id=? AND provider_thread_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)",
                                            (user_id, params.get("threadId")))
                 if not conversation or params.get("threadId") in getattr(self, "report_threads", {}).values():
                     raise ValueError("Calculation tools require an active chat; report generation uses its captured results.")
@@ -1096,7 +1096,7 @@ class SubscriptionManager:
         elif tool in ("list_attachments", "read_attachment", "query_attachment", "create_attachment_report"):
             try:
                 conversation = self.db.one(
-                    "SELECT id FROM conversations WHERE user_id=? AND provider_thread_id=?",
+                    "SELECT id FROM conversations WHERE user_id=? AND provider_thread_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)",
                     (user_id, params.get("threadId")),
                 )
                 if not conversation:

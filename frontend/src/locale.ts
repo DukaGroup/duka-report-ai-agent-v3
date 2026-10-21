@@ -113,6 +113,14 @@ const errors: Record<string, string> = {
     "Profili i lidhjes mungon në .env të projektit. Riktheni konfigurimin e tij.",
   "The project .env recovery could not complete. Check backend file permissions and storage.":
     "Rikthimi i .env nuk përfundoi. Kontrolloni lejet e backend-it dhe hapësirën e ruajtjes.",
+  "Report selection is unavailable. Refresh the library and select again.":
+    "Përzgjedhja nuk është më e disponueshme. Rifreskoni raportet dhe zgjidhni përsëri.",
+  "Report selection is unavailable. Refresh the trash and select again.":
+    "Përzgjedhja nuk është më e disponueshme. Rifreskoni koshin dhe zgjidhni përsëri.",
+  "Stop selected reports before deleting them.":
+    "Ndërprisni raportet e zgjedhura para se t’i fshini.",
+  "Choose automatic discovery or a database name, not both.":
+    "Zgjidhni zbulimin automatik ose emrin e databazës.",
   "HANA_PORT must be a number between 1 and 65535.":
     "HANA_PORT duhet të jetë një numër nga 1 deri në 65535.",
   "HANA TLS options must be true or false.":
@@ -324,10 +332,14 @@ export function auditLabel(action: string): string {
     "report.deleted": "Raport i fshirë",
     "report.restored": "Raport i rikthyer",
     "report.trash_emptied": "Koshi i raporteve u zbraz",
+    "report.trash_deleted": "Raportet e zgjedhura u fshinë përgjithmonë",
     "report.failed": "Raport i dështuar",
     "reporting.tool": "Analizë e të dhënave",
     "chat.response": "Përgjigje në bisedë",
     "conversation.deleted": "Bisedë e fshirë",
+    "conversation.trashed": "Bisedë e kaluar në kosh",
+    "conversation.restored": "Bisedë e rikthyer",
+    "conversation.purged": "Bisedë e fshirë përgjithmonë",
     "attachment.uploaded": "Skedar i ngarkuar",
     "user.created": "Anëtar i shtuar",
     "user.updated": "Anëtar i ndryshuar",

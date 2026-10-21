@@ -11,7 +11,7 @@ from .security import current_user
 
 def register_branches(app):
     def owned(cid, user):
-        if not app.state.db.one("SELECT id FROM conversations WHERE id=? AND user_id=?", (cid, user)):
+        if not app.state.db.one("SELECT id FROM conversations WHERE id=? AND user_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)", (cid, user)):
             raise HTTPException(404, "Conversation not found.")
 
     @app.get("/api/conversations/{cid}/versions")
@@ -42,6 +42,7 @@ def register_branches(app):
         if lock.locked():
             raise HTTPException(409, "Stop the current response before restoring a version.")
         async with lock:
+            owned(cid, user["id"])
             with db.connect() as c:
                 c.execute("BEGIN IMMEDIATE")
                 if (

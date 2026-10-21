@@ -1,0 +1,27 @@
+{
+  "deployed": true,
+  "health": "ok",
+  "existing_data_unchanged": true,
+  "environment_unchanged": true,
+  "backup_verified": true,
+  "migration_14_verified": true,
+  "initial_trash_empty": true,
+  "served_assets": [
+    "/assets/index-IE_TsK2U.js",
+    "/assets/index-B1i00aH_.css"
+  ],
+  "backend_matches": true,
+  "frontend_tests": 71,
+  "backend_tests": 90,
+  "ui_checks": [
+    "Bulk move to Trash",
+    "Single move to Trash",
+    "Restore and reopen original messages",
+    "Exact selection permanent-delete confirmation and cancel",
+    "Selection is pruned after restore",
+    "Desktop and 390px mobile layouts",
+    "Light, dark and system themes"
+  ],
+  "permanent_deletion_tests": "Actual purge verified with disposable backend fixtures; browser permanent-delete confirmation was cancelled.",
+  "provider_checks": "Running ChatGPT and Claude requests stop on Trash; both can continue after restore."
+}

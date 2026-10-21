@@ -38,6 +38,8 @@ import { Brand } from "./Brand";
 import { SubscriptionAccounts } from "./SubscriptionAccounts";
 import { Select } from "./Select";
 import { IconButton } from "./IconButton";
+import { SourceConnectionForm } from "./SourceConnectionForm";
+import { SelectionToolbar } from "./SelectionToolbar";
 import { ThinkingStatus } from "./ThinkingStatus";
 import { ReplyNotifications } from "./ReplyNotifications";
 import { ReplyCompletions } from "./replyNotifications";
@@ -529,7 +531,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [editSource, setEditSource] = useState<Source | null>(null);
   const [sourceKind, setSourceKind] = useState("sqlserver");
   const [savingSource, setSavingSource] = useState(false);
-  const [overrideEnvironment, setOverrideEnvironment] = useState(false);
+  const [editingConnection, setEditingConnection] = useState(false);
   const [autoDiscoverDatabases, setAutoDiscoverDatabases] = useState(true);
   const [sourceActions, setSourceActions] = useState<Record<string, boolean>>(
     {},
@@ -541,30 +543,66 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   >([]);
   const [databaseOffset, setDatabaseOffset] = useState<number | null>(null);
   const [loadingDatabases, setLoadingDatabases] = useState(false);
-  const environmentActive =
-    editSource?.configuration_origin === "environment" &&
-    !overrideEnvironment &&
-    sourceKind === editSource.kind;
+  const connectionSummary =
+    !!editSource && !editingConnection && sourceKind === editSource.kind;
   const sourcePrefix = sourceKind === "saphana" ? "HANA" : "SQLSERVER";
   const sourceSupported =
     sourceKind === "sqlserver" || sourceKind === "saphana";
-  const changingSourceKind = !!editSource && editSource.kind !== sourceKind;
-  const keepConnectionFields =
-    !!editSource &&
-    (editSource.configuration_origin === "saved" || changingSourceKind);
   const [conversationSearch, setConversationSearch] = useState("");
+  const [selectedConversationIds, setSelectedConversationIds] = useState<
+    string[]
+  >([]);
+  const [conversationDeleteRequest, setConversationDeleteRequest] = useState<{
+    ids: string[];
+    permanent: boolean;
+  } | null>(null);
+  const [conversationTrash, setConversationTrash] = useState(false);
+  const [deletedConversations, setDeletedConversations] = useState<
+    Conversation[]
+  >([]);
+  const [restoringConversation, setRestoringConversation] = useState<
+    string | null
+  >(null);
+  const conversationTrashFetch = useRef(0);
+  useEffect(() => {
+    const available = new Set(
+      (conversationTrash ? deletedConversations : conversations).map(
+        (c) => c.id,
+      ),
+    );
+    setSelectedConversationIds((ids) => {
+      const next = ids.filter((id) => available.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [conversations, deletedConversations, conversationTrash]);
   const [openingConversation, setOpeningConversation] = useState(false);
   const [connectionLost, setConnectionLost] = useState(false);
   const [deleteReport, setDeleteReport] = useState<Report | null>(null);
   const [deletingReport, setDeletingReport] = useState(false);
   const [reportTrash, setReportTrash] = useState(false);
   const [deletedReports, setDeletedReports] = useState<Report[]>([]);
-  const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
-  const [emptyingTrash, setEmptyingTrash] = useState(false);
+  const [selectedReportIds, setSelectedReportIds] = useState<string[]>([]);
+  const [reportDeleteRequest, setReportDeleteRequest] = useState<{
+    ids: string[];
+    permanent: boolean;
+  } | null>(null);
+  const [deletingSelectedReports, setDeletingSelectedReports] = useState(false);
   const [restoringReportId, setRestoringReportId] = useState<string | null>(
     null,
   );
   const reportSelection = useRef<string | null>(null);
+  useEffect(() => {
+    const available = new Set(
+      (reportTrash ? deletedReports : reports)
+        .filter((r) => !["queued", "running"].includes(r.status))
+        .map((r) => r.id),
+    );
+    setSelectedReportIds((ids) => {
+      const next = ids.filter((id) => available.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [reportTrash, deletedReports, reports]);
+
   const [deleteChat, setDeleteChat] = useState<Conversation | null>(null);
   const [chatHistory, setChatHistory] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -871,6 +909,53 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setReportsLoaded(true);
     if (reportTrash)
       setDeletedReports(await api<Report[]>("/reports?deleted=true"));
+  }
+  async function loadConversationTrash() {
+    const version = ++conversationTrashFetch.current;
+    const items = await api<Conversation[]>("/conversations?deleted=true");
+    if (version === conversationTrashFetch.current)
+      setDeletedConversations(items);
+  }
+  useEffect(() => {
+    if (!conversationTrash || page !== "conversations") return;
+    void loadConversationTrash().catch(fail);
+    const timer = setInterval(
+      () => void loadConversationTrash().catch(() => undefined),
+      5000,
+    );
+    return () => {
+      clearInterval(timer);
+      conversationTrashFetch.current++;
+    };
+  }, [conversationTrash, page]);
+  async function restoreConversation(ids: string[], bulk = false) {
+    if (!ids.length || deleting || restoringConversation) return;
+    const selected = new Set(ids);
+    setRestoringConversation(bulk ? "__selected__" : ids[0]);
+    setError("");
+    try {
+      if (bulk) {
+        await api("/conversations/bulk-restore", {
+          method: "POST",
+          body: JSON.stringify({ conversation_ids: ids }),
+        });
+      } else {
+        await api(`/conversations/${ids[0]}/restore`, { method: "POST" });
+      }
+      conversationTrashFetch.current++;
+      setDeletedConversations((items) =>
+        items.filter((c) => !selected.has(c.id)),
+      );
+      setSelectedConversationIds((items) =>
+        items.filter((id) => !selected.has(id)),
+      );
+      setConversations(await api<Conversation[]>("/conversations"));
+      await loadConversationTrash();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setRestoringConversation(null);
+    }
   }
   async function loadAdmin() {
     if (!isDev) {
@@ -1282,7 +1367,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
   }
   async function restoreReport(item: Report) {
-    if (emptyingTrash || restoringReportId) return;
+    if (deletingSelectedReports || restoringReportId) return;
     setRestoringReportId(item.id);
     try {
       await api(`/reports/${item.id}/restore`, { method: "POST" });
@@ -1294,21 +1379,36 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setRestoringReportId(null);
     }
   }
-  async function emptyReportTrash() {
-    if (emptyingTrash || restoringReportId || !deletedReports.length) return;
-    setEmptyingTrash(true);
+  async function deleteSelectedReports() {
+    if (!reportDeleteRequest || deletingSelectedReports || restoringReportId)
+      return;
+    const request = reportDeleteRequest;
+    setDeletingSelectedReports(true);
     setError("");
     try {
-      await api("/reports/trash", { method: "DELETE" });
-      setDeletedReports([]);
-      setEmptyTrashConfirm(false);
+      await api("/reports/bulk-delete", {
+        method: "POST",
+        body: JSON.stringify({
+          report_ids: request.ids,
+          permanent: request.permanent,
+        }),
+      });
+      if (report && request.ids.includes(report.id)) closeReport();
+      const keep = (item: Report) => !request.ids.includes(item.id);
+      if (request.permanent) setDeletedReports((items) => items.filter(keep));
+      else setReports((items) => items.filter(keep));
+      setSelectedReportIds((items) =>
+        items.filter((id) => !request.ids.includes(id)),
+      );
+      setReportDeleteRequest(null);
       await loadReports();
     } catch (e) {
       fail(e);
     } finally {
-      setEmptyingTrash(false);
+      setDeletingSelectedReports(false);
     }
   }
+
   async function send(
     text: string,
     retryId = retryMessageId,
@@ -1859,8 +1959,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         )
           delete data[key];
       }
-      if (sourceSupported && !environmentActive && autoDiscoverDatabases)
-        data[sourcePrefix + "_DATABASE"] = "";
+      if (sourceSupported && !connectionSummary)
+        data.discover_databases = autoDiscoverDatabases;
       setSavingSource(true);
     }
     try {
@@ -1933,7 +2033,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setError("");
     setEditSource(source);
     setSourceKind(source?.kind || "sqlserver");
-    setOverrideEnvironment(false);
+    setEditingConnection(false);
     setAutoDiscoverDatabases(
       !source?.connection_fields?.[
         source.kind === "saphana" ? "HANA_DATABASE" : "SQLSERVER_DATABASE"
@@ -1986,25 +2086,37 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setLoadingDatabases(false);
     }
   }
-  async function removeConversation() {
-    if (uploading) return;
-    if (!deleteChat || deleting) return;
+  async function removeConversation(
+    ids = deleteChat ? [deleteChat.id] : [],
+    bulk = false,
+    permanent = false,
+  ) {
+    if (uploading || !ids.length || deleting || restoringConversation) return;
     setDeleting(true);
-    // Retire the listener before cancellation emits its final event. A late
-    // completion must not restore this chat or its draft after deletion.
-    listeners.current.get(deleteChat.id)?.abort();
-    listeners.current.delete(deleteChat.id);
-    requestKeys.current.delete(deleteChat.id);
-    runs.current.finish(deleteChat.id);
-    submitting.current.delete(deleteChat.id);
+    const selected = new Set(ids);
+    // Retire listeners before cancellation emits final events.
+    for (const id of ids) {
+      listeners.current.get(id)?.abort();
+      listeners.current.delete(id);
+      requestKeys.current.delete(id);
+      runs.current.finish(id);
+      submitting.current.delete(id);
+    }
     refreshRuns((n) => n + 1);
     try {
-      await api(`/conversations/${deleteChat.id}`, { method: "DELETE" });
-      replyCompletions.current.forget(deleteChat.id);
+      if (bulk) {
+        await api("/conversations/bulk-delete", {
+          method: "POST",
+          body: JSON.stringify({ conversation_ids: ids, permanent }),
+        });
+      } else {
+        await api(`/conversations/${ids[0]}`, { method: "DELETE" });
+      }
+      for (const id of ids) replyCompletions.current.forget(id);
       setReplyNotifications((items) =>
-        items.filter((item) => item.conversationId !== deleteChat.id),
+        items.filter((item) => !selected.has(item.conversationId)),
       );
-      if (activeId.current === deleteChat.id) {
+      if (activeId.current && selected.has(activeId.current)) {
         setCurrentId(null);
         activeId.current = null;
         setMessages([]);
@@ -2013,25 +2125,37 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         setPendingAttachments([]);
         setPage("conversations");
       }
-      setConversations((items) => items.filter((c) => c.id !== deleteChat.id));
-      setReports((items) =>
-        items.map((r) =>
-          r.conversation_id === deleteChat.id
-            ? { ...r, conversation_id: null }
-            : r,
-        ),
-      );
-      drafts.current.delete(deleteChat.id);
+      setConversations((items) => items.filter((c) => !selected.has(c.id)));
+      if (permanent)
+        setReports((items) =>
+          items.map((r) =>
+            r.conversation_id && selected.has(r.conversation_id)
+              ? { ...r, conversation_id: null }
+              : r,
+          ),
+        );
+      if (permanent) for (const id of ids) drafts.current.delete(id);
       saveDrafts(user.id, drafts.current);
       try {
         if (
-          localStorage.getItem(`duka.currentChat.${user.id}`) === deleteChat.id
+          selected.has(
+            localStorage.getItem(`duka.currentChat.${user.id}`) || "",
+          )
         )
           localStorage.removeItem(`duka.currentChat.${user.id}`);
       } catch {
         /* Optional storage. */
       }
+      setSelectedConversationIds((items) =>
+        items.filter((id) => !selected.has(id)),
+      );
       setDeleteChat(null);
+      setConversationDeleteRequest(null);
+      conversationTrashFetch.current++;
+      setDeletedConversations((items) =>
+        items.filter((c) => !selected.has(c.id)),
+      );
+      await loadConversationTrash();
     } catch (e) {
       fail(e);
     } finally {
@@ -2135,12 +2259,28 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     : [];
   const chatTimeline = buildChatTimeline(messages, conversationReports);
   const empty = messages.length === 0 && conversationReports.length === 0;
-  const visibleConversations = conversations.filter((c) =>
+  const libraryConversations = conversationTrash
+    ? deletedConversations
+    : conversations;
+  const conversationActionBusy =
+    deleting || uploading || openingConversation || !!restoringConversation;
+  const visibleConversations = libraryConversations.filter((c) =>
     `${c.title} ${c.preview || ""}`
       .toLocaleLowerCase("sq")
       .includes(conversationSearch.toLocaleLowerCase("sq")),
   );
+  const selectedVisibleConversations = visibleConversations.filter((c) =>
+    selectedConversationIds.includes(c.id),
+  );
   const libraryReports = reportTrash ? deletedReports : reports;
+  const selectableReports = libraryReports.filter(
+    (r) => !["queued", "running"].includes(r.status),
+  );
+  const selectedLibraryReports = selectableReports.filter((r) =>
+    selectedReportIds.includes(r.id),
+  );
+  const reportActionBusy =
+    deletingSelectedReports || deletingReport || !!restoringReportId;
 
   return (
     <div className="workspace">
@@ -2374,25 +2514,107 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </button>
               }
             />
-            {conversations.length > 0 && (
+            <div className="library-tabs" aria-label="Pamjet e bisedave">
+              <button
+                className={!conversationTrash ? "active" : ""}
+                aria-pressed={!conversationTrash}
+                disabled={conversationActionBusy}
+                onClick={() => {
+                  setConversationTrash(false);
+                  setSelectedConversationIds([]);
+                  setConversationSearch("");
+                }}
+              >
+                <MessageSquare size={16} /> Bisedat ({conversations.length})
+              </button>
+              <button
+                className={conversationTrash ? "active" : ""}
+                aria-pressed={conversationTrash}
+                disabled={conversationActionBusy}
+                onClick={() => {
+                  setConversationTrash(true);
+                  setSelectedConversationIds([]);
+                  setConversationSearch("");
+                }}
+              >
+                <Trash2 size={16} /> Të fshira
+              </button>
+            </div>
+            {libraryConversations.length > 0 && (
               <label className="library-search">
                 <Search size={17} />
                 <input
                   aria-label="Kërko biseda"
                   placeholder="Kërko në bisedat tuaja…"
                   value={conversationSearch}
-                  onChange={(e) => setConversationSearch(e.target.value)}
+                  onChange={(e) => {
+                    setConversationSearch(e.target.value);
+                    setSelectedConversationIds([]);
+                  }}
                 />
               </label>
+            )}
+            {libraryConversations.length > 0 && (
+              <SelectionToolbar
+                kind="conversations"
+                available={visibleConversations.length}
+                selected={selectedVisibleConversations.length}
+                busy={conversationActionBusy}
+                permanent={conversationTrash}
+                restoring={!!restoringConversation}
+                onRestore={
+                  conversationTrash
+                    ? () =>
+                        void restoreConversation(
+                          selectedVisibleConversations.map((c) => c.id),
+                          true,
+                        )
+                    : undefined
+                }
+                onToggleAll={(checked) =>
+                  setSelectedConversationIds(
+                    checked ? visibleConversations.map((c) => c.id) : [],
+                  )
+                }
+                onClear={() => setSelectedConversationIds([])}
+                onDelete={() => {
+                  setError("");
+                  setConversationDeleteRequest({
+                    ids: selectedVisibleConversations.map((c) => c.id),
+                    permanent: conversationTrash,
+                  });
+                }}
+              />
             )}
             {visibleConversations.length ? (
               <div className="conversation-grid">
                 {visibleConversations.map((c) => (
-                  <article className="conversation-card" key={c.id}>
+                  <article
+                    className={`conversation-card${conversationTrash ? " trashed" : ""}${selectedConversationIds.includes(c.id) ? " selected" : ""}`}
+                    key={c.id}
+                  >
+                    <label
+                      className="conversation-card-select"
+                      title={`Zgjidh bisedën: ${c.title}`}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Zgjidh bisedën: ${c.title}`}
+                        checked={selectedConversationIds.includes(c.id)}
+                        disabled={conversationActionBusy}
+                        onChange={(e) =>
+                          setSelectedConversationIds((ids) =>
+                            e.target.checked
+                              ? [...ids, c.id]
+                              : ids.filter((id) => id !== c.id),
+                          )
+                        }
+                      />
+                    </label>
                     <button
                       className="conversation-card-main"
-                      aria-label={`Hap bisedën: ${c.title}`}
-                      disabled={uploading || openingConversation}
+                      aria-label={`${conversationTrash ? "Bisedë e fshirë" : "Hap bisedën"}: ${c.title}`}
+                      disabled={conversationTrash || conversationActionBusy}
                       onClick={() => void selectConversation(c)}
                     >
                       <span className="report-icon">
@@ -2415,18 +2637,44 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       </p>
                       <span className="conversation-card-meta">
                         <span>{c.message_count || 0} mesazhe</span>
-                        <span>{date(c.updated_at)}</span>
-                        <ArrowRight size={17} />
+                        <span>
+                          {conversationTrash
+                            ? `Fshirë ${date(c.deleted_at || c.updated_at)}`
+                            : date(c.updated_at)}
+                        </span>
+                        {!conversationTrash && <ArrowRight size={17} />}
                       </span>
                     </button>
+                    {conversationTrash && (
+                      <button
+                        className="icon-button conversation-card-restore"
+                        title="Rikthe bisedën"
+                        aria-label={`Rikthe bisedën: ${c.title}`}
+                        disabled={conversationActionBusy}
+                        onClick={() => void restoreConversation([c.id])}
+                      >
+                        {restoringConversation === c.id ? (
+                          <LoaderCircle size={17} className="spin" />
+                        ) : (
+                          <RotateCcw size={17} />
+                        )}
+                      </button>
+                    )}
                     <button
                       className="icon-button conversation-card-delete"
-                      title="Fshi bisedën"
-                      aria-label={`Fshi bisedën: ${c.title}`}
-                      disabled={uploading || deleting}
+                      title={
+                        conversationTrash ? "Fshi përgjithmonë" : "Kalo në kosh"
+                      }
+                      aria-label={`${conversationTrash ? "Fshi përgjithmonë bisedën" : "Fshi bisedën"}: ${c.title}`}
+                      disabled={conversationActionBusy}
                       onClick={() => {
                         setError("");
-                        setDeleteChat(c);
+                        if (conversationTrash)
+                          setConversationDeleteRequest({
+                            ids: [c.id],
+                            permanent: true,
+                          });
+                        else setDeleteChat(c);
                       }}
                     >
                       <Trash2 size={16} />
@@ -2440,12 +2688,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 title={
                   conversationSearch
                     ? "Nuk u gjet asnjë bisedë."
-                    : "Biseda juaj e parë fillon këtu."
+                    : conversationTrash
+                      ? "Koshi i bisedave është bosh."
+                      : "Biseda juaj e parë fillon këtu."
                 }
                 text={
                   conversationSearch
                     ? "Provoni një fjalë tjetër për kërkimin."
-                    : "Shtypni “Bisedë e re” për të biseduar me asistentin dhe për të krijuar raporte."
+                    : conversationTrash
+                      ? "Bisedat e fshira do të shfaqen këtu. Mund t’i riktheni ose t’i fshini përgjithmonë."
+                      : "Shtypni “Bisedë e re” për të biseduar me asistentin dhe për të krijuar raporte."
                 }
               />
             )}
@@ -3525,7 +3777,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 className={!reportTrash ? "active" : ""}
                 aria-pressed={!reportTrash}
-                onClick={() => setReportTrash(false)}
+                disabled={reportActionBusy}
+                onClick={() => {
+                  setReportTrash(false);
+                  setSelectedReportIds([]);
+                }}
               >
                 <FileText size={16} />
                 Raportet ({reports.length})
@@ -3533,7 +3789,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 className={reportTrash ? "active" : ""}
                 aria-pressed={reportTrash}
+                disabled={reportActionBusy}
                 onClick={() => {
+                  setSelectedReportIds([]);
                   setReportTrash(true);
                   void api<Report[]>("/reports?deleted=true")
                     .then(setDeletedReports)
@@ -3544,33 +3802,59 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 Të fshira
               </button>
             </div>
-            {reportTrash && (
-              <div className="trash-toolbar">
-                <span>{deletedReports.length} raporte të fshira</span>
-                <button
-                  className="button danger small"
-                  disabled={
-                    !deletedReports.length ||
-                    emptyingTrash ||
-                    !!restoringReportId
-                  }
-                  onClick={() => {
-                    setError("");
-                    setEmptyTrashConfirm(true);
-                  }}
-                >
-                  <Trash2 size={16} /> Zbraz koshin
-                </button>
-              </div>
-            )}
+            <SelectionToolbar
+              available={selectableReports.length}
+              selected={selectedLibraryReports.length}
+              busy={reportActionBusy}
+              permanent={reportTrash}
+              onToggleAll={(checked) =>
+                setSelectedReportIds(
+                  checked ? selectableReports.map((r) => r.id) : [],
+                )
+              }
+              onClear={() => setSelectedReportIds([])}
+              onDelete={() => {
+                setError("");
+                setReportDeleteRequest({
+                  ids: selectedLibraryReports.map((r) => r.id),
+                  permanent: reportTrash,
+                });
+              }}
+            />
             {libraryReports.length ? (
               <div className="report-grid">
                 {libraryReports.map((r) => (
-                  <article className="report-card" key={r.id}>
+                  <article
+                    className={`report-card${selectedReportIds.includes(r.id) ? " selected" : ""}`}
+                    key={r.id}
+                  >
                     <div className="report-card-top">
-                      <span className="report-icon">
-                        <FileText size={23} />
-                      </span>
+                      <div className="report-card-leading">
+                        <label
+                          className="report-card-select"
+                          title={`Zgjidh raportin: ${r.title}`}
+                        >
+                          <input
+                            type="checkbox"
+                            aria-label={`Zgjidh raportin: ${r.title}`}
+                            checked={selectedReportIds.includes(r.id)}
+                            disabled={
+                              reportActionBusy ||
+                              ["queued", "running"].includes(r.status)
+                            }
+                            onChange={(e) =>
+                              setSelectedReportIds((ids) =>
+                                e.target.checked
+                                  ? [...ids.filter((id) => id !== r.id), r.id]
+                                  : ids.filter((id) => id !== r.id),
+                              )
+                            }
+                          />
+                        </label>
+                        <span className="report-icon">
+                          <FileText size={23} />
+                        </span>
+                      </div>
                       <Badge good={!reportTrash && r.status === "completed"}>
                         {reportTrash
                           ? "I fshirë"
@@ -3606,7 +3890,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       {reportTrash ? (
                         <IconButton
                           label={`Rikthe raportin: ${r.title}`}
-                          disabled={emptyingTrash || !!restoringReportId}
+                          disabled={reportActionBusy}
                           onClick={() => void restoreReport(r)}
                         >
                           {restoringReportId === r.id ? (
@@ -3641,7 +3925,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                 ? "Ndërpriteni raportin para fshirjes"
                                 : "Fshi raportin"
                             }
-                            disabled={["queued", "running"].includes(r.status)}
+                            disabled={
+                              reportActionBusy ||
+                              ["queued", "running"].includes(r.status)
+                            }
                             onClick={() => {
                               setError("");
                               setDeleteReport(r);
@@ -4058,8 +4345,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         >
           <p>
             {" "}
-            Fshi “ {deleteChat.title} ” dhe mesazhet e saj nga hapësira? Puna në
-            vazhdim do të ndërpritet. Raportet e ruajtura do të mbeten.{" "}
+            Biseda “{deleteChat.title}” do të kalojë te “Të fshira” dhe mund të
+            rikthehet. Puna në vazhdim do të ndërpritet. Raportet e ruajtura do
+            të mbeten.
           </p>
           <div className="modal-actions">
             <button
@@ -4076,6 +4364,53 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               onClick={() => void removeConversation()}
             >
               {deleting ? "Duke fshirë…" : "Fshi bisedën"}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {conversationDeleteRequest && (
+        <Modal
+          error={error}
+          title={
+            conversationDeleteRequest.permanent
+              ? "Të fshihen përgjithmonë bisedat?"
+              : "Të kalojnë bisedat në kosh?"
+          }
+          dismissOnBackdrop={false}
+          onClose={() => {
+            if (!deleting) setConversationDeleteRequest(null);
+          }}
+        >
+          <p>
+            {conversationDeleteRequest.permanent
+              ? `Do të fshihen përgjithmonë ${conversationDeleteRequest.ids.length} biseda dhe mesazhet e tyre. Ky veprim nuk zhbëhet.`
+              : `${conversationDeleteRequest.ids.length} biseda do të kalojnë te “Të fshira” dhe mund të rikthehen. Puna në vazhdim do të ndërpritet.`}{" "}
+            Raportet e ruajtura do të mbeten.
+          </p>
+          <div className="modal-actions">
+            <button
+              className="button outline"
+              disabled={deleting}
+              onClick={() => setConversationDeleteRequest(null)}
+            >
+              Anulo
+            </button>
+            <button
+              className="button danger"
+              disabled={deleting}
+              onClick={() =>
+                void removeConversation(
+                  conversationDeleteRequest.ids,
+                  true,
+                  conversationDeleteRequest.permanent,
+                )
+              }
+            >
+              {deleting
+                ? "Duke fshirë…"
+                : conversationDeleteRequest.permanent
+                  ? "Fshi përgjithmonë"
+                  : "Kalo në kosh"}
             </button>
           </div>
         </Modal>
@@ -4110,37 +4445,42 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </div>
         </Modal>
       )}
-      {emptyTrashConfirm && (
+      {reportDeleteRequest && (
         <Modal
-          title="Të zbrazet koshi?"
+          title={
+            reportDeleteRequest.permanent
+              ? "Të fshihen përgjithmonë raportet e zgjedhura?"
+              : "Të fshihen raportet e zgjedhura?"
+          }
           error={error}
+          dismissOnBackdrop={false}
           onClose={() => {
-            if (!emptyingTrash) setEmptyTrashConfirm(false);
+            if (!deletingSelectedReports) setReportDeleteRequest(null);
           }}
         >
           <p>
-            Do të fshihen përgjithmonë {deletedReports.length} raporte nga “Të
-            fshira”, skedarët e tyre Excel dhe të dhënat e ruajtura të
-            raporteve. Ky veprim nuk mund të zhbëhet.
+            {reportDeleteRequest.permanent
+              ? `Do të fshihen përgjithmonë vetëm ${reportDeleteRequest.ids.length} raportet e zgjedhura, bashkë me skedarët dhe të dhënat e tyre. Ky veprim nuk mund të zhbëhet.`
+              : `Vetëm ${reportDeleteRequest.ids.length} raportet e zgjedhura do të kalojnë te “Të fshira”. Mund t’i riktheni më vonë.`}
           </p>
           <div className="modal-actions">
             <button
               className="button outline"
-              disabled={emptyingTrash}
-              onClick={() => setEmptyTrashConfirm(false)}
+              disabled={deletingSelectedReports}
+              onClick={() => setReportDeleteRequest(null)}
             >
               Anulo
             </button>
             <button
               className="button danger"
-              disabled={
-                emptyingTrash || !!restoringReportId || !deletedReports.length
-              }
-              onClick={() => void emptyReportTrash()}
+              disabled={deletingSelectedReports || !!restoringReportId}
+              onClick={() => void deleteSelectedReports()}
             >
-              {emptyingTrash
-                ? "Duke fshirë përgjithmonë…"
-                : "Fshi përgjithmonë"}
+              {deletingSelectedReports
+                ? "Duke fshirë…"
+                : reportDeleteRequest.permanent
+                  ? "Fshi përgjithmonë"
+                  : "Fshi raportet"}
             </button>
           </div>
         </Modal>
@@ -4355,6 +4695,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       )}
       {addSource && (
         <Modal
+          className="source-config-modal"
+          dismissOnBackdrop={false}
           error={error}
           title={
             editSource
@@ -4365,312 +4707,39 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             if (!savingSource) setAddSource(false);
           }}
         >
-          <form onSubmit={(e) => void adminSubmit(e, "sources")}>
-            <label>
-              {" "}
-              Emri i lidhjes{" "}
-              <input
-                name="name"
-                required
-                maxLength={120}
-                defaultValue={editSource?.name || ""}
-                placeholder="P.sh. serveri i financës ose GoTech"
-              />
-            </label>
-            <label>
-              {" "}
-              Lloji i databazës{" "}
-              <Select
-                name="kind"
-                value={sourceKind}
-                disabled={
-                  !!editSource &&
-                  !["sqlserver", "saphana"].includes(editSource.kind)
-                }
-                onChange={(e) => {
-                  setSourceKind(e.target.value);
-                  setAutoDiscoverDatabases(true);
-                }}
-              >
-                {[
-                  "sqlserver",
-                  "saphana",
-                  "postgresql",
-                  "mysql",
-                  "sqlite",
-                  "other",
-                ].map((kind) => (
-                  <option key={kind} value={kind}>
-                    {
-                      {
-                        sqlserver: "SQL Server",
-                        saphana: "SAP HANA",
-                        postgresql: "PostgreSQL",
-                        mysql: "MySQL",
-                        sqlite: "SQLite",
-                        other: "Tjetër",
-                      }[kind]
-                    }
-                  </option>
-                ))}
-              </Select>
-            </label>
-            {sourceSupported && (
-              <fieldset className="source-connection-fields" key={sourceKind}>
-                <legend>
-                  {sourceKind === "saphana"
-                    ? "Lidhja SAP HANA"
-                    : "Lidhja SQL Server"}
-                </legend>
-                {environmentActive ? (
-                  <>
-                    <div className="notice environment-source">
-                      <div>
-                        <strong>Lidhja përdor .env në server.</strong>
-                        <p>
-                          Kredencialet janë ngarkuar privatisht. Nuk shfaqen në
-                          shfletues.
-                        </p>
-                        <button
-                          type="button"
-                          className="button outline small"
-                          onClick={() => setOverrideEnvironment(true)}
-                        >
-                          Ndrysho konfigurimin e lidhjes
-                        </button>
-                      </div>
-                    </div>
-                    <div className="environment-fields">
-                      {["HOST", "PORT", "USER", "PASSWORD", "DATABASE"].map(
-                        (field) => (
-                          <div className="service-row" key={field}>
-                            <code>
-                              {sourcePrefix}_{field}
-                            </code>
-                            <Badge
-                              good={
-                                !!editSource?.connection_fields?.[
-                                  sourcePrefix + "_" + field
-                                ] || field === "DATABASE"
-                              }
-                            >
-                              {editSource?.connection_fields?.[
-                                sourcePrefix + "_" + field
-                              ]
-                                ? "Ngarkuar nga .env"
-                                : field === "DATABASE"
-                                  ? "Zbulim automatik"
-                                  : "Mungon në .env"}
-                            </Badge>
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {keepConnectionFields && (
-                      <p className="footnote">
-                        Fushat bosh mbajnë hostin, përdoruesin dhe fjalëkalimin
-                        aktual. Kredencialet ruhen në .env.
-                      </p>
-                    )}
-                    {changingSourceKind && (
-                      <p className="notice">
-                        Vendosni portin SQL të llojit të ri. Databaza
-                        parazgjedhje pastrohet për zbulim automatik.
-                      </p>
-                    )}
-                    {["HOST", "PORT", "USER", "PASSWORD"].map((field) => (
-                      <label key={field}>
-                        {sourcePrefix}_{field}
-                        <input
-                          name={sourcePrefix + "_" + field}
-                          type={
-                            field === "PASSWORD"
-                              ? "password"
-                              : field === "PORT"
-                                ? "number"
-                                : "text"
-                          }
-                          required={
-                            !keepConnectionFields ||
-                            (field === "PORT" && changingSourceKind)
-                          }
-                          min={field === "PORT" ? 1 : undefined}
-                          max={field === "PORT" ? 65535 : undefined}
-                          maxLength={field === "PASSWORD" ? 1024 : 255}
-                          autoComplete={
-                            field === "PASSWORD" ? "new-password" : "off"
-                          }
-                          defaultValue={
-                            field === "PORT" && !editSource
-                              ? sourceKind === "saphana"
-                                ? "30015"
-                                : "1433"
-                              : ""
-                          }
-                          placeholder={
-                            field === "PORT"
-                              ? sourceKind === "saphana"
-                                ? "Porti SQL HANA, p.sh. 30015 ose 443"
-                                : "1433"
-                              : keepConnectionFields
-                                ? "Lëreni bosh për të mbajtur vlerën aktuale"
-                                : field === "HOST"
-                                  ? "Adresa e serverit"
-                                  : field === "USER"
-                                    ? "Përdoruesi i raporteve"
-                                    : "Fjalëkalimi"
-                          }
-                        />
-                      </label>
-                    ))}
-                    <label>
-                      <span className="source-discovery-option">
-                        <input
-                          type="checkbox"
-                          checked={autoDiscoverDatabases}
-                          onChange={(e) =>
-                            setAutoDiscoverDatabases(e.target.checked)
-                          }
-                        />
-                        Zbulo automatikisht databazat
-                      </span>
-                    </label>
-                    <label>
-                      {sourcePrefix}_DATABASE (opsionale)
-                      <input
-                        name={sourcePrefix + "_DATABASE"}
-                        disabled={autoDiscoverDatabases}
-                        maxLength={128}
-                        autoComplete="off"
-                        placeholder={
-                          autoDiscoverDatabases
-                            ? "Databazat do të zbulohen automatikisht"
-                            : "Databaza parazgjedhje, nëse dëshironi"
-                        }
-                      />
-                    </label>
-                    {sourceKind === "saphana" && (
-                      <>
-                        <label>
-                          Certifikata CA e besuar (PEM, opsionale)
-                          <textarea
-                            name="HANA_TLS_CA_CERTIFICATE"
-                            rows={5}
-                            maxLength={65536}
-                            autoComplete="off"
-                            spellCheck={false}
-                            placeholder={
-                              editSource?.tls?.custom_ca
-                                ? "Certifikata është ruajtur. Lëreni bosh për ta mbajtur."
-                                : "-----BEGIN CERTIFICATE-----\nCertifikata rrënjë/ndërmjetëse nga administratori SAP HANA\n-----END CERTIFICATE-----"
-                            }
-                          />
-                        </label>
-                        <label>
-                          Emri DNS në certifikatën e serverit (opsionale)
-                          <input
-                            name="HANA_TLS_SERVER_NAME"
-                            maxLength={253}
-                            autoComplete="off"
-                            placeholder={
-                              editSource?.tls?.server_name_configured
-                                ? "Emri është ruajtur. Lëreni bosh për ta mbajtur."
-                                : "P.sh. hana.company.internal"
-                            }
-                          />
-                        </label>
-                        <p className="footnote">
-                          Certifikata CA dhe emri i serverit merren nga
-                          administratori i SAP HANA. Mos vendosni çelësa
-                          privatë. Ruhet në .env dhe përdoret vetëm nga
-                          backend-i për verifikimin TLS.
-                        </p>
-                        <label>
-                          HANA_ENCRYPT
-                          <Select
-                            name="HANA_ENCRYPT"
-                            defaultValue={
-                              editSource?.tls?.encrypt === false
-                                ? "false"
-                                : "true"
-                            }
-                          >
-                            <option value="true">TLS i aktivizuar</option>
-                            <option value="false">
-                              Pa TLS — vetëm nëse serveri e kërkon
-                            </option>
-                          </Select>
-                        </label>
-                        <label>
-                          HANA_VALIDATE_CERTIFICATE
-                          <Select
-                            name="HANA_VALIDATE_CERTIFICATE"
-                            defaultValue={
-                              editSource?.tls?.validate_certificate === false
-                                ? "false"
-                                : "true"
-                            }
-                          >
-                            <option value="true">
-                              Kontrollo certifikatën e serverit
-                            </option>
-                            <option value="false">
-                              Pa kontroll certifikate — lidhje pa verifikim
-                            </option>
-                          </Select>
-                        </label>
-                      </>
-                    )}
-                  </>
-                )}
-                {sourceKind === "saphana" && (
-                  <p className="footnote">
-                    Përdorni portin SQL të SAP HANA, jo portin SQL Server. HANA
-                    Cloud zakonisht përdor 443 dhe TLS. Skemat e kompanive në
-                    SAP Business One zbulohen brenda tenant-it; HANA_DATABASE
-                    është emri i tenant-it, jo skema.
-                  </p>
-                )}
-                <p className="footnote">
-                  Konfigurimi ruhet në .env të projektit dhe lexohet vetëm nga
-                  backend-i. Modeli nuk merr hostin, përdoruesin apo
-                  fjalëkalimin.
-                </p>
-                {editSource?.env_prefix && (
-                  <p className="footnote">
-                    Prefiksi në .env: <code>{editSource.env_prefix}</code>
-                  </p>
-                )}
-              </fieldset>
-            )}
-            {!sourceSupported && (
-              <p className="footnote">
-                {" "}
-                Ky lloj databaze mund të përcaktohet, por lidhja e tij nuk është
-                implementuar ende.{" "}
-              </p>
-            )}
-            <label>
-              {" "}
-              Përshkrimi{" "}
-              <textarea
-                name="description"
-                rows={2}
-                defaultValue={editSource?.description || ""}
-                placeholder="Çfarë të dhënash ofron ky burim?"
-              />
-            </label>
-            <button className="button primary wide" disabled={savingSource}>
-              {savingSource
-                ? "Duke ruajtur…"
-                : editSource
-                  ? "Ruaj lidhjen"
-                  : "Ruaj burimin"}
-            </button>
-          </form>
+          <SourceConnectionForm
+            source={editSource}
+            kind={sourceKind}
+            summary={connectionSummary}
+            discovery={autoDiscoverDatabases}
+            saving={savingSource}
+            onKindChange={(kind) => {
+              setSourceKind(kind);
+              setAutoDiscoverDatabases(
+                editSource?.kind === kind
+                  ? !editSource.connection_fields?.[
+                      kind === "saphana"
+                        ? "HANA_DATABASE"
+                        : "SQLSERVER_DATABASE"
+                    ]
+                  : true,
+              );
+            }}
+            onEdit={() => setEditingConnection(true)}
+            onCancelEdit={() => {
+              setEditingConnection(false);
+              setSourceKind(editSource?.kind || "sqlserver");
+              setAutoDiscoverDatabases(
+                !editSource?.connection_fields?.[
+                  (editSource?.kind === "saphana" ? "HANA" : "SQLSERVER") +
+                    "_DATABASE"
+                ],
+              );
+            }}
+            onDiscoveryChange={setAutoDiscoverDatabases}
+            onClose={() => setAddSource(false)}
+            onSubmit={(e) => void adminSubmit(e, "sources")}
+          />
         </Modal>
       )}
       {addDataset && (

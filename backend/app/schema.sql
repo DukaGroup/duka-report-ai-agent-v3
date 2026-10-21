@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS conversations (
     model TEXT, provider_thread_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS conversations_owner ON conversations(user_id,updated_at);
+CREATE TABLE IF NOT EXISTS conversation_trash (
+    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    deleted_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS model_preferences (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     provider TEXT NOT NULL CHECK(provider IN ('chatgpt','claude'))

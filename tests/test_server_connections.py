@@ -42,9 +42,13 @@ def test_database_can_be_added_preserved_and_cleared_without_erasing_other_crede
     for value in ("", None, "   "):
         response = client.patch(path, headers=HEADERS, json={"name": source["name"], "kind": "sqlserver", "SQLSERVER_DATABASE": value})
         assert response.status_code == 200, response.text
-        assert response.json()["database_scope"] == "all"
+        assert response.json()["database_scope"] == "default"
         settings = client.app.state.connectors.source_settings(source["id"])
-        assert settings.sqlserver_database == "" and settings.sqlserver_password == "private#test-password"
+        assert settings.sqlserver_database == "Finance" and settings.sqlserver_password == "private#test-password"
+    response = client.patch(path, headers=HEADERS, json={"discover_databases": True})
+    assert response.status_code == 200 and response.json()["database_scope"] == "all"
+    settings = client.app.state.connectors.source_settings(source["id"])
+    assert settings.sqlserver_database == "" and settings.sqlserver_password == "private#test-password"
     response = client.patch(path, headers=HEADERS, json={"name": source["name"], "kind": "sqlserver", "SQLSERVER_DATABASE": "Other"})
     assert response.status_code == 200 and response.json()["database_scope"] == "default"
 

@@ -504,6 +504,13 @@ class ConnectorRegistry:
             return environment
         values = self.secrets.load(source_id)
         updates = {key.lower(): value for key, value in (values or {}).items()}
+        if "sqlserver_timeout" in updates:
+            try:
+                updates["sqlserver_timeout"] = int(updates["sqlserver_timeout"])
+                if updates["sqlserver_timeout"] < 1:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                raise SecretsUnavailable("The SQL Server timeout must be a positive number.") from None
         for key in ("hana_encrypt", "hana_validate_certificate"):
             if key in updates:
                 if updates[key] not in ("true", "false"):

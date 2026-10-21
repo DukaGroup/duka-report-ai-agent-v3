@@ -90,8 +90,8 @@ def test_replace_upload_and_delete_running_chat(client, admin, claude, monkeypat
         assert len(cancelled) == 1
         await delete(cid, request, admin)
         assert len(cancelled) == 2
-        assert not state.db.one('SELECT id FROM conversations WHERE id=?', (cid,))
-        assert not state.db.one('SELECT id FROM chat_runs WHERE conversation_id=?', (cid,))
+        assert state.db.one('SELECT conversation_id FROM conversation_trash WHERE conversation_id=?', (cid,))
+        assert not state.db.one("SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')", (cid,))
         assert not state.locks[cid].locked()
         assert (admin['id'], 'chat', cid) not in state.manager.worker_leases
         await asyncio.sleep(.05)
@@ -99,7 +99,7 @@ def test_replace_upload_and_delete_running_chat(client, admin, claude, monkeypat
             assert not c.execute('PRAGMA foreign_key_check').fetchall()
         assert not state.chat_jobs.tasks
         saved = state.db.one('SELECT * FROM reports WHERE id=?', (first_report,))
-        assert saved['conversation_id'] is None and saved['stage'] == 'interrupted'
+        assert saved['conversation_id'] == cid and saved['stage'] == 'interrupted'
 
     client.portal.call(replace_and_reconnect)
     assert client.get(f'/api/conversations/{cid}').status_code == 404

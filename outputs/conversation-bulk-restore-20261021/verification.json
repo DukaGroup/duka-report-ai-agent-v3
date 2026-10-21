@@ -1,0 +1,31 @@
+{
+  "deployed": true,
+  "health": "ok",
+  "existing_data_unchanged": true,
+  "environment_unchanged": true,
+  "backup_verified": true,
+  "served_assets": [
+    "/assets/index-BY7ceDCo.js",
+    "/assets/index-DrkDiqbR.css"
+  ],
+  "backend_matches": true,
+  "frontend_tests": 72,
+  "backend_tests": 34,
+  "ui_checks": [
+    "Restore disabled without selection",
+    "Search-scoped Select All restores exactly two of three trashed conversations",
+    "Unselected conversation remains in Trash",
+    "Restored conversation opens with original message",
+    "Selection clears after restore",
+    "Mobile bulk restore of two conversations leaves empty Trash and three active chats",
+    "Desktop and mobile light/system dark layouts"
+  ],
+  "backend_checks": [
+    "Owned, atomic selection",
+    "Foreign, missing and live IDs reject entire batch",
+    "Invalid and duplicate ID handling",
+    "Overlapping restore batches serialize",
+    "History, settings, saved reports and both provider bindings preserved",
+    "Existing ChatGPT and Claude interruption/continuation checks pass"
+  ]
+}

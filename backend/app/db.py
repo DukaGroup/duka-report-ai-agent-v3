@@ -63,6 +63,7 @@ class Database:
         with self.connect() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript((Path(__file__).parent / "schema.sql").read_text())
+            c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(14,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(13,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(12,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(11,?)', (now(),))
@@ -174,15 +175,110 @@ class Database:
             c.execute("DELETE FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id))
             return True
 
-    def empty_report_trash(self, user_id, directory):
+    def trash_conversations(self, user_id, identifiers):
+        identifiers = list(dict.fromkeys(identifiers))
+        if not identifiers:
+            raise ValueError("Zgjidhni të paktën një bisedë.")
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            for identifier in identifiers:
+                self.validate_conversation_selection(c, user_id, identifier, deleted=False)
+                self.require_stopped_conversation(c, identifier)
+            for identifier in identifiers:
+                c.execute("INSERT INTO conversation_trash VALUES(?,?)", (identifier, now()))
+                # Suppress old completion alerts, also after a later restore.
+                c.execute("UPDATE web_push_deliveries SET status='failed' WHERE status='queued' AND message_id IN (SELECT id FROM messages WHERE conversation_id=?)", (identifier,))
+                c.execute("INSERT INTO audit_events VALUES(?,?,?,?,?,?)", (uid(), user_id, "conversation.trashed", identifier, "{}", now()))
+        return len(identifiers)
+
+    @staticmethod
+    def validate_conversation_selection(c, user_id, identifier, *, deleted):
+        row = c.execute("SELECT c.id,t.deleted_at FROM conversations c LEFT JOIN conversation_trash t ON t.conversation_id=c.id WHERE c.id=? AND c.user_id=?", (identifier, user_id)).fetchone()
+        if not row or bool(row["deleted_at"]) != deleted:
+            raise LookupError("Përzgjedhja nuk është më e disponueshme. Rifreskoni bisedat.")
+
+    @staticmethod
+    def require_stopped_conversation(c, identifier):
+        if c.execute("SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')", (identifier,)).fetchone() or c.execute("SELECT id FROM reports WHERE conversation_id=? AND status IN ('queued','running')", (identifier,)).fetchone():
+            raise ValueError("Biseda ka ende punë në vazhdim. Ndërpriteni dhe provoni përsëri.")
+
+    def restore_conversation(self, user_id, identifier):
+        return self.restore_conversations(user_id, [identifier])
+
+    def restore_conversations(self, user_id, identifiers):
+        """Restore the exact owned trash selection together, without restarting work."""
+        identifiers = list(dict.fromkeys(identifiers))
+        if not identifiers:
+            raise ValueError("Zgjidhni të paktën një bisedë.")
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            for identifier in identifiers:
+                self.validate_conversation_selection(c, user_id, identifier, deleted=True)
+                self.require_stopped_conversation(c, identifier)
+            for identifier in identifiers:
+                c.execute("DELETE FROM conversation_trash WHERE conversation_id=?", (identifier,))
+                c.execute("INSERT INTO audit_events VALUES(?,?,?,?,?,?)", (uid(), user_id, "conversation.restored", identifier, "{}", now()))
+        return len(identifiers)
+
+    def delete_conversations(self, user_id, identifiers):
+        """Purge the complete owned trash selection atomically, retaining saved reports."""
+        identifiers = list(dict.fromkeys(identifiers))
+        if not identifiers:
+            raise ValueError("Select at least one conversation.")
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            # Validate before changing any history, including a concurrent delete.
+            for identifier in identifiers:
+                self.validate_conversation_selection(c, user_id, identifier, deleted=True)
+                self.require_stopped_conversation(c, identifier)
+            for identifier in identifiers:
+                c.execute("UPDATE reports SET conversation_id=NULL WHERE conversation_id=?", (identifier,))
+                for table in ('model_tool_journal', 'model_checkpoints'):
+                    c.execute(f"DELETE FROM {table} WHERE user_id=? AND kind='chat' AND (scope_id=? OR scope_id IN (SELECT 'archived:'||id FROM conversation_branches WHERE conversation_id=?))", (user_id, identifier, identifier))
+                c.execute("DELETE FROM conversations WHERE id=? AND user_id=?", (identifier, user_id))
+                c.execute("INSERT INTO audit_events(id,actor_id,action,target_id,detail_json,created_at) VALUES(?,?,?,?,?,?)", (uid(), user_id, "conversation.purged", identifier, "{}", now()))
+        return len(identifiers)
+
+    def trash_reports(self, user_id, identifiers):
+        """Validate the entire owned selection before changing any report."""
+        identifiers = list(dict.fromkeys(identifiers))
+        if not identifiers:
+            raise ValueError("Select at least one report.")
+        marks = ",".join("?" for _ in identifiers)
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            reports = connection.execute(
+                f"SELECT id,status FROM reports WHERE user_id=? AND deleted_at IS NULL AND id IN ({marks})",
+                (user_id, *identifiers),
+            ).fetchall()
+            if len(reports) != len(identifiers):
+                raise LookupError("Report selection is unavailable. Refresh the library and select again.")
+            if any(report["status"] in ("queued", "running") for report in reports):
+                raise ValueError("Stop selected reports before deleting them.")
+            stamp = now()
+            connection.execute(f"UPDATE reports SET deleted_at=? WHERE user_id=? AND id IN ({marks})", (stamp, user_id, *identifiers))
+            connection.executemany("INSERT INTO audit_events VALUES(?,?,?,?,?,?)",
+                                   [(uid(), user_id, "report.deleted", identifier, "{}", stamp) for identifier in identifiers])
+            return len(reports)
+
+    def empty_report_trash(self, user_id, directory, identifiers=None):
         """Purge only this user's trash, preserving any still-referenced snapshots."""
         with self.connect() as connection:
             # Serialize restore/delete against the exact set whose files are removed.
             connection.execute("BEGIN IMMEDIATE")
+            condition, parameters = "", [user_id]
+            if identifiers is not None:
+                identifiers = list(dict.fromkeys(identifiers))
+                if not identifiers:
+                    raise ValueError("Select at least one report.")
+                condition = " AND id IN (" + ",".join("?" for _ in identifiers) + ")"
+                parameters.extend(identifiers)
             reports = connection.execute(
-                "SELECT id,snapshot_id,status FROM reports WHERE user_id=? AND deleted_at IS NOT NULL",
-                (user_id,),
+                "SELECT id,snapshot_id,status FROM reports WHERE user_id=? AND deleted_at IS NOT NULL" + condition,
+                parameters,
             ).fetchall()
+            if identifiers is not None and len(reports) != len(identifiers):
+                raise LookupError("Report selection is unavailable. Refresh the trash and select again.")
             if any(report["status"] in ("queued", "running") for report in reports):
                 raise ValueError("Stop reports in the trash before emptying it.")
             for report in reports:
@@ -193,7 +289,7 @@ class Database:
                 # transaction rolls back, and snapshots can recreate removed caches.
                 for path in [directory / (identifier + ".xlsx"), directory / (identifier + ".tmp"), *directory.glob(identifier + ".*.tmp")]:
                     path.unlink(missing_ok=True)
-            connection.execute("DELETE FROM reports WHERE user_id=? AND deleted_at IS NOT NULL", (user_id,))
+            connection.execute("DELETE FROM reports WHERE user_id=? AND deleted_at IS NOT NULL" + condition, parameters)
             for snapshot_id in {report["snapshot_id"] for report in reports if report["snapshot_id"]}:
                 connection.execute(
                     "DELETE FROM dataset_snapshots WHERE id=? AND user_id=? AND NOT EXISTS(SELECT 1 FROM reports WHERE snapshot_id=?)",
@@ -201,6 +297,6 @@ class Database:
                 )
             connection.execute(
                 "INSERT INTO audit_events(id,actor_id,action,target_id,detail_json,created_at) VALUES(?,?,?,NULL,?,?)",
-                (uid(), user_id, "report.trash_emptied", json.dumps({"deleted_count": len(reports)}), now()),
+                (uid(), user_id, "report.trash_emptied" if identifiers is None else "report.trash_deleted", json.dumps({"deleted_count": len(reports)}), now()),
             )
             return len(reports)

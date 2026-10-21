@@ -2,6 +2,8 @@
 
 Use **Ubuntu 24.04, x86-64**, with its standard kernel (report isolation needs Landlock ABI 3+ and seccomp). Run commands over SSH with `sudo` available.
 
+If a step fails, use [VPS troubleshooting](deploy-troubleshooting.md) for database routing/VPN, certificates, native drivers, and service errors.
+
 Application files live under `/var/www/duka-agent`; persistent data lives under `/var/lib/duka-agent`. The setup scripts install the supplied service and Nginx files into their standard `/etc` locations.
 
 ## 1. Install dependencies

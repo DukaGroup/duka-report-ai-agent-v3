@@ -34,6 +34,7 @@ export interface Model {
   isDefault: boolean;
 }
 export interface Conversation {
+  deleted_at?: string | null;
   notification_pending?: boolean;
   reasoning_effort?: string | null;
   id: string;

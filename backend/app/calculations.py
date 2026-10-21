@@ -119,7 +119,7 @@ class CalculationService:
         self.capacity = asyncio.Semaphore(2)
 
     def conversation(self, user, conversation):
-        if not conversation or not self.db.one("SELECT id FROM conversations WHERE id=? AND user_id=?", (conversation, user)):
+        if not conversation or not self.db.one("SELECT id FROM conversations WHERE id=? AND user_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)", (conversation, user)):
             raise ValueError("Calculations require an active conversation belonging to this user.")
 
     async def execute(self, user, conversation, specification):

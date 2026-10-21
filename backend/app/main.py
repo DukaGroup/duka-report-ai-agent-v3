@@ -2,7 +2,7 @@ import asyncio
 import json
 import mimetypes
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Literal
 
 from fastapi.exceptions import RequestValidationError
@@ -25,6 +25,9 @@ from .schemas import (
     NewConversation,
     NewDataset,
     NewSource,
+    UpdateSource,
+    ReportSelection,
+    ConversationSelection,
     ReportRequest,
     ProviderChoice,
     SubscriptionLoginCode,
@@ -286,27 +289,27 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             return {"rateLimits": None, "message": "Check Claude subscription usage at claude.ai/settings/usage."}
         return await runtime.rpc("account/rateLimits/read")
 
-    def owned_conversation(request, conversation_id, user_id):
+    def owned_conversation(request, conversation_id, user_id, *, deleted=False):
         row = request.app.state.db.one(
-            "SELECT * FROM conversations WHERE id=? AND user_id=?", (conversation_id, user_id)
+            "SELECT c.*,t.deleted_at FROM conversations c LEFT JOIN conversation_trash t ON t.conversation_id=c.id WHERE c.id=? AND c.user_id=?", (conversation_id, user_id)
         )
-        if not row:
+        if not row or bool(row["deleted_at"]) != deleted:
             raise HTTPException(404, "Conversation not found.")
         return row
 
     @app.get("/api/conversations")
-    async def conversations(request: Request, user=Depends(current_user)):
+    async def conversations(request: Request, deleted: bool = False, user=Depends(current_user)):
         return request.app.state.db.all(
-            "SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count, "
+            "SELECT c.*, t.deleted_at, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count, "
             "EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND m.status='streaming') AS running, "
             f"EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND {REPORTS_PENDING}) AS notification_pending, "
             "(SELECT SUBSTR(m.content,1,180) FROM messages m WHERE m.conversation_id=c.id AND m.content<>'' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1) AS preview "
-            "FROM conversations c WHERE c.user_id=? AND ("
+            "FROM conversations c LEFT JOIN conversation_trash t ON t.conversation_id=c.id WHERE c.user_id=? AND (t.deleted_at IS NOT NULL)=? AND (? OR "
             "EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id) OR "
             "EXISTS(SELECT 1 FROM attachments a WHERE a.conversation_id=c.id AND a.user_id=c.user_id) OR "
             "EXISTS(SELECT 1 FROM reports r WHERE r.conversation_id=c.id AND r.user_id=c.user_id)"
-            ") ORDER BY c.updated_at DESC",
-            (user["id"],),
+            ") ORDER BY COALESCE(t.deleted_at,c.updated_at) DESC",
+            (user["id"], deleted, deleted),
         )
 
     @app.post("/api/conversations", status_code=201)
@@ -397,19 +400,74 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         )
         return request.app.state.attachments.metadata(request.app.state.attachments.owned(user["id"], identifier))
 
+    async def remove_conversations(body, request, user):
+        state = request.app.state
+        identifiers = sorted(body.conversation_ids)
+        # Validate every ID and its library before interrupting any work.
+        for identifier in identifiers:
+            owned_conversation(request, identifier, user["id"], deleted=body.permanent)
+        if not body.permanent:
+            for identifier in identifiers:
+                cancel_pending_submission(identifier, user)
+        async with AsyncExitStack() as stack:
+            for identifier in identifiers:
+                await stack.enter_async_context(state.conversation_mutations.setdefault(identifier, asyncio.Lock()))
+            for identifier in identifiers:
+                owned_conversation(request, identifier, user["id"], deleted=body.permanent)
+            if not body.permanent:
+                gate = asyncio.Semaphore(8)
+
+                async def stop_selected(identifier):
+                    async with gate:
+                        await stop_conversation(identifier, request, user)
+                        await state.manager.discard_worker(user["id"], "chat", identifier)
+
+                await asyncio.gather(*(stop_selected(identifier) for identifier in identifiers))
+            for identifier in identifiers:
+                await stack.enter_async_context(state.locks.setdefault(identifier, asyncio.Lock()))
+            try:
+                operation = state.db.delete_conversations if body.permanent else state.db.trash_conversations
+                count = operation(user["id"], identifiers)
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        return {"ok": True, "deleted_count": count}
+
+    @app.post("/api/conversations/bulk-delete")
+    async def delete_selected_conversations(body: ConversationSelection, request: Request, user=Depends(current_user)):
+        return await remove_conversations(body, request, user)
+
     @app.delete("/api/conversations/{conversation_id}")
     async def delete_conversation(conversation_id: str, request: Request, user=Depends(current_user)):
-        owned_conversation(request, conversation_id, user["id"])
-        cancel_pending_submission(conversation_id, user)
-        mutation = request.app.state.conversation_mutations.setdefault(conversation_id, asyncio.Lock())
-        async with mutation:
-            await stop_conversation(conversation_id, request, user)
-            await request.app.state.manager.discard_worker(user["id"], "chat", conversation_id)
-            lock = request.app.state.locks.setdefault(conversation_id, asyncio.Lock())
-            async with lock:
-                request.app.state.db.delete_conversation(conversation_id, user["id"])
-                request.app.state.db.audit(user["id"], "conversation.deleted", conversation_id)
-        return {"ok": True}
+        return await remove_conversations(ConversationSelection(conversation_ids=[conversation_id]), request, user)
+
+    async def restore_conversations(identifiers, request, user):
+        state = request.app.state
+        identifiers = sorted(set(identifiers))
+        for identifier in identifiers:
+            owned_conversation(request, identifier, user["id"], deleted=True)
+        # Use the same lock order as deletion so overlapping batches serialize.
+        async with AsyncExitStack() as stack:
+            for identifier in identifiers:
+                await stack.enter_async_context(state.conversation_mutations.setdefault(identifier, asyncio.Lock()))
+            for identifier in identifiers:
+                await stack.enter_async_context(state.locks.setdefault(identifier, asyncio.Lock()))
+            try:
+                count = state.db.restore_conversations(user["id"], identifiers)
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        return {"ok": True, "restored_count": count}
+
+    @app.post("/api/conversations/bulk-restore")
+    async def restore_selected_conversations(body: ConversationSelection, request: Request, user=Depends(current_user)):
+        return await restore_conversations(body.conversation_ids, request, user)
+
+    @app.post("/api/conversations/{conversation_id}/restore")
+    async def restore_conversation(conversation_id: str, request: Request, user=Depends(current_user)):
+        return await restore_conversations([conversation_id], request, user)
 
     @app.post("/api/conversations/{conversation_id}/messages")
     async def send_message(conversation_id: str, body: ChatMessage, request: Request, user=Depends(current_user)):
@@ -742,6 +800,21 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             raise HTTPException(404, "Report not found.")
         return row
 
+    @app.post("/api/reports/bulk-delete")
+    async def delete_selected_reports(body: ReportSelection, request: Request, user=Depends(current_user)):
+        try:
+            if body.permanent:
+                count = request.app.state.db.empty_report_trash(user["id"], settings.data_dir / "reports", body.report_ids)
+            else:
+                count = request.app.state.db.trash_reports(user["id"], body.report_ids)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(503, "Report files could not be removed. The trash was retained; retry after checking storage permissions.") from exc
+        return {"ok": True, "deleted_count": count}
+
     @app.delete("/api/reports/trash")
     async def empty_report_trash(request: Request, user=Depends(current_user)):
         try:
@@ -788,7 +861,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         if not db.one("SELECT id FROM report_templates WHERE id=?", (body.template_id,)):
             raise HTTPException(422, "Report template not found.")
         if body.conversation_id:
-            if not db.one("SELECT id FROM conversations WHERE id=? AND user_id=?", (body.conversation_id, user_id)):
+            if not db.one("SELECT id FROM conversations WHERE id=? AND user_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)", (body.conversation_id, user_id)):
                 raise HTTPException(404, "Conversation not found.")
         if "reasoning_effort" not in body.model_fields_set:
             body.reasoning_effort = saved_effort(db, body.conversation_id)
@@ -934,7 +1007,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         if (user_id, origin_thread, origin_turn) in state.manager.cancelled_report_turns:
             raise HTTPException(409, "Report generation was interrupted by the user.")
         if body.conversation_id and not db.one(
-            "SELECT id FROM conversations WHERE id=? AND user_id=?", (body.conversation_id, user_id)
+            "SELECT id FROM conversations WHERE id=? AND user_id=? AND id NOT IN (SELECT conversation_id FROM conversation_trash)", (body.conversation_id, user_id)
         ):
             raise HTTPException(404, "Conversation not found.")
         provenance.setdefault("analysis", body.analysis.model_dump())
@@ -1290,7 +1363,17 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             return None
         if body.kind not in ("sqlserver", "saphana"):
             raise HTTPException(422, "SQL Server connection fields require database type sqlserver.")
-        previous = app.state.connectors.secrets.load(source_id) if source and source["credential_profile"] == "saved" else None
+        previous = None
+        if source and not changing_kind:
+            # Resolve the source's exact private profile, including environment
+            # connections. Never fill blanks from another source's credentials.
+            effective = app.state.connectors.source_settings(source_id)
+            family = prefix.lower() + "_"
+            previous = {prefix + "_" + key[len(family):].upper():
+                        str(value).lower() if isinstance(value, bool) else str(value)
+                        for key, value in vars(effective).items() if key.startswith(family)}
+            if all(previous.get(key) == value for key, value in values.items()):
+                return None
         if changing_kind:
             effective = app.state.connectors.source_settings(source_id)
             previous_prefix = "hana_" if source["kind"] == "saphana" else "sqlserver_"
@@ -1305,7 +1388,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             combined.setdefault("HANA_TLS_CA_CERTIFICATE", "")
             combined.setdefault("HANA_TLS_SERVER_NAME", "")
         required = {prefix + "_" + name for name in ("HOST", "PORT", "USER", "PASSWORD")}
-        missing = required - combined.keys()
+        missing = {key for key in required if not combined.get(key)}
         if missing:
             raise HTTPException(422, "Complete the connection settings: " + ", ".join(sorted(missing)))
         return app.state.connectors.secrets.encrypt(source_id, combined)
@@ -1341,10 +1424,14 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return public_source(identifier)
 
     @app.patch("/api/admin/sources/{source_id}")
-    async def update_source(source_id: str, body: NewSource, request: Request, user=Depends(admin_user)):
+    async def update_source(source_id: str, body: UpdateSource, request: Request, user=Depends(admin_user)):
         source = app.state.db.one("SELECT * FROM data_sources WHERE id=?", (source_id,))
         if not source:
             raise HTTPException(404, "Source not found.")
+        body = NewSource.model_validate({
+            "name": source["name"], "kind": source["kind"], "description": source["description"],
+            **body.model_dump(exclude_unset=True, exclude_none=True),
+        })
         if body.kind != source["kind"] and {body.kind,source["kind"]} != {"sqlserver","saphana"}:
             raise HTTPException(422, "Create a new source to use a different database type.")
         ciphertext = seal_source_credentials(body, source_id, existing=True)

@@ -113,7 +113,7 @@ class PushNotifications:
                 "JOIN messages m ON m.id=r.id JOIN conversations v ON v.id=r.conversation_id "
                 "JOIN web_push_subscriptions p ON p.user_id=r.user_id JOIN sessions s ON s.token_hash=p.session_hash "
                 "JOIN users u ON u.id=r.user_id "
-                "WHERE r.status='completed' AND m.status='completed' AND u.active=1 AND s.expires_at>? "
+                "WHERE v.id NOT IN (SELECT conversation_id FROM conversation_trash) AND r.status='completed' AND m.status='completed' AND u.active=1 AND s.expires_at>? "
                 f"AND p.created_at<={COMPLETED_AT} AND {COMPLETED_AT}>? AND (? IS NULL OR r.id=?) "
                 f"AND {REPORTS_READY}",
                 (time.time(), cutoff, message_id, message_id),
@@ -143,7 +143,7 @@ class PushNotifications:
             "JOIN web_push_subscriptions p ON p.endpoint_hash=d.endpoint_hash "
             "JOIN sessions s ON s.token_hash=p.session_hash JOIN users u ON u.id=p.user_id "
             "JOIN messages m ON m.id=d.message_id JOIN conversations v ON v.id=m.conversation_id "
-            "WHERE d.status='queued' AND d.next_attempt<=? AND s.expires_at>? AND u.active=1 "
+            "WHERE v.id NOT IN (SELECT conversation_id FROM conversation_trash) AND d.status='queued' AND d.next_attempt<=? AND s.expires_at>? AND u.active=1 "
             f"AND m.status='completed' AND v.user_id=p.user_id AND {REPORTS_READY} LIMIT 20",
             (time.time(), time.time()),
         )
@@ -252,7 +252,7 @@ def register_notifications(app):
     async def check(message_id: str, request: Request, user=Depends(current_user)):
         row = request.app.state.db.one(
             f"SELECT m.id,m.conversation_id,{REPORT_COUNT} AS report_count FROM messages m JOIN conversations c ON c.id=m.conversation_id "
-            f"WHERE m.id=? AND m.role='assistant' AND m.status='completed' AND c.user_id=? AND {REPORTS_READY}",
+            f"WHERE c.id NOT IN (SELECT conversation_id FROM conversation_trash) AND m.id=? AND m.role='assistant' AND m.status='completed' AND c.user_id=? AND {REPORTS_READY}",
             (message_id, user["id"]),
         )
         if not row:
