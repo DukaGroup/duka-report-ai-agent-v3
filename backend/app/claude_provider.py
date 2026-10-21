@@ -268,6 +268,9 @@ class ClaudeRuntime:
                     if isinstance(message, RateLimitEvent) and message.rate_limit_info.status == "rejected":
                         raise ProviderError("Claude subscription usage limit reached.", category="quota", reset_at=message.rate_limit_info.resets_at)
                     if isinstance(message, StreamEvent):
+                        if (message.event.get("type") == "content_block_start"
+                                and message.event.get("content_block", {}).get("type") in ("thinking", "redacted_thinking")):
+                            yield {"type": "activity", "activity": "reasoning"}
                         delta = message.event.get("delta", {})
                         if delta.get("type") == "text_delta":
                             partial = True

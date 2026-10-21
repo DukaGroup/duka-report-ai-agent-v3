@@ -23,6 +23,7 @@ from .upload_queries import UploadQuery
 from .currencies import BASE_CURRENCY as BASE_CURRENCY
 from .workbook_runner import WorkbookRunner
 from .calculations import CalculationPlan, CalculationService, CALCULATION_API
+from .investigation import INVESTIGATION_INSTRUCTIONS, investigation_hint
 
 log = logging.getLogger(__name__)
 READ_ONLY_PROFILE = "duka_read_only"
@@ -107,6 +108,8 @@ Connection-check and schema-catalog datasets contain no business performance dat
 SQL error 208 means a table/view dependency is unavailable, even when login and schema discovery work.
 Explain that specific query failure; do not suggest credentials were deleted. Prefer a working base table or ask for the view's dependencies to be repaired.
 """
+
+BASE_INSTRUCTIONS += INVESTIGATION_INSTRUCTIONS
 
 REPORT_TOOLS = [
     {
@@ -718,6 +721,9 @@ enabled = false
                     continue
                 if method == "item/agentMessage/delta":
                     yield {"type": "delta", "text": event_params.get("delta", "")}
+                elif method == "item/started" and event_params.get("item", {}).get("type") == "reasoning":
+                    # Announce the phase, never forward private reasoning content.
+                    yield {"type": "activity", "activity": "reasoning"}
                 elif method == "item/completed" and event_params.get("item", {}).get("type") == "agentMessage":
                     item = event_params["item"]
                     texts[item["id"]] = item.get("text", "")
@@ -1271,6 +1277,7 @@ class SubscriptionManager:
                     result = {"error": "Dataset parameters do not match the registered schema."}
         else:
             result = {"error": "Unknown reporting tool."}
+        result = investigation_hint(tool, result)
         self.db.audit(user_id, "reporting.tool", detail={"tool": tool, "success": "error" not in result})
         return {"success": "error" not in result, "contentItems": [{"type": "inputText", "text": json.dumps(result)}]}
 

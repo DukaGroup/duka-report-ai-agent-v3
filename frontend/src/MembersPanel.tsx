@@ -1,6 +1,15 @@
-import { Plus, Trash2 } from "lucide-react";
+import {
+  KeyRound,
+  Plus,
+  RotateCcw,
+  ShieldCheck,
+  Trash2,
+  UserCheck,
+  UserX,
+} from "lucide-react";
 import type { User } from "./types";
 import { Select } from "./Select";
+import { IconButton } from "./IconButton";
 
 export function MembersPanel({
   actor,
@@ -25,12 +34,12 @@ export function MembersPanel({
 }) {
   const isDev = actor.role === "devs";
   return (
-    <section className="panel">
+    <section className="panel members-panel">
       <div className="panel-heading">
         <h3>Anëtarët e hapësirës</h3>
-        <button className="button primary small" onClick={onAdd}>
-          <Plus size={16} /> Shto anëtar
-        </button>
+        <IconButton label="Shto anëtar" onClick={onAdd}>
+          <Plus size={18} />
+        </IconButton>
       </div>
       <div className="table-scroll">
         <table>
@@ -39,12 +48,6 @@ export function MembersPanel({
               <th>Anëtar</th>
               <th>Roli</th>
               <th>Gjendja</th>
-              {isDev && (
-                <>
-                  <th>Lidhja</th>
-                  <th>Databazat dhe kompanitë</th>
-                </>
-              )}
               <th>Veprimet</th>
             </tr>
           </thead>
@@ -56,6 +59,7 @@ export function MembersPanel({
                   <small>{member.email}</small>
                 </td>
                 <td>
+                  <span className="member-cell-label">Roli</span>
                   {isDev ? (
                     <Select
                       aria-label={`Roli i ${member.name}`}
@@ -77,59 +81,63 @@ export function MembersPanel({
                     "Manager"
                   )}
                 </td>
-                <td>{member.active ? "Aktiv" : "Joaktiv"}</td>
-                {isDev && (
-                  <>
-                    <td>
-                      <button
-                        className="text-button"
-                        onClick={() => onRestart(member)}
-                      >
-                        Rinis
-                      </button>
-                    </td>
-                    <td>
-                      <button
-                        className="text-button"
-                        onClick={() => onAccess(member)}
-                      >
-                        {member.role === "manager"
-                          ? "Zgjidh qasjen"
-                          : "Qasje në të gjitha"}
-                      </button>
-                    </td>
-                  </>
-                )}
                 <td>
-                  {isDev && (
-                    <>
-                      <button
-                        className="text-button"
-                        disabled={!member.active}
-                        onClick={() => onRecover(member)}
-                      >
-                        Rikupero llogarinë
-                      </button>
-                      <button
-                        className="button outline small"
-                        disabled={member.id === actor.id}
-                        onClick={() => onToggle(member)}
-                      >
-                        {member.active ? "Çaktivizo" : "Aktivizo"}
-                      </button>
-                    </>
-                  )}
-                  {member.id !== actor.id &&
-                    (isDev || member.role !== "devs") && (
-                      <button
-                        className="icon-button"
-                        aria-label={`Fshi anëtarin: ${member.name}`}
-                        title="Fshi anëtarin"
-                        onClick={() => onRemove(member)}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                  <span className="member-cell-label">Gjendja</span>
+                  {member.active ? "Aktiv" : "Joaktiv"}
+                </td>
+                <td>
+                  <span className="member-cell-label">Veprimet</span>
+                  <div
+                    className="action-group member-actions"
+                    role="group"
+                    aria-label={`Veprimet për ${member.name}`}
+                  >
+                    {isDev && (
+                      <>
+                        <IconButton
+                          label={`Rinis lidhjen: ${member.name}`}
+                          onClick={() => onRestart(member)}
+                        >
+                          <RotateCcw size={18} />
+                        </IconButton>
+                        <IconButton
+                          label={`${member.role === "manager" ? "Menaxho qasjen" : "Qasje në të gjitha databazat dhe kompanitë"}: ${member.name}`}
+                          onClick={() => onAccess(member)}
+                        >
+                          <ShieldCheck size={18} />
+                        </IconButton>
+                        <IconButton
+                          label={`Rikupero llogarinë: ${member.name}`}
+                          disabled={!member.active}
+                          onClick={() => onRecover(member)}
+                        >
+                          <KeyRound size={18} />
+                        </IconButton>
+                        <IconButton
+                          label={`${member.active ? "Çaktivizo" : "Aktivizo"} anëtarin: ${member.name}`}
+                          disabled={member.id === actor.id}
+                          onClick={() => onToggle(member)}
+                        >
+                          {member.active ? (
+                            <UserX size={18} />
+                          ) : (
+                            <UserCheck size={18} />
+                          )}
+                        </IconButton>
+                      </>
                     )}
+                    {member.id !== actor.id &&
+                      (isDev || member.role !== "devs") && (
+                        <IconButton
+                          danger
+                          className="action-destructive"
+                          label={`Fshi anëtarin: ${member.name}`}
+                          onClick={() => onRemove(member)}
+                        >
+                          <Trash2 size={18} />
+                        </IconButton>
+                      )}
+                  </div>
                 </td>
               </tr>
             ))}

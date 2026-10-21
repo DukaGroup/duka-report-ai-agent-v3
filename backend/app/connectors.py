@@ -707,8 +707,16 @@ class ConnectorRegistry:
             if operation != "databases" and database is None and not getattr(connector.settings, prefix + "database"):
                 raise SourceNotConfigured("Select a database from discover_databases before reading business data.")
             selected_database = database
-            if selected_database is None and connector.dialect == "hana" and operation != "databases":
-                selected_database = connector.settings.hana_database
+            if operation != "databases":
+                if selected_database is None:
+                    selected_database = getattr(connector.settings, prefix + "database") or None
+                if selected_database is not None and (
+                    not isinstance(selected_database, str) or not 1 <= len(selected_database) <= 128 or "\x00" in selected_database
+                ):
+                    raise ValueError("Choose a database name returned by discovery.")
+                # Reject an ungranted target before even probing its catalog or
+                # selecting a tenant. Audit/history discovery has the same gate.
+                access.stamp(user_id, source_id, selected_database)
             active_connector = await connector.in_database(selected_database) if selected_database else connector
             actual_database = getattr(active_connector.settings, prefix+"database") or None
             stamp = access.stamp(user_id,source_id,None if operation == 'databases' else actual_database)

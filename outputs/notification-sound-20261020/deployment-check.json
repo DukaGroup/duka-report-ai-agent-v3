@@ -1,0 +1,12 @@
+{
+  "health": 200,
+  "assets": [
+    "/assets/index-DVbFcSoW.js",
+    "/assets/index-XRfyIRDm.css"
+  ],
+  "assets_match_source_build": true,
+  "backend_matches_source": true,
+  "existing_data_preserved": true,
+  "env_preserved": true,
+  "backup_verified": true
+}

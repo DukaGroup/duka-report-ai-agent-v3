@@ -179,7 +179,7 @@ class TrafficMiddleware:
         request_body, response_body = bytearray(), bytearray()
         response_type = ''
         request_type = dict(scope.get('headers',[])).get(b'content-type',b'').decode(errors='replace')
-        excluded = path.startswith(('/api/auth','/api/subscription','/api/admin/sources','/api/admin/users'))
+        excluded = path.startswith(('/api/auth','/api/subscription','/api/notifications','/api/admin/sources','/api/admin/users'))
         def capture(buffer, body, content_type):
             if not excluded and ('json' in content_type or content_type.startswith('text/')):
                 buffer.extend(body[:max(0,65536-len(buffer))])

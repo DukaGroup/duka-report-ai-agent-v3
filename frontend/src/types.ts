@@ -34,6 +34,7 @@ export interface Model {
   isDefault: boolean;
 }
 export interface Conversation {
+  notification_pending?: boolean;
   reasoning_effort?: string | null;
   id: string;
   title: string;
@@ -44,7 +45,11 @@ export interface Conversation {
   preview?: string | null;
 }
 export interface Message {
+  notification_ready?: boolean;
+  notification_pending?: boolean;
+  report_count?: number;
   id: string;
+  completed_at?: string | null;
   created_at: string;
   role: "user" | "assistant";
   content: string;

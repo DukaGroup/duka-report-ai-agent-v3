@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+    endpoint_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_hash TEXT NOT NULL REFERENCES sessions(token_hash) ON DELETE CASCADE,
+    subscription_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS removed_members (
     user_id TEXT PRIMARY KEY REFERENCES users(id),
     removed_at TEXT NOT NULL, actor_id TEXT NOT NULL REFERENCES users(id)
@@ -234,3 +240,16 @@ CREATE TABLE IF NOT EXISTS chat_request_cancellations (
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   PRIMARY KEY(user_id, request_key)
 );
+CREATE TABLE IF NOT EXISTS web_push_deliveries (
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    endpoint_hash TEXT NOT NULL REFERENCES web_push_subscriptions(endpoint_hash) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK(status IN ('queued','sent','failed')),
+    attempts INTEGER NOT NULL, next_attempt REAL NOT NULL,
+    PRIMARY KEY(message_id,endpoint_hash)
+);
+CREATE INDEX IF NOT EXISTS web_push_ready ON web_push_deliveries(status,next_attempt);
+CREATE TABLE IF NOT EXISTS chat_report_jobs (
+    report_id TEXT PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL REFERENCES chat_runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS chat_report_message ON chat_report_jobs(message_id);

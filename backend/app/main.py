@@ -52,6 +52,8 @@ from .traffic import TrafficLog, TrafficMiddleware, DIRECTIONS
 from .workbook_runner import rebuild_excel
 from .reasoning import saved_effort, validate_effort
 from .chat_jobs import ChatJobs
+from .notifications import PushNotifications, register_notifications
+from .completion import REPORT_COUNT, REPORTS_READY, REPORTS_PENDING, COMPLETED_AT
 from .accounts import register_accounts
 from .branches import register_branches
 from .subscriptions import register_subscriptions
@@ -92,6 +94,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.manager.report_handler = submit_report
         app.state.stop_user_reports = stop_reports
         app.state.manager.shutting_down = False
+        app.state.notifications = PushNotifications(settings, app.state.db)
+        app.state.notifications.start()
         app.state.chat_jobs = ChatJobs(app.state)
         for report in app.state.db.all("SELECT r.id,r.user_id,w.analyses_json FROM reports r JOIN report_work w ON w.report_id=r.id WHERE r.status IN ('queued','running')"):
             launch_report(report['id'], report['user_id'], json.loads(report['analyses_json']))
@@ -100,6 +104,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         yield
         app.state.manager.shutting_down = True
         await app.state.chat_jobs.close()
+        await app.state.notifications.close()
         for task in list(app.state.jobs):
             task.cancel()
         await asyncio.gather(*app.state.jobs, return_exceptions=True)
@@ -113,6 +118,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     register_accounts(app, settings)
     register_branches(app)
     register_subscriptions(app)
+    register_notifications(app)
 
     @app.middleware("http")
     async def boundaries(request, call_next):
@@ -293,6 +299,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return request.app.state.db.all(
             "SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count, "
             "EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND m.status='streaming') AS running, "
+            f"EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND {REPORTS_PENDING}) AS notification_pending, "
             "(SELECT SUBSTR(m.content,1,180) FROM messages m WHERE m.conversation_id=c.id AND m.content<>'' ORDER BY m.created_at DESC,m.rowid DESC LIMIT 1) AS preview "
             "FROM conversations c WHERE c.user_id=? AND ("
             "EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id) OR "
@@ -316,9 +323,16 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     async def conversation(conversation_id: str, request: Request, user=Depends(current_user)):
         row = owned_conversation(request, conversation_id, user["id"])
         messages = request.app.state.db.all(
-            "SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,rowid", (conversation_id,)
+            f"SELECT m.*, CASE WHEN r.status IN ('completed','failed','interrupted') THEN "
+            f"{COMPLETED_AT} END AS completed_at, "
+            f"{REPORT_COUNT} AS report_count, {REPORTS_PENDING} AS notification_pending, "
+            f"(m.status='completed' AND {REPORTS_READY}) AS notification_ready "
+            "FROM messages m LEFT JOIN chat_runs r ON r.id=m.id AND r.conversation_id=m.conversation_id "
+            "WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid", (conversation_id,)
         )
         for m in messages:
+            m["notification_ready"] = bool(m["notification_ready"])
+            m["notification_pending"] = bool(m["notification_pending"])
             m["attachments"] = [
                 request.app.state.attachments.metadata(a)
                 for a in request.app.state.db.all(
@@ -996,6 +1010,13 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 ),
             )
             c.execute("INSERT INTO report_settings VALUES(?,?)", (identifier, body.reasoning_effort))
+            if origin_thread and body.conversation_id:
+                origin = c.execute(
+                    "SELECT id FROM chat_runs WHERE user_id=? AND conversation_id=? AND status IN ('queued','running','paused')",
+                    (user_id, body.conversation_id),
+                ).fetchone()
+                if origin:
+                    c.execute("INSERT INTO chat_report_jobs VALUES(?,?)", (identifier, origin["id"]))
             if not error:
                 c.execute('INSERT INTO report_work VALUES(?,?)', (identifier, json.dumps(analyses)))
         db.audit(user['id'], 'report.requested', identifier)
@@ -1011,6 +1032,13 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         def done(task):
             state.jobs.discard(task)
             state.report_jobs.pop(identifier, None)
+            # Status becomes completed only after the workbook is saved and validated.
+            # Recheck the originating request; another associated export may still be running.
+            try:
+                for origin in state.db.all("SELECT message_id FROM chat_report_jobs WHERE report_id=?", (identifier,)):
+                    state.notifications.enqueue(origin["message_id"])
+            except Exception:
+                pass  # The durable notification scan recovers this after a restart.
         task.add_done_callback(done)
 
     @app.get("/api/reports/{identifier}")
@@ -1565,6 +1593,20 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         # Slim Linux images may have no OS MIME database for WebP.
         mimetypes.add_type("image/webp", ".webp")
         app.mount("/brand", StaticFiles(directory=settings.frontend_dir / "brand"), name="brand")
+
+    @app.get("/notification-worker.js")
+    async def notification_worker():
+        path = settings.frontend_dir / "notification-worker.js"
+        if not path.exists():
+            raise HTTPException(404, "Notification worker not built.")
+        return FileResponse(path, media_type="application/javascript", headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+    @app.get("/manifest.webmanifest")
+    async def app_manifest():
+        path = settings.frontend_dir / "manifest.webmanifest"
+        if not path.exists():
+            raise HTTPException(404, "Application manifest not built.")
+        return FileResponse(path, media_type="application/manifest+json")
 
     @app.get("/{path:path}")
     async def frontend(path: str):

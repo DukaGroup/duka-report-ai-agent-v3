@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, RefreshCw, Pause, Play, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Eye,
+  RefreshCw,
+  Pause,
+  Play,
+  X,
+} from "lucide-react";
 import { api } from "./api";
 import { Select } from "./Select";
+import { IconButton } from "./IconButton";
 
 type Event = {
   id: number;
@@ -173,24 +182,23 @@ export function TrafficPanel() {
                 })),
               ]}
             />
-            <button
-              className="button outline small"
+            <IconButton
+              label={live ? "Ndalo rifreskimin" : "Nis rifreskimin"}
+              aria-pressed={live}
               onClick={() => {
                 setLive(!live);
                 if (!live) setBefore(0);
               }}
             >
               {live ? <Pause size={15} /> : <Play size={15} />}
-              {live ? "Ndalo rifreskimin" : "Nis rifreskimin"}
-            </button>
-            <button
-              className="button outline small"
+            </IconButton>
+            <IconButton
+              label="Rifresko trafikun"
               onClick={() => void load()}
               disabled={loading}
             >
-              <RefreshCw size={15} />
-              Rifresko
-            </button>
+              <RefreshCw size={18} className={loading ? "spin" : ""} />
+            </IconButton>
           </div>
         </div>
         <p className="traffic-note">
@@ -241,12 +249,12 @@ export function TrafficPanel() {
                       : `${event.duration_ms.toLocaleString("sq-AL")} ms`}
                   </td>
                   <td>
-                    <button
-                      className="button subtle small"
+                    <IconButton
+                      label={`Hap detajet e mesazhit #${event.id}`}
                       onClick={() => void openEvent(event)}
                     >
-                      Hap
-                    </button>
+                      <Eye size={18} />
+                    </IconButton>
                   </td>
                 </tr>
               ))}
@@ -262,28 +270,26 @@ export function TrafficPanel() {
         )}
         <div className="traffic-pagination">
           {!!before && (
-            <button
-              className="button outline small"
+            <IconButton
+              label="Më të fundit"
               onClick={() => {
                 setBefore(0);
                 setLive(true);
               }}
             >
-              <ArrowLeft size={15} />
-              Më të fundit
-            </button>
+              <ArrowLeft size={18} />
+            </IconButton>
           )}
-          <button
-            className="button outline small"
+          <IconButton
+            label="Më të vjetra"
             disabled={!data?.next_before || loading}
             onClick={() => {
               setBefore(data!.next_before!);
               setLive(false);
             }}
           >
-            Më të vjetra
-            <ArrowRight size={15} />
-          </button>
+            <ArrowRight size={18} />
+          </IconButton>
           <span>
             {live
               ? "Rifreskim automatik çdo 2 sekonda"

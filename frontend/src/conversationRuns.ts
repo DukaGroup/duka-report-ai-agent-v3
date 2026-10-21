@@ -1,5 +1,43 @@
 import type { Message, Report } from "./types";
 
+/** Public phase labels only; never display native reasoning text or tool names. */
+export function streamActivity(
+  event: Record<string, string>,
+): string | undefined {
+  if (event.type === "reconnecting") return "Po rilidhem…";
+  if (event.type === "snapshot" || event.type === "activity") {
+    const labels: Record<string, string> = {
+      thinking: "Po mendoj…",
+      reasoning: "Po arsyetoj…",
+      recovering: "Po rifilloj hetimin…",
+      switching: "Po kaloj te abonimi tjetër…",
+    };
+    return Object.hasOwn(labels, event.activity)
+      ? labels[event.activity]
+      : undefined;
+  }
+  if (event.type === "tool") {
+    if (event.name === "calculate_data") return "Po llogaris…";
+    if (event.name?.startsWith("create_")) return "Po përgatis raportin…";
+    return "Po kontrolloj të dhënat…";
+  }
+  if (event.type === "delta") return "Po shkruaj…";
+}
+
+export function reportActivity(stage?: string | null): string {
+  const labels: Record<string, string> = {
+    queued: "Në pritje…",
+    gathering: "Po mbledh të dhënat…",
+    analyzing: "Po analizoj të dhënat…",
+    excel: "Po përgatis Excel-in…",
+    validating: "Po kontrolloj raportin…",
+    repairing: "Po korrigjoj raportin…",
+  };
+  return stage && Object.hasOwn(labels, stage)
+    ? labels[stage]
+    : "Po përgatis raportin…";
+}
+
 // Streams continue when the user opens a different conversation. Their output
 // stays keyed by the originating conversation rather than the current page.
 export class ConversationRuns {
@@ -23,7 +61,7 @@ export class ConversationRuns {
     if (this.runs.has(id) && !replace)
       throw new Error("A response is already running in this conversation.");
     const token = Symbol(id);
-    this.runs.set(id, { messages, activity: "Duke menduar", token });
+    this.runs.set(id, { messages, activity: "Po mendoj…", token });
     return token;
   }
   isCurrent(id: string, token: symbol) {

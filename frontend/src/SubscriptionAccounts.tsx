@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { ArrowDown, ArrowUp, Plus, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Plug,
+  Plus,
+  RotateCcw,
+  Unplug,
+  X,
+} from "lucide-react";
 import { api } from "./api";
 import type { Login, Provider } from "./types";
 import { Select } from "./Select";
+import { IconButton } from "./IconButton";
 
 type Account = {
   id: string;
@@ -100,9 +109,9 @@ export function SubscriptionAccounts({
     <div className="subscription-accounts">
       <div className="panel-heading">
         <h3>Abonimet e përbashkëta</h3>
-        <button className="button outline" onClick={() => setAdding(true)}>
-          <Plus size={16} /> Shto abonim
-        </button>
+        <IconButton label="Shto abonim" onClick={() => setAdding(true)}>
+          <Plus size={18} />
+        </IconButton>
       </div>
       <p className="footnote">
         Kur arrihet kufiri, provohet abonimi tjetër i të njëjtit ofrues, pastaj
@@ -170,8 +179,8 @@ export function SubscriptionAccounts({
                     />{" "}
                     Aktive
                   </label>
-                  <button
-                    className="button outline small"
+                  <IconButton
+                    label={`${account.connected ? "Shkëput" : "Lidh"} abonimin: ${account.label}`}
                     disabled={busy}
                     onClick={() =>
                       void action(async () => {
@@ -192,11 +201,15 @@ export function SubscriptionAccounts({
                       })
                     }
                   >
-                    {account.connected ? "Shkëput" : "Lidh"}
-                  </button>
+                    {account.connected ? (
+                      <Unplug size={18} />
+                    ) : (
+                      <Plug size={18} />
+                    )}
+                  </IconButton>
                   {account.unavailable_reason && (
-                    <button
-                      className="button outline small"
+                    <IconButton
+                      label={`Provo përsëri: ${account.label}`}
                       disabled={busy}
                       onClick={() =>
                         void action(() =>
@@ -206,14 +219,13 @@ export function SubscriptionAccounts({
                         )
                       }
                     >
-                      Provo përsëri
-                    </button>
+                      <RotateCcw size={18} />
+                    </IconButton>
                   )}
                   {[-1, 1].map((direction) => (
-                    <button
+                    <IconButton
                       key={direction}
-                      className="icon-button"
-                      aria-label={`${direction < 0 ? "Ngri" : "Ul"} ${account.label}`}
+                      label={`${direction < 0 ? "Ngri" : "Ul"} ${account.label}`}
                       disabled={busy || !group[index + direction]}
                       onClick={() =>
                         void action(async () => {
@@ -233,11 +245,11 @@ export function SubscriptionAccounts({
                       }
                     >
                       {direction < 0 ? (
-                        <ArrowUp size={16} />
+                        <ArrowUp size={18} />
                       ) : (
-                        <ArrowDown size={16} />
+                        <ArrowDown size={18} />
                       )}
-                    </button>
+                    </IconButton>
                   ))}
                 </div>
               </div>

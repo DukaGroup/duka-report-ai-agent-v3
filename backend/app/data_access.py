@@ -208,12 +208,12 @@ async def verified_base_table(connector, schema, table):
 
 
 async def table_scope(connector, units, schema, table):
+    matching = None if units is None else [u for u in units if metadata_allowed([u], schema, table)]
+    if matching == []:
+        denied()
     description = await verified_base_table(connector, schema, table)
     if units is None:
         return None
-    matching = [u for u in units if metadata_allowed([u], schema, table)]
-    if not matching:
-        denied()
     if any(u["kind"] == "schema" for u in matching):
         return None
     prefixes = [u for u in matching if u["kind"] == "table_prefix"]

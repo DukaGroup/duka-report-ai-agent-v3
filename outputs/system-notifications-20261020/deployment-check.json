@@ -1,0 +1,26 @@
+{
+  "health": "ok",
+  "assets": [
+    "/assets/index-oO9unS-V.js",
+    "/assets/index-AoVvjQND.css"
+  ],
+  "static_files": {
+    "notification-worker.js": {
+      "content_type": "application/javascript",
+      "cache_control": "no-cache"
+    },
+    "manifest.webmanifest": {
+      "content_type": "application/manifest+json",
+      "cache_control": null
+    }
+  },
+  "assets_match_source_build": true,
+  "backend_matches_source": true,
+  "existing_data_preserved": true,
+  "env_preserved": true,
+  "backup_verified": true,
+  "schema": {
+    "web_push_subscriptions": 0,
+    "web_push_deliveries": 0
+  }
+}

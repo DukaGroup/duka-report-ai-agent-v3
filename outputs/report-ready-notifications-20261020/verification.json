@@ -1,0 +1,36 @@
+{
+  "frontendTestsPassed": 58,
+  "backendTestRuns": [
+    {
+      "suite": "notifications and provider completion signals",
+      "passed": 23
+    },
+    {
+      "suite": "notifications, durable workspace and recovery",
+      "passed": 39
+    }
+  ],
+  "providers": [
+    "ChatGPT",
+    "Claude"
+  ],
+  "requestAssociation": "Exact originating chat run, including multiple report exports",
+  "waitingPhase": {
+    "chatReply": "completed",
+    "report": "running",
+    "alertShown": false
+  },
+  "readyPhase": {
+    "report": "completed",
+    "excelExists": true,
+    "excelValidZip": true,
+    "alertShown": true,
+    "downloadLinkVisible": true
+  },
+  "reloadWhileReportRunning": true,
+  "failedBlockedDeletedExportsSuppressed": true,
+  "unrelatedLaterRequestNotBlockedByOldReport": true,
+  "duplicateCompletionSuppressed": true,
+  "frontendEnvironment": "Synthetic account with controlled provider and real Excel generation",
+  "nativePushTiming": "Automated delivery integration tests; actual OS banner not shown in embedded browser"
+}

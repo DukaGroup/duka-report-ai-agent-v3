@@ -5,6 +5,7 @@ import json
 
 from .db import now
 from .provider import ProviderError
+from .completion import report_completion
 
 ACTIVE = ("queued", "running", "paused")
 
@@ -33,6 +34,12 @@ class ChatJobs:
 
     def record(self, identifier, event, text=None, status=None):
         # The message checkpoint and reconnect event must describe the same state.
+        timestamp = now()
+        if event["type"] == "done":
+            reports = report_completion(self.db, identifier)
+            event = {**event, "completed_at": timestamp,
+                     "notification_ready": "ready" if reports["ready"] else "waiting" if reports["pending"] else "unavailable",
+                     "notification_kind": "report" if reports["report_count"] else "reply"}
         with self.db.connect() as c:
             if text is not None:
                 c.execute(
@@ -48,7 +55,7 @@ class ChatJobs:
                 else ("failed" if event["type"] == "error" else None)
             )
             if terminal:
-                c.execute("UPDATE chat_runs SET status=?,updated_at=? WHERE id=?", (terminal, now(), identifier))
+                c.execute("UPDATE chat_runs SET status=?,updated_at=? WHERE id=?", (terminal, timestamp, identifier))
             else:
                 c.execute("UPDATE chat_runs SET updated_at=? WHERE id=?", (now(), identifier))
 
@@ -156,8 +163,17 @@ class ChatJobs:
         finally:
             if not self.closing:
                 self.db.execute("UPDATE messages SET content=?,status=? WHERE id=?", (text, status, identifier))
-                self.db.execute("UPDATE chat_runs SET status=?,updated_at=? WHERE id=?", (status, now(), identifier))
+                self.db.execute(
+                    "UPDATE chat_runs SET updated_at=CASE WHEN status=? THEN updated_at ELSE ? END,status=? WHERE id=?",
+                    (status, now(), status, identifier),
+                )
                 self.db.audit(user, "chat.response", cid, {"status": status})
+                if status == "completed":
+                    try:
+                        self.state.notifications.enqueue(identifier)
+                    except Exception:
+                        # Push delivery is recoverable and must never hold an AI worker lock.
+                        pass
             if lock.locked():
                 lock.release()
             if acquired:

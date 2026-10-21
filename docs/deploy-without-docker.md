@@ -91,6 +91,8 @@ sudo bash deploy/setup-nginx.sh
 
 Open `https://YOUR_DOMAIN`. For a fresh workspace, create the first Devs account. In **Cilësimet**, connect ChatGPT/Claude and configure database sources. The VPS must be able to reach your database servers.
 
+For system notifications, each member enables **Cilësimet → Pamja → Njoftimet e pajisjes** on their device and allows the browser prompt. HTTPS is required; on iPhone/iPad, open the app from its Home Screen shortcut. Back up the complete data directory, including `web-push-private.pem`, to keep existing notification connections working.
+
 ```bash
 # Check the service.
 sudo systemctl status duka-agent --no-pager

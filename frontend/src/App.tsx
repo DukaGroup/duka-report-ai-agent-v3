@@ -24,12 +24,25 @@ import {
   Unplug,
   Paperclip,
   Pencil,
+  Eye,
+  Plug,
+  Power,
+  RefreshCw,
+  LayoutTemplate,
+  ShieldX,
+  GitBranch,
   X,
 } from "lucide-react";
 import { MarkdownContent } from "./MarkdownContent";
 import { Brand } from "./Brand";
 import { SubscriptionAccounts } from "./SubscriptionAccounts";
 import { Select } from "./Select";
+import { IconButton } from "./IconButton";
+import { ThinkingStatus } from "./ThinkingStatus";
+import { ReplyNotifications } from "./ReplyNotifications";
+import { ReplyCompletions } from "./replyNotifications";
+import { playNotificationSound, ReplySound } from "./replySound";
+import type { ReplyNotification } from "./replyNotifications";
 import { TrafficPanel } from "./TrafficPanel";
 import { DatabaseAccessPicker, emptyDataAccess } from "./DatabaseAccessPicker";
 import type { MemberDataAccess } from "./DatabaseAccessPicker";
@@ -48,6 +61,8 @@ import {
   messagesBeforeRestart,
   messagesBeforeNextTurn,
   runningReports,
+  streamActivity,
+  reportActivity,
 } from "./conversationRuns";
 import { label, errorMessage, auditLabel } from "./locale";
 import { recoverSubscription } from "./subscriptionRecovery";
@@ -72,6 +87,8 @@ import type {
 
 import { MembersPanel } from "./MembersPanel";
 import { ThemeSettings } from "./ThemeSettings";
+import { DeviceNotificationSettings } from "./DeviceNotificationSettings";
+import { restoreDeviceNotifications } from "./deviceNotifications";
 import { settingsSections } from "./settings";
 import type { SettingsTab } from "./settings";
 
@@ -110,20 +127,6 @@ function Badge({
       <span />
       {children}
     </span>
-  );
-}
-function ThinkingDots({ description }: { description: string }) {
-  return (
-    <div
-      className="thinking"
-      role="status"
-      aria-label={description}
-      title={description}
-    >
-      <span aria-hidden="true" />
-      <span aria-hidden="true" />
-      <span aria-hidden="true" />
-    </div>
   );
 }
 function Modal({
@@ -416,6 +419,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     ? `Automatik (${effortLabels[defaultEffort] || defaultEffort})`
     : "Automatik (parazgjedhja e modelit)";
   const runs = useRef(new ConversationRuns());
+  const replyCompletions = useRef(new ReplyCompletions());
+  const replySound = useRef<ReplySound | null>(null);
+  const [systemNotifications, setSystemNotifications] = useState(false);
+  const systemNotificationsEnabled = useRef(false);
+  systemNotificationsEnabled.current = systemNotifications;
+  const [notificationTarget, setNotificationTarget] = useState<string | null>(
+    null,
+  );
+  const [replyNotifications, setReplyNotifications] = useState<
+    ReplyNotification[]
+  >([]);
+  const notificationView = useRef({ page, conversationId: currentId });
+  notificationView.current = { page, conversationId: currentId };
+  const latestConversations = useRef(conversations);
+  latestConversations.current = conversations;
   const [, refreshRuns] = useState(0);
   const busy =
     runs.current.has(currentId) ||
@@ -457,8 +475,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     currentId,
   );
   const pendingDescription = reportBusy
-    ? "Raporti në Excel po përgatitet"
-    : activity || "Në pritje të përgjigjes";
+    ? reportActivity(activeReports.find((r) => r.status === "running")?.stage)
+    : activity || "Po mendoj…";
   const chatLocked =
     busy || reportBusy || !reportsLoaded || stoppingReports || uploading;
   const reasoningControl = (
@@ -567,6 +585,109 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     activeId.current = currentId;
   }, [currentId]);
+  useEffect(() => {
+    let active = true,
+      checking = false;
+    const restore = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const enabled = await restoreDeviceNotifications(user.id);
+        if (active) setSystemNotifications(enabled);
+      } catch {
+        if (active) setSystemNotifications(false);
+      } finally {
+        checking = false;
+      }
+    };
+    void restore();
+    window.addEventListener("focus", restore);
+    const message = (event: MessageEvent) => {
+      const source = event.source as ServiceWorker | null;
+      if (
+        source?.scriptURL !==
+        new URL("/notification-worker.js", location.origin).href
+      )
+        return;
+      if (event.data?.type === "duka-notification-state") {
+        event.ports[0]?.postMessage({
+          userId: user.id,
+          ...notificationView.current,
+        });
+      }
+      if (event.data?.type === "duka-notification-sound") {
+        event.ports[0]?.postMessage({
+          played: playNotificationSound(
+            event.data,
+            user.id,
+            replySound.current,
+            systemNotificationsEnabled.current,
+          ),
+        });
+      }
+      if (
+        event.data?.type === "duka-open-conversation" &&
+        event.data.userId === user.id &&
+        typeof event.data.conversationId === "string"
+      ) {
+        setNotificationTarget(event.data.conversationId);
+      }
+    };
+    navigator.serviceWorker?.addEventListener("message", message);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", restore);
+      navigator.serviceWorker?.removeEventListener("message", message);
+    };
+  }, [user.id]);
+  useEffect(() => {
+    if (!notificationTarget || uploading || openingConversation) return;
+    setNotificationTarget(null);
+    const target = latestConversations.current.find(
+      (c) => c.id === notificationTarget,
+    );
+    void selectConversation(
+      target || {
+        id: notificationTarget,
+        title: "Bisedë",
+        model: null,
+        updated_at: "",
+      },
+    );
+  }, [notificationTarget, uploading, openingConversation]);
+  useEffect(() => {
+    const sound = new ReplySound();
+    replySound.current = sound;
+    const unlock = () => sound.unlock();
+    const visibility = () => {
+      replyCompletions.current.visibility(
+        document.visibilityState === "hidden",
+      );
+      if (document.visibilityState !== "hidden") sound.resume();
+    };
+    visibility();
+    document.addEventListener("pointerdown", unlock, true);
+    document.addEventListener("keydown", unlock, true);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      document.removeEventListener("pointerdown", unlock, true);
+      document.removeEventListener("keydown", unlock, true);
+      document.removeEventListener("visibilitychange", visibility);
+      sound.dispose();
+    };
+  }, []);
+  useEffect(() => {
+    if (!replyNotifications.length) replySound.current?.cancelPending();
+  }, [replyNotifications.length]);
+  useEffect(() => {
+    if (document.visibilityState === "hidden" || page !== "chat" || !currentId)
+      return;
+    setReplyNotifications((items) =>
+      items.some((item) => item.conversationId === currentId)
+        ? items.filter((item) => item.conversationId !== currentId)
+        : items,
+    );
+  }, [page, currentId]);
   useEffect(() => {
     if (page !== "chat") return;
     const type = (event: KeyboardEvent) => {
@@ -775,6 +896,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     void Promise.all([
       loadSubscription().catch(() => undefined),
       api<Conversation[]>("/conversations").then((items) => {
+        replyCompletions.current.observe(items);
         setConversations(items);
         let saved = "";
         try {
@@ -782,7 +904,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         } catch {
           /* Optional browser storage. */
         }
-        const previous = items.find((c) => c.id === saved);
+        const url = new URL(location.href);
+        const requested =
+          url.searchParams.get("notification_user") === user.id
+            ? url.searchParams.get("conversation")
+            : null;
+        const previous = items.find((c) => c.id === (requested || saved));
+        if (url.searchParams.has("notification_user")) {
+          url.searchParams.delete("notification_user");
+          url.searchParams.delete("conversation");
+          history.replaceState(null, "", url.pathname + url.search + url.hash);
+        }
+        if (requested && !previous)
+          setError("Biseda e njoftimit nuk është më e disponueshme.");
         if (previous && !activeId.current) void selectConversation(previous);
         else if (saved === "__new__" && !activeId.current) setPage("chat");
       }),
@@ -862,6 +996,39 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         const list = await api<Conversation[]>("/conversations");
         if (disposed) return;
         setConversations(list);
+        // A refreshed page has no stream listener, but accepted work keeps running.
+        const finished = replyCompletions.current.observe(list);
+        await Promise.allSettled(
+          finished.map(async (id) => {
+            try {
+              const detail = await api<Conversation & { messages: Message[] }>(
+                `/conversations/${id}`,
+              );
+              if (disposed) {
+                replyCompletions.current.retry(id);
+                return;
+              }
+              const message = detail.messages.at(-1);
+              if (
+                message?.status === "streaming" ||
+                message?.notification_pending
+              )
+                replyCompletions.current.retry(id);
+              if (message?.role === "assistant")
+                notifyReply(
+                  detail,
+                  message.id,
+                  message.status,
+                  message.completed_at,
+                  message.notification_ready,
+                  message.report_count ? "report" : "reply",
+                );
+            } catch {
+              // Keep watching after a transient failure; deleted chats disappear from the list.
+              if (!disposed) replyCompletions.current.retry(id);
+            }
+          }),
+        );
         const id = activeId.current;
         if (
           id &&
@@ -883,9 +1050,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       }
     };
     const timer = setInterval(() => void poll(), 1500);
+    const resume = () => {
+      if (document.visibilityState !== "hidden") void poll();
+    };
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("focus", resume);
+    window.addEventListener("online", resume);
     return () => {
       disposed = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("online", resume);
     };
   }, [currentId, busy]);
 
@@ -964,10 +1140,48 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       runningReports(reports, id).length > 0
     );
   }
+  function notifyReply(
+    conversation: Pick<Conversation, "id" | "title">,
+    messageId: string,
+    status: string,
+    completedAt?: string | null,
+    ready = true,
+    kind: "report" | "reply" = "reply",
+  ) {
+    if (
+      !ready ||
+      !mounted.current ||
+      !replyCompletions.current.finish(
+        conversation.id,
+        messageId,
+        status,
+        {
+          ...notificationView.current,
+          hidden: document.visibilityState === "hidden",
+        },
+        completedAt,
+      )
+    )
+      return;
+    if (systemNotificationsEnabled.current) return;
+    replySound.current?.play();
+    setReplyNotifications((items) => [
+      ...items.filter((item) => item.conversationId !== conversation.id),
+      {
+        id: messageId,
+        conversationId: conversation.id,
+        title: conversation.title || "Bisedë e re",
+        kind,
+      },
+    ]);
+  }
   async function selectConversation(c: Conversation) {
     if (uploading) return;
     if (c.id === currentId) {
       setPage("chat");
+      setReplyNotifications((items) =>
+        items.filter((item) => item.conversationId !== c.id),
+      );
       return;
     }
     if (openingConversation) return;
@@ -1003,6 +1217,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         );
       }
       setPage("chat");
+      setReplyNotifications((items) =>
+        items.filter((item) => item.conversationId !== c.id),
+      );
     } catch (e) {
       fail(e);
     } finally {
@@ -1119,6 +1336,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     let token: symbol | undefined;
     let id = currentId,
       full = "";
+    let replyId = "";
     const controller = new AbortController();
     const ownsRun = () => !!id && !!token && runs.current.isCurrent(id, token);
     try {
@@ -1167,6 +1385,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         },
       ];
       token = runs.current.start(id, initialMessages, true);
+      setReplyNotifications((items) =>
+        items.filter((item) => item.conversationId !== streamId),
+      );
       setMessages(initialMessages);
       refreshRuns((n) => n + 1);
       await streamChat(
@@ -1175,6 +1396,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         model,
         (event) => {
           if (!ownsRun()) return;
+          if (event.type === "message") replyId = event.id;
           if (event.type === "message") submitting.current.delete(streamId);
           if (event.type === "message" && event.user_message_id)
             runs.current.identifyUser(streamId, event.user_message_id, token);
@@ -1203,23 +1425,25 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           }
           if (event.type === "done") {
             full = event.text || full;
+            if (event.notification_ready === "waiting")
+              replyCompletions.current.retry(streamId);
+            notifyReply(
+              latestConversations.current.find((c) => c.id === streamId) || {
+                id: streamId,
+                title: text.slice(0, 100),
+              },
+              replyId,
+              event.status,
+              event.completed_at,
+              !event.notification_ready || event.notification_ready === "ready",
+              event.notification_kind === "report" ? "report" : "reply",
+            );
           }
           const next = runs.current.update(
             streamId,
             full,
             event.type === "done" ? event.status : "streaming",
-            event.type === "reconnecting"
-              ? "Duke rilidhur përgjigjen…"
-              : event.type === "snapshot" &&
-                  ["recovering", "switching"].includes(event.activity)
-                ? event.activity === "switching"
-                  ? "Duke kaluar te abonimi tjetër dhe ruajtur kontekstin…"
-                  : "Duke rifilluar hetimin…"
-                : event.type === "tool"
-                  ? "Duke kontrolluar të dhënat"
-                  : event.type === "delta"
-                    ? "Duke shkruar"
-                    : undefined,
+            streamActivity(event),
             token,
           );
           if (activeId.current === streamId && next) setMessages(next);
@@ -1390,17 +1614,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </small>
         </div>
         {item.kind === "xlsx" && Object.keys(item.format || {}).length > 0 && (
-          <button
-            type="button"
+          <IconButton
             className="attachment-template"
+            label={`${item.purpose === "template" ? "Hiq modelin e paraqitjes" : "Përdor formatin"}: ${item.name}`}
             aria-pressed={item.purpose === "template"}
             disabled={pending ? uploading || deleting : chatLocked}
             onClick={() => void toggleAttachmentTemplate(item)}
           >
-            {item.purpose === "template"
-              ? "Model paraqitjeje ✓"
-              : "Përdor formatin"}
-          </button>
+            <LayoutTemplate size={18} />
+          </IconButton>
         )}
         {pending && (
           <button
@@ -1778,6 +2000,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     refreshRuns((n) => n + 1);
     try {
       await api(`/conversations/${deleteChat.id}`, { method: "DELETE" });
+      replyCompletions.current.forget(deleteChat.id);
+      setReplyNotifications((items) =>
+        items.filter((item) => item.conversationId !== deleteChat.id),
+      );
       if (activeId.current === deleteChat.id) {
         setCurrentId(null);
         activeId.current = null;
@@ -1918,6 +2144,30 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   return (
     <div className="workspace">
+      <ReplyNotifications
+        items={replyNotifications}
+        layoutKey={`${page}:${currentId}`}
+        disabled={uploading || openingConversation}
+        onDismiss={(id) =>
+          setReplyNotifications((items) =>
+            items.filter((item) => item.id !== id),
+          )
+        }
+        onOpen={(item) => {
+          const conversation = latestConversations.current.find(
+            (c) => c.id === item.conversationId,
+          );
+          // The standard selection path preserves the draft in the conversation being left.
+          void selectConversation(
+            conversation || {
+              id: item.conversationId,
+              title: item.title,
+              model: null,
+              updated_at: "",
+            },
+          );
+        }}
+      />
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate("conversations")}>
           <Brand light />
@@ -2026,13 +2276,46 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         </div>
       </aside>
       <div className="main-shell">
-        <header className="topbar">
-          <div>
-            <span className="breadcrumb"> Hapësira </span>
-            <span className="slash">/</span>
-            <span>{caption}</span>
+        <header className={`topbar${page === "chat" ? " chat-header" : ""}`}>
+          <div className="header-title">
+            {page === "chat" ? (
+              <button
+                className="icon-button"
+                aria-label="Kthehu te bisedat"
+                title="Kthehu te bisedat"
+                onClick={() => navigate("conversations")}
+              >
+                <ArrowLeft size={18} />
+              </button>
+            ) : (
+              <>
+                <span className="breadcrumb">Hapësira</span>
+                <span className="slash">/</span>
+              </>
+            )}
+            <span className="page-caption" title={caption}>
+              {caption}
+            </span>
           </div>
           <div className="topbar-right">
+            {page === "chat" && (
+              <>
+                <Badge good={subscription.connected}>
+                  {subscription.connected
+                    ? "Abonimi është lidhur"
+                    : "Asnjë abonim i përdorshëm"}
+                </Badge>
+                {currentId && (
+                  <IconButton
+                    label="Versionet e bisedës"
+                    disabled={busy || reportBusy}
+                    onClick={() => setVersionsOpen(true)}
+                  >
+                    <GitBranch size={18} />
+                  </IconButton>
+                )}
+              </>
+            )}
             <button
               className="icon-button"
               aria-label="Historiku i bisedave"
@@ -2041,9 +2324,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             >
               <History size={19} />
             </button>
-            <span className="workspace-tag">
-              <span /> Duka Group{" "}
-            </span>
+            {page === "chat" ? (
+              <IconButton
+                label="Krijo raport"
+                onClick={() => setReportForm(true)}
+                disabled={chatLocked}
+              >
+                <FileText size={18} />
+              </IconButton>
+            ) : (
+              <span className="workspace-tag">
+                <span /> Duka Group{" "}
+              </span>
+            )}
           </div>
         </header>
         {connectionLost && (
@@ -2161,43 +2454,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         {page === "chat" && (
           <div className="chat-layout">
             <main className="chat-main">
-              <div className="chat-toolbar">
-                <div className="chat-toolbar-title">
-                  <button
-                    className="icon-button"
-                    aria-label="Kthehu te bisedat"
-                    onClick={() => navigate("conversations")}
-                  >
-                    <ArrowLeft size={18} />
-                  </button>
-                  <span>{current?.title || "Bisedë e re"}</span>
-                </div>
-                <div>
-                  {currentId && (
-                    <button
-                      className="icon-button"
-                      aria-label="Versionet e bisedës"
-                      title="Versionet e bisedës"
-                      disabled={busy || reportBusy}
-                      onClick={() => setVersionsOpen(true)}
-                    >
-                      <History size={17} />
-                    </button>
-                  )}
-                  <Badge good={subscription.connected}>
-                    {subscription.connected
-                      ? "Abonimi është lidhur"
-                      : "Asnjë abonim i përdorshëm"}
-                  </Badge>
-                  <button
-                    className="button subtle small"
-                    onClick={() => setReportForm(true)}
-                    disabled={chatLocked}
-                  >
-                    <FileText size={15} /> Krijo raport{" "}
-                  </button>
-                </div>
-              </div>
               <div
                 ref={messageScroll}
                 className={`message-scroll ${empty ? "empty-scroll" : ""}`}
@@ -2291,7 +2547,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                 </div>
                               )}
                               {pendingMessages.has(m.id) && (
-                                <ThinkingDots
+                                <ThinkingStatus
                                   description={pendingDescription}
                                 />
                               )}
@@ -2395,7 +2651,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           <div className="message-author">
                             Asistenti Duka <span>{effectiveProviderName}</span>
                           </div>
-                          <ThinkingDots description={pendingDescription} />
+                          <ThinkingStatus description={pendingDescription} />
                         </div>
                       </article>
                     )}
@@ -2518,8 +2774,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         }
                         onClick={() => fileInput.current?.click()}
                       >
-                        <Paperclip size={18} />
-                        {uploading ? "Duke ngarkuar…" : "Ngarko skedar"}
+                        {uploading ? (
+                          <LoaderCircle size={18} className="spin" />
+                        ) : (
+                          <Paperclip size={18} />
+                        )}
                       </button>
                     </div>
                     {(busy || reportBusy) && (
@@ -2601,7 +2860,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 ))}
               </nav>
               <div className="settings-content">
-                {settingsTab === "appearance" && <ThemeSettings />}
+                {settingsTab === "appearance" && (
+                  <>
+                    <ThemeSettings />
+                    <DeviceNotificationSettings
+                      userId={user.id}
+                      enabled={systemNotifications}
+                      onChange={setSystemNotifications}
+                    />
+                  </>
+                )}
                 {settingsTab === "account" && isDev && (
                   <section className="panel account-settings">
                     <h2>Llogaria</h2>
@@ -2699,8 +2967,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         <section className="panel">
                           <div className="panel-heading">
                             <h3> Përdorimi i abonimit </h3>
-                            <button
-                              className="button outline small"
+                            <IconButton
+                              label="Rifresko përdorimin"
                               onClick={() =>
                                 void api<{ rateLimits: RateLimits }>(
                                   "/subscription/usage",
@@ -2709,9 +2977,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                   .catch(fail)
                               }
                             >
-                              {" "}
-                              Rifresko përdorimin{" "}
-                            </button>
+                              <RefreshCw size={18} />
+                            </IconButton>
                           </div>
                           {limits ? (
                             <div className="usage-grid">
@@ -2851,64 +3118,65 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                     )}
                                   </small>
                                 )}
-                                {(s.kind === "sqlserver" ||
-                                  s.kind === "saphana") && (
-                                  <button
-                                    className="button outline small"
-                                    onClick={() => openSource(s)}
-                                  >
-                                    <Settings size={15} /> Konfiguro
-                                    lidhjen{" "}
-                                  </button>
-                                )}
-                                {(s.kind === "sqlserver" ||
-                                  s.kind === "saphana") && (
-                                  <button
-                                    className="button outline small"
-                                    onClick={() => void openSourceAccess(s)}
-                                  >
-                                    <ShieldCheck size={15} /> Qasja te
-                                    burimi{" "}
-                                  </button>
-                                )}
-                                {(s.kind === "sqlserver" ||
-                                  s.kind === "saphana") &&
-                                  s.enabled !== 0 && (
-                                    <button
-                                      className="button outline small"
-                                      disabled={
-                                        checkingSource === s.id ||
-                                        sourceActions[s.id]
-                                      }
-                                      onClick={() => void checkSource(s)}
+                                <div
+                                  className="source-actions action-group"
+                                  role="group"
+                                  aria-label={`Veprimet për ${s.name}`}
+                                >
+                                  {(s.kind === "sqlserver" ||
+                                    s.kind === "saphana") && (
+                                    <IconButton
+                                      label={`Konfiguro lidhjen: ${s.name}`}
+                                      onClick={() => openSource(s)}
                                     >
-                                      {checkingSource === s.id ? (
-                                        <LoaderCircle
-                                          size={15}
-                                          className="spin"
-                                        />
-                                      ) : (
-                                        <Check size={15} />
-                                      )}{" "}
-                                      Kontrollo lidhjen{" "}
-                                    </button>
+                                      <Settings size={18} />
+                                    </IconButton>
                                   )}
-                                <div className="source-actions">
+                                  {(s.kind === "sqlserver" ||
+                                    s.kind === "saphana") && (
+                                    <IconButton
+                                      label={`Qasja te burimi: ${s.name}`}
+                                      onClick={() => void openSourceAccess(s)}
+                                    >
+                                      <ShieldCheck size={18} />
+                                    </IconButton>
+                                  )}
                                   {(s.kind === "sqlserver" ||
                                     s.kind === "saphana") &&
                                     s.enabled !== 0 && (
-                                      <button
-                                        className="button outline small"
+                                      <IconButton
+                                        label={`Kontrollo lidhjen: ${s.name}`}
+                                        disabled={
+                                          checkingSource === s.id ||
+                                          sourceActions[s.id]
+                                        }
+                                        onClick={() => void checkSource(s)}
+                                      >
+                                        {checkingSource === s.id ? (
+                                          <LoaderCircle
+                                            size={18}
+                                            className="spin"
+                                          />
+                                        ) : (
+                                          <Check size={18} />
+                                        )}
+                                      </IconButton>
+                                    )}
+                                  {(s.kind === "sqlserver" ||
+                                    s.kind === "saphana") &&
+                                    s.enabled !== 0 && (
+                                      <IconButton
+                                        label={`Shiko databazat: ${s.name}`}
                                         disabled={sourceActions[s.id]}
                                         onClick={() => void browseDatabases(s)}
                                       >
-                                        <Database size={15} /> Shiko databazat
-                                      </button>
+                                        <Database size={18} />
+                                      </IconButton>
                                     )}
                                   {(s.kind === "sqlserver" ||
                                     s.kind === "saphana") && (
-                                    <button
-                                      className="button outline small"
+                                    <IconButton
+                                      label={`${s.enabled === 0 ? "Rilidh" : "Shkëput"} lidhjen: ${s.name}`}
                                       disabled={
                                         sourceActions[s.id] ||
                                         checkingSource === s.id
@@ -2924,25 +3192,28 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                     >
                                       {sourceActions[s.id] ? (
                                         <LoaderCircle
-                                          size={15}
+                                          size={18}
                                           className="spin"
                                         />
+                                      ) : s.enabled === 0 ? (
+                                        <Plug size={18} />
                                       ) : (
-                                        <Unplug size={15} />
+                                        <Unplug size={18} />
                                       )}
-                                      {s.enabled === 0 ? "Rilidh" : "Shkëput"}
-                                    </button>
+                                    </IconButton>
                                   )}
-                                  <button
-                                    className="button outline small danger-text"
+                                  <IconButton
+                                    danger
+                                    className="action-destructive"
+                                    label={`Hiq lidhjen: ${s.name}`}
                                     disabled={sourceActions[s.id]}
                                     onClick={() => {
                                       setError("");
                                       setDeleteSource(s);
                                     }}
                                   >
-                                    <Trash2 size={15} /> Hiq lidhjen
-                                  </button>
+                                    <Trash2 size={18} />
+                                  </IconButton>
                                 </div>
                               </div>
                             ))}
@@ -3096,13 +3367,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           <section className="panel">
                             <div className="panel-heading">
                               <h3> Konfigurimi i databazave </h3>
-                              <button
-                                className="button outline small"
+                              <IconButton
+                                label="Rifresko gjendjen"
                                 onClick={() => void loadAdmin().catch(fail)}
                               >
-                                {" "}
-                                Rifresko gjendjen{" "}
-                              </button>
+                                <RefreshCw size={18} />
+                              </IconButton>
                             </div>
                             <p className="muted">
                               {" "}
@@ -3145,28 +3415,34 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                     )}
                                   </small>
                                 )}
-                                {(source.kind === "sqlserver" ||
-                                  source.kind === "saphana") && (
-                                  <button
-                                    className="button outline small"
-                                    onClick={() => openSource(source)}
-                                  >
-                                    <Settings size={15} /> Konfiguro
-                                    lidhjen{" "}
-                                  </button>
-                                )}
-                                {(source.kind === "sqlserver" ||
-                                  source.kind === "saphana") && (
-                                  <button
-                                    className="button outline small"
-                                    disabled={checkingSource === source.id}
-                                    onClick={() => void checkSource(source)}
-                                  >
-                                    {checkingSource === source.id
-                                      ? "Duke kontrolluar…"
-                                      : "Kontrollo lidhjen"}
-                                  </button>
-                                )}
+                                <div className="action-group database-status-actions">
+                                  {(source.kind === "sqlserver" ||
+                                    source.kind === "saphana") && (
+                                    <IconButton
+                                      label={`Konfiguro lidhjen: ${source.name}`}
+                                      onClick={() => openSource(source)}
+                                    >
+                                      <Settings size={18} />
+                                    </IconButton>
+                                  )}
+                                  {(source.kind === "sqlserver" ||
+                                    source.kind === "saphana") && (
+                                    <IconButton
+                                      label={`Kontrollo lidhjen: ${source.name}`}
+                                      disabled={checkingSource === source.id}
+                                      onClick={() => void checkSource(source)}
+                                    >
+                                      {checkingSource === source.id ? (
+                                        <LoaderCircle
+                                          size={18}
+                                          className="spin"
+                                        />
+                                      ) : (
+                                        <Check size={18} />
+                                      )}
+                                    </IconButton>
+                                  )}
+                                </div>
                               </div>
                             ))}
                             {!overview.database_sources.length && (
@@ -3190,13 +3466,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         <section className="panel">
                           <div className="panel-heading">
                             <h3> Aktiviteti i fundit </h3>
-                            <button
-                              className="button outline small"
+                            <IconButton
+                              label="Rifresko aktivitetin"
                               onClick={() => void loadAdmin().catch(fail)}
                             >
-                              {" "}
-                              Rifresko{" "}
-                            </button>
+                              <RefreshCw size={18} />
+                            </IconButton>
                           </div>
                           <div className="table-scroll">
                             <table>
@@ -3329,24 +3604,25 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     </div>
                     <div className="report-card-actions">
                       {reportTrash ? (
-                        <button
-                          className="button outline small"
+                        <IconButton
+                          label={`Rikthe raportin: ${r.title}`}
                           disabled={emptyingTrash || !!restoringReportId}
                           onClick={() => void restoreReport(r)}
                         >
-                          <RotateCcw size={15} />
-                          {restoringReportId === r.id
-                            ? "Duke rikthyer…"
-                            : "Rikthe raportin"}
-                        </button>
+                          {restoringReportId === r.id ? (
+                            <LoaderCircle size={18} className="spin" />
+                          ) : (
+                            <RotateCcw size={18} />
+                          )}
+                        </IconButton>
                       ) : (
                         <>
-                          <button
-                            className="button outline small"
+                          <IconButton
+                            label={`Hap raportin: ${r.title}`}
                             onClick={() => void openReport(r)}
                           >
-                            Hap raportin
-                          </button>
+                            <Eye size={18} />
+                          </IconButton>
                           {r.status === "completed" && (
                             <a
                               className="button primary small"
@@ -3566,18 +3842,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   Shkarko Excel
                 </a>
               )}
-              <button className="button outline small" onClick={closeReport}>
-                <X size={16} />
-                Mbyll raportin
-              </button>
-              <button
-                className="button danger small"
+              <IconButton label="Mbyll raportin" onClick={closeReport}>
+                <X size={18} />
+              </IconButton>
+              <IconButton
+                danger
+                className="action-destructive"
+                label="Fshi raportin"
                 disabled={["queued", "running"].includes(report.status)}
                 onClick={() => setDeleteReport(report)}
               >
-                <Trash2 size={16} />
-                Fshi raportin
-              </button>
+                <Trash2 size={18} />
+              </IconButton>
             </div>
             {report.error && (
               <p className="error-box">{errorMessage(report.error || "")}</p>
@@ -3586,8 +3862,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <div className="working">
                 <LoaderCircle className="spin" size={18} />{" "}
                 {label(report.stage || "gathering")}{" "}
-                <button
-                  className="button outline small"
+                <IconButton
+                  label="Ndërprit raportin"
                   disabled={!!stoppingIds[report.conversation_id || ""]}
                   onClick={async () => {
                     const targetId = report.conversation_id || null;
@@ -3613,9 +3889,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     }
                   }}
                 >
-                  <Square size={14} />
-                  Ndërprit raportin
-                </button>
+                  <Square size={18} />
+                </IconButton>
               </div>
             )}
             {report.document && (
@@ -4480,37 +4755,39 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 <strong>{u.name}</strong>
                 <small>{u.email}</small>
               </div>
-              <button
-                className="button outline small"
-                onClick={() =>
-                  void api(`/admin/datasets/${grant.id}/grants/${u.id}`, {
-                    method: "PUT",
-                  })
-                    .then(() => {
-                      setGrant(null);
-                      void api<Dataset[]>("/datasets").then(setDatasets);
+              <div className="action-group">
+                <IconButton
+                  label={`Jep qasje: ${u.name}`}
+                  onClick={() =>
+                    void api(`/admin/datasets/${grant.id}/grants/${u.id}`, {
+                      method: "PUT",
                     })
-                    .catch(fail)
-                }
-              >
-                <Check size={15} /> Jep qasje{" "}
-              </button>
-              <button
-                className="text-button"
-                onClick={() =>
-                  void api(`/admin/datasets/${grant.id}/grants/${u.id}`, {
-                    method: "DELETE",
-                  })
-                    .then(() => {
-                      setGrant(null);
-                      void api<Dataset[]>("/datasets").then(setDatasets);
+                      .then(() => {
+                        setGrant(null);
+                        void api<Dataset[]>("/datasets").then(setDatasets);
+                      })
+                      .catch(fail)
+                  }
+                >
+                  <ShieldCheck size={18} />
+                </IconButton>
+                <IconButton
+                  danger
+                  label={`Hiq qasjen: ${u.name}`}
+                  onClick={() =>
+                    void api(`/admin/datasets/${grant.id}/grants/${u.id}`, {
+                      method: "DELETE",
                     })
-                    .catch(fail)
-                }
-              >
-                {" "}
-                Hiq qasjen{" "}
-              </button>
+                      .then(() => {
+                        setGrant(null);
+                        void api<Dataset[]>("/datasets").then(setDatasets);
+                      })
+                      .catch(fail)
+                  }
+                >
+                  <ShieldX size={18} />
+                </IconButton>
+              </div>
             </div>
           ))}
         </Modal>
@@ -4589,14 +4866,20 @@ function DatasetTable({
                 <small>{d.description || d.source}</small>
               </td>
               <td>
-                <Badge good={!!d.enabled}>
-                  {d.enabled ? "Aktiv" : "Joaktiv"}
-                </Badge>
-                {onToggle && (
-                  <button className="text-button" onClick={() => onToggle(d)}>
-                    {d.enabled ? "Çaktivizo" : "Aktivizo"}
-                  </button>
-                )}
+                <div className="action-group">
+                  <Badge good={!!d.enabled}>
+                    {d.enabled ? "Aktiv" : "Joaktiv"}
+                  </Badge>
+                  {onToggle && (
+                    <IconButton
+                      label={`${d.enabled ? "Çaktivizo" : "Aktivizo"} dataset-in: ${d.name}`}
+                      aria-pressed={!!d.enabled}
+                      onClick={() => onToggle(d)}
+                    >
+                      <Power size={18} />
+                    </IconButton>
+                  )}
+                </div>
                 {d.status && <small> Burimi: {label(d.status || "")}</small>}
               </td>
               <td>
@@ -4604,10 +4887,12 @@ function DatasetTable({
               </td>
               {onGrant && (
                 <td>
-                  <button className="text-button" onClick={() => onGrant(d)}>
-                    {" "}
-                    Menaxho qasjen <ArrowRight size={14} />
-                  </button>
+                  <IconButton
+                    label={`Menaxho qasjen: ${d.name}`}
+                    onClick={() => onGrant(d)}
+                  >
+                    <ShieldCheck size={18} />
+                  </IconButton>
                 </td>
               )}
             </tr>

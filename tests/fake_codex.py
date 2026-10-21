@@ -124,6 +124,11 @@ for line in sys.stdin:
             continue
         text = "Protocol fixture reply."
         content = params["input"][-1]["text"]
+        if content == "Reasoning phase fixture":
+            emit({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                  "item": {"id": "reasoning", "type": "reasoning", "summary": [{"text": "PRIVATE_REASONING_FIXTURE"}]}}})
+            emit({"method": "item/reasoning/summaryTextDelta", "params": {"threadId": thread_id, "turnId": turn_id,
+                  "delta": "PRIVATE_REASONING_FIXTURE"}})
         if '"handoff_checkpoint"' in content:
             envelope = json.loads(content)
             context = envelope.get("context", {})

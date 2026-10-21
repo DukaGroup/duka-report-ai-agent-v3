@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { errorMessage } from "./locale";
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 export type DatabaseGrant = {
   source_id: string;
@@ -250,15 +251,22 @@ export function DatabaseAccessPicker({
                     <button
                       type="button"
                       className="text-button"
+                      aria-label={`${expanded[id] ? "Mbyll" : "Shfaq"} kompanitë në ${database.name}`}
+                      title={`${expanded[id] ? "Mbyll" : "Shfaq"} kompanitë në ${database.name}`}
                       aria-expanded={!!expanded[id]}
                       onClick={() =>
                         void toggleCompanies(source, database.name)
                       }
                     >
-                      {expanded[id] ? "Mbyll kompanitë" : "Kompanitë"}
+                      Kompanitë
                       {grant && !grant.all_companies
                         ? ` (${grant.company_ids.length})`
                         : ""}
+                      {expanded[id] ? (
+                        <ChevronUp size={18} />
+                      ) : (
+                        <ChevronDown size={18} />
+                      )}
                     </button>
                   </div>
                   {expanded[id] && (
