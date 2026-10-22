@@ -1,9 +1,0 @@
-{
-  "schema_migration": 12,
-  "deployed_image": "sha256:1a08f16cae68ea3580c1e0883705a6e73c0a01bbca85994901600391b06feb22",
-  "backup_verified": true,
-  "existing_tables_preserved": true,
-  "chatgpt_connected": true,
-  "claude_connected": false,
-  "real_inference_requested_for_verification": false
-}
