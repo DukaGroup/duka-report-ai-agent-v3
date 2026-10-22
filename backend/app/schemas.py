@@ -54,6 +54,10 @@ class UpdateUser(InputModel):
     active: bool
 
 
+class SetupWorkspace(CreateUser):
+    setup_token: SecretStr | None = Field(default=None, min_length=1, max_length=100, repr=False)
+
+
 class UpdateAccount(InputModel):
     database_access: MemberDataAccess | None = None
     active: bool | None = None

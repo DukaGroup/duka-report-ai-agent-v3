@@ -42,7 +42,7 @@ pycparser==3.11
 python-dotenv==1.2.4
 XlsxWriter==3.2.9
 openpyxl==3.1.5
-pypdf==6.20.1
+pypdf==6.21.1
 python-docx==1.2.0
 defusedxml==0.7.1
 et-xmlfile==2.0.0

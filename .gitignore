@@ -11,3 +11,9 @@ work/
 *.sqlite*
 auth.json
 test-results/
+.env
+.env.*
+!.env.example
+outputs/
+*.duka-backup
+*.backup-key

@@ -67,6 +67,9 @@ class HanaConnector(SQLServerConnector):
         return ["HANA_" + key.upper() for key in ("host", "port", "user", "password") if not getattr(self.settings, "hana_" + key)]
 
     def _connect(self):
+        from .deployment_security import production
+        if production(self.settings) and not (self.settings.hana_encrypt and self.settings.hana_validate_certificate):
+            raise SourceNotConfigured("Production HANA connections require encryption and certificate validation.")
         if self.missing():
             raise SourceNotConfigured("Missing connection settings: " + ", ".join(self.missing()))
         try:

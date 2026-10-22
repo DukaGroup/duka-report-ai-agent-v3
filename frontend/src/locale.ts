@@ -152,6 +152,10 @@ const errors: Record<string, string> = {
     "Skedari është tepër i madh pas hapjes së përmbajtjes së kompresuar.",
   "Uploaded tables support at most 10000 rows and 100 columns.":
     "Tabelat e ngarkuara mbështesin deri në 10 000 rreshta dhe 100 kolona.",
+  "Uploaded tables support at most 50000 rows and 100 columns.":
+    "Tabelat e ngarkuara mbështesin deri në 50 000 rreshta dhe 100 kolona.",
+  "The extracted workbook exceeds 96 MB. Split it into smaller files and upload again.":
+    "Përmbajtja e nxjerrë nga Excel-i i kalon 96 MB. Ndajeni në skedarë më të vegjël dhe ngarkojeni përsëri.",
   "Upload at most 20 worksheets per file.":
     "Ngarkoni deri në 20 fletë pune për skedar.",
   "The uploaded worksheet exceeds the row or column limit.":

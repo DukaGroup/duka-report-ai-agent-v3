@@ -10,6 +10,8 @@ class Settings:
     codex_binary: str = os.getenv("CODEX_BINARY", "codex")
     claude_binary: str | None = os.getenv("CLAUDE_BINARY") or None
     session_hours: int = int(os.getenv("SESSION_HOURS", "24"))
+    production: bool = os.getenv("APP_ENV", "development").lower() == "production"
+    require_setup_token: bool = os.getenv("REQUIRE_SETUP_TOKEN", "false").lower() == "true"
     secure_cookies: bool = os.getenv("SECURE_COOKIES", "false").lower() == "true"
     allowed_origins: tuple[str, ...] = tuple(
         x.strip() for x in os.getenv("ALLOWED_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080").split(",")
@@ -95,6 +97,8 @@ class Settings:
         return replace(self, **updates, env_file=None)
 
     def prepare(self):
+        from .deployment_security import validate_web_settings
+        validate_web_settings(self)
         if self.turn_timeout < 0:
             raise ValueError("TURN_TIMEOUT_SECONDS must be nonnegative; 0 disables the response time limit.")
         if not 1 <= self.workbook_timeout <= 300 or not 256 <= self.workbook_memory_mb <= 4096:
@@ -102,5 +106,8 @@ class Settings:
         if not 1 <= self.report_max_rows <= 1000000 or self.report_max_bytes < 1:
             raise ValueError("REPORT_MAX_ROWS must be 1–1000000 and REPORT_MAX_BYTES must be positive.")
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # mkdir(mode=...) does not repair permissions on an existing volume.
+        self.data_dir.chmod(0o700)
         for name in ("codex", "workspaces", "speech-cache", "cache"):
             (self.data_dir / name).mkdir(exist_ok=True, mode=0o700)
+            (self.data_dir / name).chmod(0o700)

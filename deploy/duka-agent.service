@@ -11,11 +11,14 @@ Environment=PATH=/var/www/duka-agent/app/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=DATA_DIR=/var/lib/duka-agent
 Environment=FRONTEND_DIR=/var/www/duka-agent/app/frontend/dist
 Environment=REPORT_QUERY_DIR=/var/www/duka-agent/app/backend/queries
-Environment=ENV_FILE=/var/www/duka-agent/app/.env
+Environment=ENV_FILE=/var/lib/duka-agent/runtime.env
+Environment=APP_ENV=production
+Environment=FREETDSCONF=/var/www/duka-agent/app/deploy/freetds.conf
 Environment=CODEX_BINARY=/var/www/duka-agent/codex/node_modules/.bin/codex
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/var/www/duka-agent/app/.venv/bin/uvicorn app.main:app --app-dir /var/www/duka-agent/app/backend --env-file /var/www/duka-agent/app/.env --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log --timeout-graceful-shutdown 20
+ExecStartPre=/var/www/duka-agent/app/.venv/bin/python /var/www/duka-agent/app/deploy/preflight.py
+ExecStart=/var/www/duka-agent/app/.venv/bin/uvicorn app.main:app --app-dir /var/www/duka-agent/app/backend --env-file /var/lib/duka-agent/runtime.env --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --no-access-log --timeout-graceful-shutdown 20
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45
@@ -24,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/duka-agent /var/www/duka-agent/app/.env
+ReadWritePaths=/var/lib/duka-agent
 
 [Install]
 WantedBy=multi-user.target

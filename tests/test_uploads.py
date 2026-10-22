@@ -198,6 +198,55 @@ def test_excel_with_merged_heading_cells_uploads_with_full_data_and_column_width
     assert client.get(f"/api/attachments/{item['id']}/download").content == content.getvalue()
 
 
+def test_large_excel_streaming_upload_retains_all_rows_for_preview_and_analysis(client, admin):
+    from openpyxl import Workbook
+    from openpyxl.worksheet.table import Table
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Large detail"
+    sheet.append([f"Field {column}" for column in range(1, 22)])
+    for value in range(1, 10001):
+        sheet.append([value] * 21)
+    sheet.add_table(Table(displayName="LargeDetail", ref="A1:U10001"))
+    content = io.BytesIO()
+    workbook.save(content)
+    workbook.close()
+
+    chat = client.post("/api/conversations", json={}, headers=HEADERS).json()
+    response = upload(client, chat, "large-details.xlsx", content.getvalue())
+    assert response.status_code == 201, response.text
+    item = response.json()
+    assert item["tables"][0]["row_count"] == 10000
+
+    stored = client.app.state.attachments.parsed(
+        client.app.state.attachments.owned(admin["id"], item["id"])
+    )["tables"][0]
+    assert stored["row_encoding"] == "array"
+    assert len(stored["rows"]) == 10000
+    last = client.app.state.attachments.read(admin["id"], item["id"], chat["id"], item["tables"][0]["id"], 9999, 1)
+    assert last["rows"] == [{f"Field {column}": 10000 for column in range(1, 22)}]
+    result = client.app.state.attachments.query(
+        admin["id"],
+        item["id"],
+        chat["id"],
+        item["tables"][0]["id"],
+        {"metrics": [{"function": "sum", "column": "Field 1", "alias": "total"}]},
+        complete=True,
+    )
+    assert result["rows"] == [{"total": "50005000"}]
+
+
+def test_zip_bomb_guard_rejects_extreme_compression_ratio(tmp_path):
+    from app.attachment_reader import guard_zip
+
+    path = tmp_path / "compressed.xlsx"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/sheet1.xml", b"A" * (2 * 1024 * 1024))
+    with pytest.raises(ValueError, match="too large after decompression"):
+        guard_zip(path)
+
+
 @pytest.mark.parametrize(
     "name,data",
     [

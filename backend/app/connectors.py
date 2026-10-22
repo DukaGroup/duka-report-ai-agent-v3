@@ -137,6 +137,16 @@ class SQLServerConnector:
             raise SourceNotConfigured("SQLSERVER_PORT must be a number between 1 and 65535.") from exc
         if self.settings.sqlserver_encryption not in ("require", "request", "off"):
             raise SourceNotConfigured("SQLSERVER_ENCRYPTION must be require, request, or off.")
+        from .deployment_security import production
+        if production(self.settings) and self.settings.sqlserver_encryption != "require":
+            raise SourceNotConfigured("Production SQL Server connections require encryption.")
+        if production(self.settings):
+            import os
+            from .deployment_security import validate_freetds
+            try:
+                validate_freetds(os.getenv('FREETDSCONF'))
+            except (OSError, ValueError):
+                raise SourceNotConfigured("Production SQL Server requires the trusted FreeTDS configuration with CA and hostname validation.") from None
         driver = self.driver
         if driver is None:
             import pymssql

@@ -28,7 +28,7 @@ class AttachmentStore:
             return
         async with self.format_locks.setdefault(identifier, asyncio.Lock()):
             parsed = self.parsed(row)
-            if parsed.get('format', {}).get('layout_version', 0) >= 2:
+            if parsed.get('format', {}).get('streaming_limited') or parsed.get('format', {}).get('layout_version', 0) >= 2:
                 return
             output = self.directory / (uid() + '.format.json')
             replacement = self.directory / (uid() + '.format.tmp')
@@ -42,7 +42,7 @@ class AttachmentStore:
                         sys.executable, '-m', 'app.attachment_reader', str(self.directory/(identifier+'.xlsx')),
                         '.xlsx', str(output), '--format-only', env=env,
                         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                    await asyncio.wait_for(process.wait(),25)
+                    await asyncio.wait_for(process.wait(),60)
                 result = json.loads(output.read_text()) if output.exists() else {}
                 if process.returncode or not result.get('format'):
                     raise ValueError('The Excel reference layout could not be refreshed. Check the uploaded workbook.')
@@ -68,6 +68,14 @@ class AttachmentStore:
 
     def parsed(self, row):
         return json.loads((self.directory / (row["id"] + ".json")).read_text())
+
+    @staticmethod
+    def table_rows(table, start=0, end=None):
+        rows = table["rows"][start:end]
+        if table.get("row_encoding") != "array":
+            return rows
+        columns = [column["name"] for column in table["columns"]]
+        return [dict(zip(columns, row)) for row in rows]
 
     def metadata(self, row):
         parsed = self.parsed(row)
@@ -106,9 +114,15 @@ class AttachmentStore:
             >= 50
         ):
             raise HTTPException(413, "This conversation has reached its upload limit. Start a new conversation.")
-        total = self.db.one("SELECT coalesce(sum(size),0) AS total FROM attachments WHERE user_id=?", (user_id,))[
-            "total"
-        ]
+        stored_rows = self.db.all("SELECT id,size FROM attachments WHERE user_id=?", (user_id,))
+        total = sum(
+            int(row["size"])
+            + (self.directory / (row["id"] + ".json")).stat().st_size
+            if (self.directory / (row["id"] + ".json")).exists()
+            else int(row["size"])
+            for row in stored_rows
+        )
+        storage_limit = 250 * 1024 * 1024
         identifier, size = uid(), 0
         path, parsed_path = self.directory / (identifier + extension), self.directory / (identifier + ".json")
         try:
@@ -139,7 +153,7 @@ class AttachmentStore:
                     stderr=asyncio.subprocess.DEVNULL,
                 )
                 try:
-                    await asyncio.wait_for(process.wait(), 25)
+                    await asyncio.wait_for(process.wait(), 60)
                 except TimeoutError as exc:
                     if process.returncode is None:
                         process.kill()
@@ -153,6 +167,8 @@ class AttachmentStore:
             if not parsed_path.exists():
                 raise HTTPException(422, "The upload exceeded parsing limits or could not be read.")
             parsed_path.chmod(0o600)
+            if total + size + parsed_path.stat().st_size > storage_limit:
+                raise HTTPException(413, "Your private upload storage limit has been reached.")
             result = json.loads(parsed_path.read_text())
             if result.get("error"):
                 raise HTTPException(422, result["error"])
@@ -191,7 +207,7 @@ class AttachmentStore:
             if not t:
                 raise ValueError("Uploaded table not found. Use list_attachments first.")
             result = {k: v for k, v in t.items() if k != "rows"}
-            rows = t["rows"][offset : offset + limit]
+            rows = self.table_rows(t, offset, offset + limit)
             while len(json.dumps(rows).encode()) > 60000:
                 rows.pop()
             if not rows and offset < len(t["rows"]):
@@ -230,8 +246,9 @@ class AttachmentStore:
             t = next((t for t in parsed["tables"] if t["id"] == table_id), None)
             if not t:
                 raise ValueError("Uploaded table not found. Use list_attachments first.")
+        table = {**t, "rows": self.table_rows(t)}
         return analyze_table(
-            t,
+            table,
             query,
             complete=complete,
             max_rows=self.settings.report_max_rows,

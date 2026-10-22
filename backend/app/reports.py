@@ -333,16 +333,23 @@ def markdown_report(report, snapshot):
 
 
 def csv_snapshot(snapshot):
+    def safe_cell(value):
+        # Headings are untrusted too. A leading tab/newline is itself dangerous
+        # in spreadsheet importers, even without a formula marker after it.
+        if isinstance(value, str) and (value.startswith(("\t", "\r", "\n")) or value.lstrip().startswith(("=", "+", "-", "@"))):
+            return "'" + value
+        return value
+
     rows = json.loads(snapshot["rows_json"])
     output = io.StringIO(newline="")
     fields = list(dict.fromkeys(key for row in rows for key in row))
     writer = csv.DictWriter(output, fieldnames=fields)
-    writer.writeheader()
+    writer.writerow({key: safe_cell(key) for key in fields})
     for row in rows:
         # Protect spreadsheet users from formulas in untrusted text values.
         writer.writerow(
             {
-                k: "'" + v if isinstance(v, str) and v.lstrip().startswith(("=", "+", "-", "@")) else v
+                k: safe_cell(v)
                 for k, v in row.items()
             }
         )

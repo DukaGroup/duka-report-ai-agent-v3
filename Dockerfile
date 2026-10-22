@@ -17,7 +17,8 @@ COPY --from=codex-runtime /opt/codex /opt/codex
 RUN ln -s /opt/codex/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
 WORKDIR /app
 COPY backend/requirements*.txt backend/constraints.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-voice.txt
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2 \
+    && pip install --no-cache-dir -r requirements.txt -r requirements-voice.txt
 COPY backend/app /app/app
 COPY backend/queries /app/queries
 COPY --from=frontend-build /build/frontend/dist /app/frontend

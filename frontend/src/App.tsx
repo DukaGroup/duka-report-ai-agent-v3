@@ -181,9 +181,11 @@ function Modal({
 
 function Auth({
   setup,
+  setupTokenRequired,
   onDone,
 }: {
   setup: boolean;
+  setupTokenRequired: boolean;
   onDone: (u: User) => void;
 }) {
   const [error, setError] = useState(""),
@@ -225,6 +227,21 @@ function Auth({
             : "Hyni në llogari për të vazhduar bisedat dhe raportet tuaja."}
         </p>
         <form onSubmit={submit}>
+          {setup && setupTokenRequired && (
+            <label>
+              Kodi i konfigurimit
+              <input
+                name="setup_token"
+                type="password"
+                required
+                autoComplete="off"
+                maxLength={100}
+              />
+              <span className="muted">
+                Merreni kodin nga administratori i serverit.
+              </span>
+            </label>
+          )}
           {setup && (
             <label>
               {" "}
@@ -303,6 +320,7 @@ function Auth({
 export default function App() {
   const [loading, setLoading] = useState(true),
     [setup, setSetup] = useState(false),
+    [setupTokenRequired, setSetupTokenRequired] = useState(false),
     [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -310,11 +328,14 @@ export default function App() {
     const stop = recoverSubscription(
       async () => {
         try {
-          const r = await api<{ needs_setup: boolean; user: User | null }>(
-            "/auth/status",
-          );
+          const r = await api<{
+            needs_setup: boolean;
+            setup_token_required?: boolean;
+            user: User | null;
+          }>("/auth/status");
           if (active) {
             setSetup(r.needs_setup);
+            setSetupTokenRequired(Boolean(r.setup_token_required));
             setUser(r.user);
             setError("");
           }
@@ -360,6 +381,7 @@ export default function App() {
     return (
       <Auth
         setup={setup}
+        setupTokenRequired={setupTokenRequired}
         onDone={(u) => {
           setUser(u);
           setSetup(false);

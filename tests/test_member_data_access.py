@@ -400,6 +400,18 @@ def test_both_provider_report_tools_export_only_granted_companies(client, admin,
     book = load_workbook(io.BytesIO(binary.content), read_only=True, data_only=True)
     values = [cell for sheet in book for row in sheet.values for cell in row]
     assert 30 in values and 9000 not in values
+    # A saved workbook must not outlive the owner's database/company grants.
+    assert client.post('/api/auth/login', headers=HEADERS, json={
+        'email': admin['email'], 'password': 'a-long-test-password',
+    }).status_code == 200
+    assert client.put(f"/api/admin/users/{member['id']}/access", headers=HEADERS,
+                      json={'databases': []}).status_code == 200
+    sign_in_member(client)
+    assert client.get(f"/api/reports/{result['report_id']}").status_code == 403
+    for kind in ['xlsx', 'json', 'markdown', 'csv']:
+        denied = client.get(f"/api/reports/{result['report_id']}/export/{kind}")
+        assert denied.status_code == 403, (provider, kind)
+        assert 'Qasja nuk lejohet' in denied.json()['detail']
     blocked = call_tool(
         client,
         member,

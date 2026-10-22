@@ -78,7 +78,9 @@ For **HANA**, keep `HANA_ENCRYPT=true` and `HANA_VALIDATE_CERTIFICATE=true` in t
 - **Hostname mismatch:** use the database's correct DNS name, or set that source's `HANA_TLS_SERVER_NAME` to the verified name on its certificate.
 - **Expired certificate:** renew the server certificate; adding a CA will not fix expiry.
 
-For **SQL Server**, keep `SQLSERVER_ENCRYPTION=require` and have its administrator check server TLS/certificate compatibility with pymssql/FreeTDS. HANA certificate settings do not apply to SQL Server. See [SAP's connection properties](https://help.sap.com/docs/hana-cloud-database/f1b440ded6144a54ada97ff95dac7adf/ee592e89dcce4480a99571a4ae7a702f.html) for the HANA trust settings.
+For **SQL Server**, production uses `deploy/freetds.conf` through the unit's `FREETDSCONF` variable. It requires encryption, system CA trust and hostname verification. Keep `SQLSERVER_ENCRYPTION=require`. For a private company CA, obtain the verified CA certificate from the DBA, install it as `/usr/local/share/ca-certificates/duka-company.crt` and run `sudo update-ca-certificates`. Use the database DNS name matching its certificate. HANA certificate settings do not apply to SQL Server. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
+
+The native service reads `/var/lib/duka-agent/runtime.env`, not the checkout's `.env`. After changes, restart it with `sudo systemctl restart duka-agent`. If preflight rejects startup, verify exact HTTPS origins, `SECURE_COOKIES=true`, the supplied FreeTDS file, data directory mode `700`, and environment ownership `duka:duka` with mode `600`. A fresh workspace's setup code is available only through `sudo cat /var/lib/duka-agent/workspace-setup.token`; existing workspaces do not need it.
 
 ## 5. Connection settings, logins, or member access fail
 

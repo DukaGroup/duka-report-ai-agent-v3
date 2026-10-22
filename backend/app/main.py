@@ -17,10 +17,13 @@ from .db import Database, now, uid
 from .provider import ProviderError, SubscriptionManager
 from .reports import csv_snapshot, generate_report, markdown_report, save_excel
 from .report_exports import public_snapshot
+from .report_access import authorize_saved_report, saved_report_scope
+from .deployment_security import bootstrap_path, bootstrap_required, loopback, origin_url, prepare_bootstrap, production, verify_bootstrap
 from .schemas import (
     ChatMessage,
     ChatStop,
     CreateUser,
+    SetupWorkspace,
     Credentials,
     NewConversation,
     NewDataset,
@@ -72,6 +75,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.settings = settings
         app.state.db = Database(settings.data_dir / "application.sqlite3")
         app.state.db.initialize()
+        prepare_bootstrap(settings, app.state.db)
         app.state.traffic = TrafficLog(app.state.db)
         app.state.traffic.start()
         app.state.connectors = ConnectorRegistry(settings, app.state.db)
@@ -125,6 +129,12 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
 
     @app.middleware("http")
     async def boundaries(request, call_next):
+        if production(settings):
+            health = request.url.path == "/api/health" and loopback(request.url.hostname)
+            if not health and request.url.hostname not in {origin_url(o).hostname for o in settings.allowed_origins}:
+                return JSONResponse({"detail": "Request host is not allowed."}, status_code=400)
+            if not health and request.url.scheme != "https":
+                return JSONResponse({"detail": "HTTPS is required."}, status_code=426)
         if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
             if (origin and origin not in settings.allowed_origins) or request.headers.get(
@@ -137,6 +147,9 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if production(settings) and request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         )
@@ -171,10 +184,10 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             user = public_user(current_user(request))
         except HTTPException:
             user = None
-        return {"needs_setup": needs_setup, "user": user}
+        return {"needs_setup": needs_setup, "setup_token_required": needs_setup and bootstrap_required(settings), "user": user}
 
     @app.post("/api/auth/setup")
-    async def setup(body: CreateUser, request: Request, response: Response):
+    async def setup(body: SetupWorkspace, request: Request, response: Response):
         db = request.app.state.db
         request.app.state.limiter.check(request.client.host)
         user_id = uid()
@@ -182,11 +195,19 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             c.execute("BEGIN IMMEDIATE")
             if c.execute("SELECT count(*) FROM users").fetchone()[0]:
                 raise HTTPException(409, "Workspace setup has already been completed.")
+            try:
+                valid_token = verify_bootstrap(settings, body.setup_token.get_secret_value() if body.setup_token else None)
+            except OSError:
+                raise HTTPException(503, "Kodi i konfigurimit nuk mund të verifikohet. Kontaktoni administratorin e serverit.") from None
+            if not valid_token:
+                raise HTTPException(403, "Nevojitet kodi i konfigurimit nga administratori i serverit.")
             c.execute(
                 "INSERT INTO users VALUES(?,?,?,?,?,?,?)",
                 (user_id, body.email, body.name, hash_password(body.password), "devs", 1, now()),
             )
         db.audit(user_id, "workspace.setup")
+        if bootstrap_required(settings):
+            bootstrap_path(settings).unlink(missing_ok=True)
         create_session(db, settings, response, user_id)
         return public_user(db.one("SELECT * FROM users WHERE id=?", (user_id,)))
 
@@ -199,6 +220,11 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         encoded = user["password_hash"] if user else dummy_password_hash
         if not verify_password(body.password, encoded) or not user:
             raise HTTPException(401, "Email or password is incorrect.")
+        if encoded.startswith("scrypt$"):
+            # A successful login upgrades only this verifier; passwords, grants
+            # and existing sessions remain valid. Never overwrite a newer hash.
+            db.execute("UPDATE users SET password_hash=? WHERE id=? AND password_hash=? AND active=1",
+                       (hash_password(body.password), user["id"], encoded))
         create_session(db, settings, response, user["id"])
         db.audit(user["id"], "workspace.login")
         return public_user(user)
@@ -1116,15 +1142,31 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 pass  # The durable notification scan recovers this after a restart.
         task.add_done_callback(done)
 
+    async def readable_report_scope(request, report, user_id):
+        try:
+            scope = await asyncio.to_thread(saved_report_scope, request.app.state.db, report["snapshot_id"], user_id)
+        except SourceNotConfigured:
+            raise HTTPException(403, "Qasja nuk lejohet.") from None
+        check_saved_report_scope(request, user_id, scope)
+        return scope
+
+    def check_saved_report_scope(request, user_id, scope):
+        try:
+            authorize_saved_report(request.app.state.db, user_id, scope)
+        except SourceNotConfigured:
+            raise HTTPException(403, "Qasja nuk lejohet. Lejet aktuale nuk lejojnë leximin e këtij raporti.") from None
+
     @app.get("/api/reports/{identifier}")
     async def report_detail(identifier: str, request: Request, user=Depends(current_user)):
         report = owned_report(request, identifier, user["id"])
+        await readable_report_scope(request, report, user["id"])
         report["document"] = json.loads(report["content_json"]) if report["content_json"] else None
         return report
 
     @app.get("/api/reports/{identifier}/export/{format}")
     async def export_report(identifier: str, format: str, request: Request, user=Depends(current_user)):
         report = owned_report(request, identifier, user["id"])
+        scope = await readable_report_scope(request, report, user["id"])
         if report["status"] != "completed":
             raise HTTPException(409, "This report is not ready to export.")
         snapshot = request.app.state.db.one(
@@ -1135,7 +1177,9 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             if not await asyncio.to_thread(current_workbook, path):
                 # Refresh presentation from the saved snapshot, without another subscription request.
                 content = await rebuild_excel(request.app.state.manager, report, snapshot)
+                check_saved_report_scope(request, user["id"], scope)
                 save_excel(request.app.state.manager, report, snapshot, content)
+            check_saved_report_scope(request, user["id"], scope)
             return FileResponse(
                 path,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

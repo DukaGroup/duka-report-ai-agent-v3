@@ -7,20 +7,28 @@ from collections import defaultdict, deque
 from fastapi import HTTPException, Request, Response
 
 COOKIE = "duka_session"
+PASSWORD_SCHEME = "scrypt-v2"
 
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
-    key = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1)
-    return f"scrypt${salt}${key.hex()}"
+    # OWASP's 16 MiB configuration: N=2^14, r=8, p=5. Keep memory bounded
+    # while increasing CPU cost over the legacy p=1 hashes.
+    key = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=5)
+    return f"{PASSWORD_SCHEME}${salt}${key.hex()}"
 
 
 def verify_password(password, encoded):
     try:
         kind, salt, expected = encoded.split("$")
-        if kind != "scrypt":
+        if kind not in ("scrypt", PASSWORD_SCHEME):
             return False
-        key = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1)
+        key = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8,
+                             p=1 if kind == "scrypt" else 5)
+        if kind == "scrypt":
+            # Match the new verification work even for an incorrect legacy
+            # password; otherwise timing could identify unmigrated accounts.
+            hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=4)
         return hmac.compare_digest(key.hex(), expected)
     except (ValueError, TypeError):
         return False
