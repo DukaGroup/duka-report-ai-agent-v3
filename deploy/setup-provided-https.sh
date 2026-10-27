@@ -3,21 +3,21 @@
 set -euo pipefail
 duka_deploy_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 duka_domain=hana.dukagroup.local
-duka_certificate= duka_key= duka_chain= duka_ca=
+duka_certificate= duka_key= duka_chain= duka_root_sha256=
 usage() {
-    echo 'Usage: sudo bash deploy/setup-provided-https.sh [--domain hana.dukagroup.local] --certificate FILE --key FILE --chain FILE.p7b --ca TRUSTED_ROOT.crt'
+    echo 'Usage: sudo bash deploy/setup-provided-https.sh [--domain hana.dukagroup.local] --certificate hana.cer --key hana.key --chain chain.p7b [--trust-root-sha256 CONFIRMED_FINGERPRINT]'
 }
 while (($#)); do
     case "$1" in
         --help|-h) usage; exit 0 ;;
-        --domain|--certificate|--key|--chain|--ca)
+        --domain|--certificate|--key|--chain|--trust-root-sha256)
             if (($# < 2)); then usage >&2; exit 2; fi
             case "$1" in
                 --domain) duka_domain="$2" ;;
                 --certificate) duka_certificate="$2" ;;
                 --key) duka_key="$2" ;;
                 --chain) duka_chain="$2" ;;
-                --ca) duka_ca="$2" ;;
+                --trust-root-sha256) duka_root_sha256="$2" ;;
             esac
             shift 2 ;;
         *) usage >&2; exit 2 ;;
@@ -27,7 +27,7 @@ if [[ $EUID != 0 ]]; then echo 'Run this installer with sudo.' >&2; exit 1; fi
 if [[ ! "$duka_domain" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ || ${#duka_domain} -gt 253 ]]; then
     echo 'Use a lowercase DNS hostname, without a scheme, path or port.' >&2; exit 2
 fi
-for duka_file in "$duka_certificate" "$duka_key" "$duka_chain" "$duka_ca"; do
+for duka_file in "$duka_certificate" "$duka_key" "$duka_chain"; do
     if [[ ! -f "$duka_file" || ! -r "$duka_file" ]]; then usage >&2; exit 2; fi
 done
 if [[ ! -r /var/www/duka-agent/app/frontend/dist/index.html ]]; then
@@ -59,9 +59,11 @@ cleanup() {
     return "$duka_status"
 }
 trap cleanup EXIT
+duka_trust_args=()
+if [[ -n "$duka_root_sha256" ]]; then duka_trust_args=(--trust-root-sha256 "$duka_root_sha256"); fi
 /var/www/duka-agent/app/.venv/bin/python "$duka_deploy_dir/provided_tls.py" \
     --domain "$duka_domain" --certificate "$duka_certificate" --key "$duka_key" \
-    --chain "$duka_chain" --ca "$duka_ca" --output-dir "$duka_bundle"
+    --chain "$duka_chain" "${duka_trust_args[@]}" --output-dir "$duka_bundle"
 install -d -m 755 /etc/nginx/sites-available /etc/nginx/sites-enabled
 if [[ -e "$duka_site" || -L "$duka_site" ]]; then cp -a -- "$duka_site" "$duka_backup/site"; fi
 if [[ -e "$duka_enabled" || -L "$duka_enabled" ]]; then cp -a -- "$duka_enabled" "$duka_backup/enabled"; fi
@@ -73,8 +75,10 @@ nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
 # Test locally without depending on internal DNS, while checking the real TLS hostname.
+duka_curl_trust=()
+if [[ -s "$duka_bundle/verification-ca.pem" ]]; then duka_curl_trust=(--cacert "$duka_bundle/verification-ca.pem"); fi
 curl --fail --silent --show-error --noproxy '*' --connect-timeout 5 --max-time 30 \
-    --cacert "$duka_bundle/trusted-root.crt" --resolve "$duka_domain:443:127.0.0.1" \
+    "${duka_curl_trust[@]}" --resolve "$duka_domain:443:127.0.0.1" \
     "https://$duka_domain/api/health"
 duka_committed=true
 echo

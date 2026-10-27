@@ -5,9 +5,10 @@ umask 022
 duka_app_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 duka_prepare_only=false
 duka_tls_dir=
+duka_root_sha256=
 usage() {
-    echo 'Usage: sudo bash deploy/install-native.sh [--tls-dir /PRIVATE/DIRECTORY | --prepare-only]'
-    echo 'TLS directory files: hana.crt, hana.key, chain.p7b, company-root.crt'
+    echo 'Usage: sudo bash deploy/install-native.sh [--tls-dir /PRIVATE/DIRECTORY [--trust-root-sha256 CONFIRMED_FINGERPRINT] | --prepare-only]'
+    echo 'TLS directory files: hana.cer, hana.key, chain.p7b'
 }
 while (($#)); do
     case "$1" in
@@ -16,6 +17,9 @@ while (($#)); do
         --tls-dir)
             if (($# < 2)); then usage >&2; exit 2; fi
             duka_tls_dir="$2"; shift 2 ;;
+        --trust-root-sha256)
+            if (($# < 2)); then usage >&2; exit 2; fi
+            duka_root_sha256="$2"; shift 2 ;;
         *) usage >&2; exit 2 ;;
     esac
 done
@@ -25,8 +29,11 @@ fi
 if [[ "$duka_app_dir" != /var/www/duka-agent/app ]]; then
     echo 'Clone the GitHub repository into /var/www/duka-agent/app first. See DEPLOYMENT.md.' >&2; exit 1
 fi
-if [[ "$duka_prepare_only" == true && -n "$duka_tls_dir" ]]; then
+if [[ "$duka_prepare_only" == true && ( -n "$duka_tls_dir" || -n "$duka_root_sha256" ) ]]; then
     echo 'Use --prepare-only for restore preparation, or --tls-dir for installation.' >&2; exit 2
+fi
+if [[ -n "$duka_root_sha256" && -z "$duka_tls_dir" ]]; then
+    echo '--trust-root-sha256 requires --tls-dir.' >&2; exit 2
 fi
 duka_owner="$SUDO_USER"
 as_builder() { sudo -u "$duka_owner" -H -- "$@"; }
@@ -50,7 +57,7 @@ if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 24.04 || "$(uname -m)" != x86_
 fi
 if [[ -n "$duka_tls_dir" ]]; then
     duka_tls_dir="$(realpath -e -- "$duka_tls_dir")"
-    for duka_file in hana.crt hana.key chain.p7b company-root.crt; do
+    for duka_file in hana.cer hana.key chain.p7b; do
         if [[ ! -r "$duka_tls_dir/$duka_file" ]]; then
             echo "Missing TLS file: $duka_file. See DEPLOYMENT.md for the required files." >&2; exit 1
         fi
@@ -107,9 +114,11 @@ bash deploy/install-service.sh
 curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 \
     --connect-timeout 3 --max-time 30 http://127.0.0.1:8080/api/health
 if [[ -n "$duka_tls_dir" ]]; then
+    duka_trust_args=()
+    if [[ -n "$duka_root_sha256" ]]; then duka_trust_args=(--trust-root-sha256 "$duka_root_sha256"); fi
     bash deploy/setup-provided-https.sh --domain hana.dukagroup.local \
-        --certificate "$duka_tls_dir/hana.crt" --key "$duka_tls_dir/hana.key" \
-        --chain "$duka_tls_dir/chain.p7b" --ca "$duka_tls_dir/company-root.crt"
+        --certificate "$duka_tls_dir/hana.cer" --key "$duka_tls_dir/hana.key" \
+        --chain "$duka_tls_dir/chain.p7b" "${duka_trust_args[@]}"
 else
     echo 'Backend ready. Activate supplied HTTPS certificates with deploy/setup-provided-https.sh.'
 fi

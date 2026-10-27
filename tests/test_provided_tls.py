@@ -61,7 +61,7 @@ def pki():
 
 def inputs(tmp_path, pki, encoding=serialization.Encoding.DER):
     keys, root, intermediate, leaf = pki
-    cert, key, chain, ca = [tmp_path / name for name in ("site.crt", "site.key", "chain.p7b", "root.crt")]
+    cert, key, chain = [tmp_path / name for name in ("hana.cer", "hana.key", "chain.p7b")]
     cert.write_bytes(tls.pem(leaf))
     key.write_bytes(
         keys[2].private_bytes(
@@ -70,16 +70,15 @@ def inputs(tmp_path, pki, encoding=serialization.Encoding.DER):
     )
     # Deliberately unordered, with duplicate root and website cert included.
     chain.write_bytes(pkcs7.serialize_certificates([root, leaf, intermediate, root], encoding))
-    ca.write_bytes(tls.pem(root))
-    return cert, key, chain, ca
+    return cert, key, chain
 
 
 @pytest.mark.parametrize("encoding", [serialization.Encoding.DER, serialization.Encoding.PEM])
 def test_p7b_order_and_root_exclusion(tmp_path, pki, encoding):
-    bundle = tls.prepare_bundle(*inputs(tmp_path, pki, encoding), DOMAIN)
+    bundle = tls.prepare_bundle(*inputs(tmp_path, pki, encoding), DOMAIN, tls.fingerprint(pki[1]).hex())
     certs = x509.load_pem_x509_certificates(bundle["fullchain.pem"])
     assert [tls.fingerprint(c) for c in certs] == [tls.fingerprint(pki[3]), tls.fingerprint(pki[2])]
-    assert bundle["trusted-root.crt"] == tls.pem(pki[1])
+    assert bundle["verification-ca.pem"] == tls.pem(pki[1])
 
 
 @pytest.mark.parametrize(
@@ -90,16 +89,17 @@ def test_p7b_order_and_root_exclusion(tmp_path, pki, encoding):
         "expired",
         "client_only",
         "incomplete",
-        "wrong_root",
+        "wrong_fingerprint",
         "invalid_signature",
         "encrypted_key",
         "invalid_p7b",
     ],
 )
 def test_reject_invalid_identity_or_trust(tmp_path, pki, failure):
-    cert, key, chain, ca = inputs(tmp_path, pki)
+    cert, key, chain = inputs(tmp_path, pki)
     keys, root, intermediate, leaf = pki
     domain = DOMAIN
+    pin = tls.fingerprint(root).hex()
     if failure == "wrong_key":
         key.write_bytes(
             keys[3].private_bytes(
@@ -123,8 +123,8 @@ def test_reject_invalid_identity_or_trust(tmp_path, pki, failure):
         )
     elif failure == "incomplete":
         chain.write_bytes(pkcs7.serialize_certificates([root], serialization.Encoding.DER))
-    elif failure == "wrong_root":
-        ca.write_bytes(tls.pem(make_cert("Unrelated Root", keys[3], ca=True)))
+    elif failure == "wrong_fingerprint":
+        pin = "00" * 32
     elif failure == "invalid_signature":
         cert.write_bytes(tls.pem(make_cert(DOMAIN, keys[2], intermediate, keys[3])))
     elif failure == "encrypted_key":
@@ -138,22 +138,62 @@ def test_reject_invalid_identity_or_trust(tmp_path, pki, failure):
     else:
         chain.write_bytes(b"invalid PKCS7")
     with pytest.raises(ValueError):
-        tls.prepare_bundle(cert, key, chain, ca, domain)
+        tls.prepare_bundle(cert, key, chain, domain, pin)
     assert not (tmp_path / "fullchain.pem").exists()
 
 
 def test_root_can_directly_issue_leaf_and_leaf_can_be_der(tmp_path, pki):
     keys, root, _, _ = pki
-    cert, key, chain, ca = inputs(tmp_path, pki)
+    cert, key, chain = inputs(tmp_path, pki)
     leaf = make_cert(DOMAIN, keys[2], root, keys[0])
     cert.write_bytes(leaf.public_bytes(serialization.Encoding.DER))
     chain.write_bytes(tls.pem(root))
-    bundle = tls.prepare_bundle(cert, key, chain, ca, DOMAIN)
+    bundle = tls.prepare_bundle(cert, key, chain, DOMAIN, tls.fingerprint(root).hex())
     assert bundle["fullchain.pem"] == tls.pem(leaf)
 
 
+@pytest.mark.parametrize("include_root", [True, False])
+def test_only_three_files_with_system_trust_and_optional_root_in_p7b(tmp_path, pki, monkeypatch, include_root):
+    cert, key, chain = inputs(tmp_path, pki)
+    root, intermediate = pki[1:3]
+    chain.write_bytes(
+        pkcs7.serialize_certificates([intermediate] + ([root] if include_root else []), serialization.Encoding.DER)
+    )
+    trust = tmp_path / "system-trust.pem"
+    trust.write_bytes(tls.pem(root))
+    monkeypatch.setenv("SSL_CERT_FILE", str(trust))
+    bundle = tls.prepare_bundle(cert, key, chain, DOMAIN)
+    assert set(bundle) == {"fullchain.pem", "privkey.pem"}
+    assert bundle["fullchain.pem"] == tls.pem(pki[3]) + tls.pem(intermediate)
+
+
+def test_chain_root_is_not_implicitly_trusted_and_can_be_inspected(tmp_path, pki, monkeypatch):
+    paths = inputs(tmp_path, pki)
+    monkeypatch.setenv("SSL_CERT_FILE", "/dev/null")
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "no-system-roots"))
+    with pytest.raises(ValueError, match="confirm a root fingerprint"):
+        tls.prepare_bundle(*paths, DOMAIN)
+    description = tls.inspect_chain(paths[2])
+    assert tls.fingerprint(pki[1]).hex().upper() in description
+    assert description.count("SHA256:") == 1
+
+
+@pytest.mark.parametrize("pin", ["invalid", "0" * 64])
+def test_pinned_root_must_be_confirmed_and_present(tmp_path, pki, pin):
+    with pytest.raises(ValueError, match="fingerprint"):
+        tls.prepare_bundle(*inputs(tmp_path, pki), DOMAIN, pin)
+
+
+def test_inspection_reports_missing_root_and_pin_cannot_trust_intermediate(tmp_path, pki):
+    cert, key, chain = inputs(tmp_path, pki)
+    chain.write_bytes(pkcs7.serialize_certificates([pki[2]], serialization.Encoding.DER))
+    assert "No self-signed root" in tls.inspect_chain(chain)
+    with pytest.raises(ValueError, match="self-signed CA"):
+        tls.prepare_bundle(cert, key, chain, DOMAIN, tls.fingerprint(pki[2]).hex())
+
+
 def test_staging_keeps_private_files_outside_webroot_and_nginx_parses(tmp_path, pki):
-    bundle = tls.prepare_bundle(*inputs(tmp_path, pki), DOMAIN)
+    bundle = tls.prepare_bundle(*inputs(tmp_path, pki), DOMAIN, tls.fingerprint(pki[1]).hex())
     output = tmp_path / "private-release"
     output.mkdir()
     tls.stage(bundle, output, DOMAIN, ROOT / "deploy/nginx-https.conf")
@@ -186,7 +226,7 @@ def test_live_https_serves_frontend_and_proxies_backend_with_real_ca_verificatio
     nginx, curl = shutil.which("nginx"), shutil.which("curl")
     if not nginx or not curl:
         pytest.skip("Nginx and curl required for the live native HTTPS test.")
-    bundle = tls.prepare_bundle(*inputs(tmp_path, pki), DOMAIN)
+    bundle = tls.prepare_bundle(*inputs(tmp_path, pki), DOMAIN, tls.fingerprint(pki[1]).hex())
     output = tmp_path / "release"
     output.mkdir()
     tls.stage(bundle, output, DOMAIN, ROOT / "deploy/nginx-https.conf")
@@ -249,7 +289,7 @@ def test_live_https_serves_frontend_and_proxies_backend_with_real_ca_verificatio
             "--max-time",
             "5",
             "--cacert",
-            str(output / "trusted-root.crt"),
+            str(output / "verification-ca.pem"),
             "--resolve",
             f"{DOMAIN}:{https_port}:127.0.0.1",
         ]
@@ -332,7 +372,7 @@ exit 1
         executable.chmod(0o755)
     fixture = tmp_path / "input"
     fixture.write_text("fixture")
-    args = [item for flag in ("--certificate", "--key", "--chain", "--ca") for item in (flag, str(fixture))]
+    args = [item for flag in ("--certificate", "--key", "--chain") for item in (flag, str(fixture))]
     environment = {**os.environ, "PATH": str(binaries) + ":" + os.environ["PATH"], "TLS_TEST_FAILURE": failure}
     result = subprocess.run(["bash", str(script), *args], env=environment, capture_output=True, text=True)
     assert (result.returncode == 0) == (failure == "success"), result.stderr

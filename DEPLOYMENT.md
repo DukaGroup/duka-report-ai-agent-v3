@@ -68,14 +68,13 @@ Get these files from the certificate administrator:
 
 | Example filename | Contents |
 | --- | --- |
-| `hana.crt` | One website certificate, PEM or DER |
+| `hana.cer` | One website certificate, PEM or DER |
 | `hana.key` | Matching unencrypted PEM private key, for unattended Nginx startup |
-| `chain.p7b` | Intermediate CA certificates; PEM/DER PKCS#7 or PEM certificates are accepted |
-| `company-root.crt` | One root CA certificate, confirmed independently with IT |
+| `chain.p7b` | CA chain, PEM/DER PKCS#7; it may include the root and intermediates |
 
-The root's fingerprint must be confirmed through a trusted channel. Finding a root certificate in the `.p7b` is not sufficient reason to trust it. No CA private key is needed.
+These are the only three input files. No separate root certificate file is required. The installer uses the server’s existing CA trust store by default. If the root is included in `chain.p7b` but is not already trusted, confirm its SHA256 fingerprint independently with IT and use `--trust-root-sha256` as shown in section 6. Finding a root in the bundle does not automatically make it trusted. No CA private key is needed.
 
-This setup uses your company PKI; **do not run Certbot for `.local`**. Client operating systems/browsers must trust the company root CA. The installer validates against the explicit root you supply but does not add it to any trust store. Some systems resolve `.local` via multicast DNS; if `getent hosts hana.dukagroup.local` fails or gives a different address, IT must configure the appropriate internal/split-DNS resolution on LAN/VPN clients.
+This setup uses your company PKI; **do not run Certbot for `.local`**. Client operating systems/browsers must trust the company root CA. The installer validates against system trust or an explicitly confirmed root fingerprint from the supplied chain; it does not add certificates to global trust stores. Some systems resolve `.local` via multicast DNS; if `getent hosts hana.dukagroup.local` fails or gives a different address, IT must configure the appropriate internal/split-DNS resolution on LAN/VPN clients.
 
 ## 2. Get all application code from GitHub — on the server
 
@@ -104,18 +103,12 @@ Keep your existing SSH terminal open. In a second terminal on your laptop, chang
 ```bash
 ssh hana@10.0.200.22 'mkdir -p -m 700 ~/hana-tls'
 chmod 600 hana.key
-scp hana.crt hana.key chain.p7b company-root.crt hana@10.0.200.22:~/hana-tls/
+scp hana.cer hana.key chain.p7b hana@10.0.200.22:~/hana-tls/
 ```
 
-Only certificate material is transferred from the laptop. The company root CA is a public certificate confirmed with IT; no CA private key is required. If the files are already on the server, skip this upload.
+Only certificate material is transferred from the laptop. No separate company root file or CA private key is required. If the files are already on the server, skip this upload.
 
-Confirm the root CA fingerprint with IT before running the installer. For a PEM root, inspect it with:
-
-```bash
-openssl x509 -in company-root.crt -noout -subject -fingerprint -sha256
-```
-
-For a DER root add `-inform DER`. The installer accepts both.
+`hana.cer` can be PEM or DER; the extension does not determine its encoding. `chain.p7b` is decoded automatically. Keep the private key restricted and do not commit these files to GitHub.
 
 ## 4. Install everything with one command — on the server
 
@@ -128,7 +121,7 @@ sudo bash deploy/install-native.sh --tls-dir "$HOME/hana-tls"
 
 For a **fresh workspace**, this is the main installation command. It:
 
-1. Checks Ubuntu 24.04/x86-64, a clean GitHub checkout and the four supplied certificate files.
+1. Checks Ubuntu 24.04/x86-64, a clean GitHub checkout and the three supplied files (`hana.cer`, `hana.key`, `chain.p7b`).
 2. Installs the required system packages and Node 24 when needed.
 3. Creates the `duka` service account and private data directory.
 4. Installs pinned backend dependencies and the Codex CLI, and builds the frontend.
@@ -209,58 +202,65 @@ Do not put private values in a tracked file. Configure data sources through Hana
 
 ## 6. Certificate setup, repair or renewal
 
-The main installer already calls this certificate setup. Use this section only to inspect files, repair a failed TLS activation, renew certificates, or use different filenames. Verify the root fingerprint with IT:
+The main installer already calls this setup using exactly `hana.cer`, `hana.key`, and `chain.p7b`. Use this command to repair a failed TLS activation, renew certificates, or supply different filenames:
 
 ```bash
-openssl x509 -in ~/hana-tls/company-root.crt -noout -subject -fingerprint -sha256
-```
-
-If the root file is DER, add `-inform DER` to that inspection command. The installer accepts either encoding.
-
-Run the certificate installer from the application directory:
-
-```bash
+cd /var/www/duka-agent/app
 sudo bash deploy/setup-provided-https.sh \
   --domain hana.dukagroup.local \
-  --certificate "$HOME/hana-tls/hana.crt" \
+  --certificate "$HOME/hana-tls/hana.cer" \
   --key "$HOME/hana-tls/hana.key" \
-  --chain "$HOME/hana-tls/chain.p7b" \
-  --ca "$HOME/hana-tls/company-root.crt"
+  --chain "$HOME/hana-tls/chain.p7b"
 ```
 
-It checks the website hostname, key match, signatures, validity dates and server-auth purpose against the explicit trusted root. It orders the intermediates, removes duplicates and omits the root from the served full chain. Ambiguous or incomplete chains are rejected for correction by IT. The key must be unencrypted; password-protected private keys are rejected rather than prompting during unattended startup.
+The `.cer` file accepts PEM or DER. The installer checks the key match, domain/SAN, validity, certificate signatures and server-auth purpose. It orders intermediates, removes duplicates and omits roots from the served full chain. Password-protected private keys are rejected so unattended Nginx startup cannot hang on a password prompt.
 
-After validation it stores a private versioned bundle under `/etc/nginx/tls/hana.dukagroup.local/`, renders the native Nginx site, runs `nginx -t`, reloads Nginx and performs a real HTTPS API health check using the supplied root. The local check uses `--resolve` so it does not depend on server DNS; it still verifies the real hostname. If activation or health fails, the previous site configuration is restored and the failed bundle is removed. Existing successful bundles are retained for manual rollback.
+### If the company CA is not already trusted by the server
 
-No Docker, Certbot, new self-signed website certificate, database reset, or global root-trust change is involved. Existing unrelated Nginx sites are retained. Resolve duplicate `server_name` entries if you previously configured the same domain elsewhere.
+Inspect root fingerprints from the existing `.p7b` using the installed Python environment:
+
+```bash
+.venv/bin/python deploy/provided_tls.py --inspect-chain "$HOME/hana-tls/chain.p7b"
+```
+
+This prints public certificate identities and SHA256 fingerprints; it does not install or trust them. Confirm the root fingerprint through IT's trusted records, not merely by copying whatever the bundle prints. Then rerun the command above with the extra option:
+
+```text
+--trust-root-sha256 CONFIRMED_64_HEX_DIGIT_FINGERPRINT
+```
+
+For a first installation, the same option is supported on the main installer:
+
+```bash
+sudo bash deploy/install-native.sh --tls-dir "$HOME/hana-tls" \
+  --trust-root-sha256 CONFIRMED_64_HEX_DIGIT_FINGERPRINT
+```
+
+Replace the placeholder with the independently confirmed fingerprint. A colon-separated SHA256 fingerprint is also accepted when quoted. If the backend is already running after a failed TLS setup, use the certificate-only command instead of rerunning the main installer. An incorrect fingerprint, missing root, untrusted issuer or invalid chain fails closed. If `chain.p7b` contains only intermediates, the server must already trust the remaining root, or IT must provide the complete/correct chain or configure its normal OS trust policy; no certificate is fabricated.
+
+A pinned root is extracted into a generated `verification-ca.pem` inside the private TLS release for the local health check. This is an output derived from your existing chain, not a fourth file to upload. It is used only for that deployment's verification; it does not change global system trust.
+
+After validation the installer stores a private versioned bundle under `/etc/nginx/tls/hana.dukagroup.local/`, renders the native Nginx site, runs `nginx -t`, reloads Nginx and performs a verified HTTPS API health check. Its local `--resolve` check verifies the real hostname without depending on DNS. Failed activation restores the previous site configuration; successful releases are retained for manual rollback. Existing unrelated Nginx sites are retained. Resolve duplicate hostname entries if you previously configured the same domain elsewhere.
 
 ## 7. Test from your laptop and open Hana
 
 The network firewall must permit TCP 443 from your intended LAN/VPN users; port 80 is used only to redirect to HTTPS. Keep port 8080 bound to loopback. Keep the SSH rule that allowed you to connect.
 
-On the laptop:
+On the laptop, after IT's company CA trust policy is applied:
 
 ```bash
 getent hosts hana.dukagroup.local
-curl --fail --cacert company-root.crt https://hana.dukagroup.local/api/health
+curl --fail https://hana.dukagroup.local/api/health
 ```
 
-Use a PEM root for `curl`; if necessary convert a DER root with `openssl x509 -inform DER -in company-root.crt -out company-root.pem` and pass that file. If DNS is not ready, this diagnostic preserves hostname verification:
+If DNS is not ready, this diagnostic preserves hostname and CA verification:
 
 ```bash
-curl --fail --cacert company-root.crt \
-  --resolve hana.dukagroup.local:443:10.0.200.22 \
+curl --fail --resolve hana.dukagroup.local:443:10.0.200.22 \
   https://hana.dukagroup.local/api/health
 ```
 
-Have IT distribute the verified company root to managed client/browser trust stores. On a Debian/Kali client, after confirming its fingerprint, a PEM root can be installed with:
-
-```bash
-sudo install -m 644 company-root.crt /usr/local/share/ca-certificates/duka-company-root.crt
-sudo update-ca-certificates
-```
-
-Firefox or other separately managed browser stores may require their own company policy/import. Never bypass certificate warnings or use `curl -k` as the solution.
+The browser and laptop must trust the company issuing CA independently of the server's deployment check. Have IT distribute its verified root from the existing chain through the normal client/browser management policy. No separately named company certificate is assumed by these deployment commands. If the chain lacks the root, IT must already have it in its PKI records. Firefox or other separately managed browser stores may need their own policy. Do not bypass warnings or use `curl -k` as the solution.
 
 Open **https://hana.dukagroup.local**. For a fresh workspace, retrieve the initial setup token on the **server**:
 
@@ -278,17 +278,9 @@ Open **Cilësimet → Burimet e të dhënave**, edit or add each source, and run
 
 Use the SQL Server endpoint, actual SQL port, dedicated reporting username/password and optional default database. Keep `SQLSERVER_ENCRYPTION=require`. The native service loads `deploy/freetds.conf` to require encryption, system CA trust and hostname checks.
 
-The GoTech check on 27 October 2026 reached `192.168.7.10:1433`, but TLS validation failed because SQL Server presented an untrusted self-signed certificate. Moving the backend does not repair that server certificate. Ask the DBA to configure a trusted certificate and use its matching DNS hostname, then install its verified CA on this backend server if the CA is private:
+The GoTech check on 27 October 2026 reached `192.168.7.10:1433`, but SQL Server presented an untrusted self-signed certificate. Moving the backend does not repair that certificate. Ask the DBA to configure a trusted SQL Server certificate, use the matching DNS hostname, and configure the backend's normal system CA trust when a private CA is involved.
 
-```bash
-# Run only after independently confirming the SQL CA fingerprint with the DBA.
-# sql-company-root.crt must contain one PEM CA certificate, not a private key.
-sudo install -m 644 sql-company-root.crt /usr/local/share/ca-certificates/duka-sql-root.crt
-sudo update-ca-certificates
-sudo systemctl restart duka-agent
-```
-
-The website certificate and `.p7b` are separate from database trust unless the DBA confirms the same CA issues both. Installing a CA will not fix an expired certificate or a hostname mismatch.
+Your three website files are not automatically the SQL Server's CA configuration. The DBA must confirm whether the same issuing CA is used. No extra SQL certificate file is required by the website installer. Installing CA trust does not fix an expired certificate or hostname mismatch.
 
 ### SAP HANA
 
@@ -338,7 +330,7 @@ The frontend build writes to the live static directory; schedule a maintenance w
 
 ## 10. Renew HTTPS certificates
 
-For certificate renewal, upload the renewed files and rerun step 6 before expiry. The installer never contacts a public CA and does not schedule renewal. Keep your CA's renewal reminders; the served leaf expires on the date shown by `openssl x509 -in ~/hana-tls/hana.crt -noout -enddate`.
+For certificate renewal, upload the renewed files and rerun step 6 before expiry. The installer never contacts a public CA and does not schedule renewal. Keep your CA's renewal reminders; the served leaf expires on the date shown by `openssl x509 -in ~/hana-tls/hana.cer -noout -enddate`.
 
 ## 11. Create and verify encrypted backups
 
@@ -456,7 +448,7 @@ For **HANA**, keep `HANA_ENCRYPT=true` and `HANA_VALIDATE_CERTIFICATE=true` in t
 - **Hostname mismatch:** use the database's correct DNS name, or set that source's `HANA_TLS_SERVER_NAME` to the verified name on its certificate.
 - **Expired certificate:** renew the server certificate; adding a CA will not fix expiry.
 
-For **SQL Server**, production uses `deploy/freetds.conf` through the unit's `FREETDSCONF` variable. It requires encryption, system CA trust and hostname verification. Keep `SQLSERVER_ENCRYPTION=require`. For a private company CA, obtain the verified CA certificate from the DBA, install it as `/usr/local/share/ca-certificates/duka-company.crt` and run `sudo update-ca-certificates`. Use the database DNS name matching its certificate. HANA certificate settings do not apply to SQL Server. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
+For **SQL Server**, production uses `deploy/freetds.conf` through the unit's `FREETDSCONF` variable. It requires encryption, system CA trust and hostname verification. Keep `SQLSERVER_ENCRYPTION=require`. For a private database CA, ask the DBA to configure the verified issuer in the backend server’s system trust store. This is a database prerequisite, separate from the three website files. Use the database DNS name matching its certificate. HANA certificate settings do not apply to SQL Server. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
 
 The native service reads `/var/lib/duka-agent/runtime.env`, not the checkout's `.env`. After changes, restart it with `sudo systemctl restart duka-agent`. If preflight rejects startup, verify exact HTTPS origins, `SECURE_COOKIES=true`, the supplied FreeTDS file, data directory mode `700`, and environment ownership `duka:duka` with mode `600`. A fresh workspace's setup code is available only through `sudo cat /var/lib/duka-agent/workspace-setup.token`; existing workspaces do not need it.
 

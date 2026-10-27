@@ -118,7 +118,7 @@ chmod +x .venv/bin/python .venv/bin/pip
     return app, data, environment
 
 
-@pytest.mark.parametrize("mode", ["fresh", "existing", "prepare"])
+@pytest.mark.parametrize("mode", ["fresh", "existing", "prepare", "pinned"])
 def test_native_installer_preserves_settings_and_supports_restore_preparation(tmp_path, mode):
     app, data, env = fixture_installer(tmp_path)
     runtime = data / "runtime.env"
@@ -128,9 +128,11 @@ def test_native_installer_preserves_settings_and_supports_restore_preparation(tm
         original = runtime.read_bytes()
     tls = tmp_path / "private-tls"
     tls.mkdir()
-    for name in ("hana.crt", "hana.key", "chain.p7b", "company-root.crt"):
+    for name in ("hana.cer", "hana.key", "chain.p7b"):
         (tls / name).write_text("fixture material")
     args = ["--prepare-only"] if mode == "prepare" else ["--tls-dir", str(tls)]
+    if mode == "pinned":
+        args += ["--trust-root-sha256", "a" * 64]
     result = subprocess.run(
         ["bash", str(app / "deploy/install-native.sh"), *args], cwd=app, env=env, capture_output=True, text=True
     )
@@ -141,6 +143,9 @@ def test_native_installer_preserves_settings_and_supports_restore_preparation(tm
         assert not runtime.exists() and "service" not in calls and "https" not in calls
     else:
         assert "service" in calls and "https --domain hana.dukagroup.local" in calls
+        assert "--certificate " + str(tls / "hana.cer") in calls
+        if mode == "pinned":
+            assert "--trust-root-sha256 " + "a" * 64 in calls
         assert "Installed GitHub revision:" in result.stdout
         assert runtime.stat().st_mode & 0o777 == 0o600
         if mode == "existing":
