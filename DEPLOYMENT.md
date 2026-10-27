@@ -1,0 +1,543 @@
+# Deploy Hana without Docker
+
+This is the single deployment guide for **https://hana.dukagroup.local**. Follow steps 1–7 in order; the later sections cover database connectivity, updates, renewal, backup/recovery and troubleshooting.
+
+SSH is how you administer the server. Your website certificate, private key and `.p7b` chain secure the browser's HTTPS connection. No Docker is used in this guide: Nginx serves the frontend; systemd runs the Python backend on `127.0.0.1:8080`.
+
+These steps assume the server is still `10.0.200.22`, your SSH user is `hana`, and the server runs **Ubuntu 24.04 x86-64**. First check on the server with `cat /etc/os-release` and `uname -m`. Other operating systems need different dependency installation steps. Report isolation requires Landlock ABI 3+ and seccomp, provided by the standard supported Ubuntu kernel.
+
+**Existing data:** this is a fresh-server installation. Uploading source code does not move the laptop's Docker database, reports, users, grants or model credentials. To retain an existing workspace, obtain a verified encrypted workspace backup and its separate key, then use **Restore an existing workspace before the first start** in step 4 below. Restore the complete data and configuration before starting the service. Never replace an existing `runtime.env` with the example below.
+
+## Deployment layout and requirements
+
+```text
+Laptop -- SSH :22 --> Server administration
+Browser -- HTTPS :443 --> Nginx
+                           |-- frontend/dist/ (website files)
+                           `-- /api/ --> systemd: duka-agent --> 127.0.0.1:8080
+                                           |-- model subscription processes
+                                           |-- SQL Server / SAP HANA
+                                           `-- /var/lib/duka-agent/ (persistent data)
+```
+
+| Item | Value |
+| --- | --- |
+| SSH target | `hana@10.0.200.22` |
+| Website | `https://hana.dukagroup.local` |
+| Application source | `/var/www/duka-agent/app` |
+| Python virtual environment | `/var/www/duka-agent/app/.venv` |
+| Codex executable | `/var/www/duka-agent/codex/node_modules/.bin/codex` |
+| Backend service | `duka-agent.service`, running as `duka` |
+| Frontend | `/var/www/duka-agent/app/frontend/dist`, served by Nginx |
+| Private data and configuration | `/var/lib/duka-agent`, `runtime.env` inside it |
+| Installed Nginx site | `/etc/nginx/sites-available/duka-agent` |
+| TLS certificate releases | `/etc/nginx/tls/hana.dukagroup.local/` |
+
+Keep SSH access restricted to your administration network. Allow HTTPS from the intended LAN/VPN clients. The backend listens on loopback only. No separate database server is required for application storage: the backend uses SQLite; SQL Server and HANA are external business-data sources.
+
+Your SSH user needs `sudo`. The server needs free disk space for source, dependencies, model caches, business snapshots, reports and backups, and outbound HTTPS for package downloads and provider sign-in/inference/web search. Its network must also reach your business database endpoints; the laptop's VPN does not automatically give the server the same routes.
+
+**First, on your laptop:**
+
+```bash
+ssh hana@10.0.200.22
+```
+
+**In that SSH session, on the server:**
+
+```bash
+cat /etc/os-release
+uname -m
+df -h /var
+timedatectl status
+```
+
+Continue with the dependency commands below only for Ubuntu 24.04 and `x86_64`. Return to your laptop terminal for step 2 (`exit` closes the SSH session).
+
+## 1. Check DNS and certificates
+
+Ask IT to configure this internal DNS record for LAN and VPN users:
+
+```text
+hana.dukagroup.local → 10.0.200.22
+```
+
+The website certificate must contain `hana.dukagroup.local` (or a matching `*.dukagroup.local`) in its **Subject Alternative Name**. A certificate for a public `.com` domain will not cover `.local`.
+
+Get these files from the certificate administrator:
+
+| Example filename | Contents |
+| --- | --- |
+| `hana.crt` | One website certificate, PEM or DER |
+| `hana.key` | Matching unencrypted PEM private key, for unattended Nginx startup |
+| `chain.p7b` | Intermediate CA certificates; PEM/DER PKCS#7 or PEM certificates are accepted |
+| `company-root.crt` | One root CA certificate, confirmed independently with IT |
+
+The root's fingerprint must be confirmed through a trusted channel. Finding a root certificate in the `.p7b` is not sufficient reason to trust it. No CA private key is needed.
+
+This setup uses your company PKI; **do not run Certbot for `.local`**. Client operating systems/browsers must trust the company root CA. The installer validates against the explicit root you supply but does not add it to any trust store. Some systems resolve `.local` via multicast DNS; if `getent hosts hana.dukagroup.local` fails or gives a different address, IT must configure the appropriate internal/split-DNS resolution on LAN/VPN clients.
+
+## 2. Upload code and certificate files — on your laptop
+
+Open a laptop terminal (outside the SSH session):
+
+```bash
+ssh hana@10.0.200.22 'mkdir -p ~/hana-source; mkdir -p -m 700 ~/hana-tls'
+
+cd /home/pume-laptop/Documents/duka-group/duka-report-ai-agent-v3
+rsync -av \
+  --exclude='.git/' --exclude='.env' --exclude='.env.*' \
+  --exclude='work/' --exclude='data/' --exclude='outputs/' \
+  --exclude='*.sqlite*' --exclude='*.duka-backup' --exclude='*.backup-key' \
+  --exclude='*.key' --exclude='*.pem' --exclude='*.p7b' --exclude='*.pfx' --exclude='*.p12' \
+  --exclude='node_modules/' --exclude='.venv/' --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' --exclude='.ruff_cache/' --exclude='frontend/dist/' \
+  ./ hana@10.0.200.22:~/hana-source/
+```
+
+The domain-specific environment example is `deploy/hana-native.env.example`, so it is included even though project `.env` files are excluded. No `--delete` is used.
+
+In the directory containing your actual certificate files, upload them separately (replace these filenames with yours):
+
+```bash
+chmod 600 hana.key
+scp hana.crt hana.key chain.p7b company-root.crt hana@10.0.200.22:~/hana-tls/
+ssh hana@10.0.200.22
+```
+
+The remaining installation commands run **inside SSH, on the server**.
+
+## 3. Install runtime dependencies — on the server
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl openssl rsync libgomp1 libstdc++6 \
+  python3.12 python3.12-venv nginx
+curl -fsSL https://deb.nodesource.com/setup_24.x -o ~/node24-setup.sh
+sudo bash ~/node24-setup.sh
+sudo apt-get install -y nodejs
+node --version
+```
+
+Node should report version 24. The backend uses it for the Codex CLI; frontend files are compiled with it and then served as static assets.
+
+## 4. Put the application in its native directory
+
+Create the service account only if it does not already exist:
+
+```bash
+if ! id duka >/dev/null 2>&1; then
+  sudo useradd --system --user-group --home-dir /var/lib/duka-agent --shell /usr/sbin/nologin duka
+fi
+sudo install -d -o "$(id -un)" -g "$(id -gn)" /var/www/duka-agent
+sudo install -d -o duka -g duka -m 700 /var/lib/duka-agent
+rsync -av ~/hana-source/ /var/www/duka-agent/app/
+cd /var/www/duka-agent/app
+
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip==26.2
+.venv/bin/pip install -r backend/requirements.txt
+npm install --prefix /var/www/duka-agent/codex --save-exact @openai/codex@0.162.1
+npm --prefix frontend ci
+npm --prefix frontend run build
+chmod -R a+rX frontend/dist
+```
+
+The `duka` service account needs read/execute access to `/var/www/duka-agent` and its application files. Private business data remains under `/var/lib/duka-agent`, mode `700`; never make that directory readable to Nginx.
+
+### Restore an existing workspace before the first start
+
+Skip this subsection for a deliberately fresh workspace. To retain existing users, source IDs, grants, chats, uploads, reports, model credentials and keys, obtain a complete `.duka-backup` archive and its matching separate key from the previous installation. A source-code copy or an ordinary SQLite-only copy is insufficient. Stop the source backend for the complete backup; do not let both installations write to the same data directory. The native backup commands are included later in this file.
+
+Upload the archive and key separately over SSH into private server directories. In the commands below, replace `/PRIVATE/PATH/workspace.duka-backup` and `/PRIVATE/PATH/backup.key` with the actual paths. On the destination server, after installing dependencies but **before step 5**:
+
+```bash
+cd /var/www/duka-agent/app
+sudo .venv/bin/python deploy/backup.py verify \
+  --archive /PRIVATE/PATH/workspace.duka-backup \
+  --key-file /PRIVATE/PATH/backup.key
+sudo .venv/bin/python deploy/backup.py restore \
+  --archive /PRIVATE/PATH/workspace.duka-backup \
+  --key-file /PRIVATE/PATH/backup.key \
+  --target /var/lib/duka-agent-recovery
+```
+
+The restore checks authentication, file hashes and SQLite integrity before publishing recovered files. It refuses to overwrite an existing nonempty target. Review the restored data privately. For an **empty destination only**, switch it into place:
+
+```bash
+(
+set -e
+sudo rmdir /var/lib/duka-agent
+sudo mv /var/lib/duka-agent-recovery/data /var/lib/duka-agent
+sudo install -o duka -g duka -m 600 \
+  /var/lib/duka-agent-recovery/config/runtime.env \
+  /var/lib/duka-agent/runtime.env
+sudo chown -R duka:duka /var/lib/duka-agent
+sudo chmod 700 /var/lib/duka-agent
+)
+```
+
+`rmdir` deliberately fails if the destination is not empty; `set -e` prevents continuing after that failure. Do not replace it with recursive deletion. For an existing destination, retain its own verified backup and arrange a separate recovery/cutover instead. After restore, adjust the HTTPS origin in step 5 while retaining all connection profile prefixes and private keys.
+
+## 5. Configure and start the backend
+
+On a fresh installation with no runtime environment, install the provided production example:
+
+```bash
+if ! sudo test -e /var/lib/duka-agent/runtime.env; then
+  sudo install -o duka -g duka -m 600 deploy/hana-native.env.example /var/lib/duka-agent/runtime.env
+fi
+sudoedit /var/lib/duka-agent/runtime.env
+```
+
+Make sure these settings match, retaining any existing database profiles:
+
+```dotenv
+APP_ENV=production
+ALLOWED_ORIGINS=https://hana.dukagroup.local
+SECURE_COOKIES=true
+```
+
+Start the backend:
+
+```bash
+sudo bash deploy/install-service.sh
+sudo systemctl status duka-agent --no-pager
+curl --fail http://127.0.0.1:8080/api/health
+```
+
+The health endpoint permits this loopback check. Sign-in and application traffic require the configured HTTPS address. The backend is not exposed directly to LAN/VPN clients.
+
+## 6. Validate and activate your certificates
+
+Verify the root fingerprint with IT before proceeding:
+
+```bash
+openssl x509 -in ~/hana-tls/company-root.crt -noout -subject -fingerprint -sha256
+```
+
+If the root file is DER, add `-inform DER` to that inspection command. The installer accepts either encoding.
+
+Run the certificate installer from the application directory:
+
+```bash
+sudo bash deploy/setup-provided-https.sh \
+  --domain hana.dukagroup.local \
+  --certificate "$HOME/hana-tls/hana.crt" \
+  --key "$HOME/hana-tls/hana.key" \
+  --chain "$HOME/hana-tls/chain.p7b" \
+  --ca "$HOME/hana-tls/company-root.crt"
+```
+
+It checks the website hostname, key match, signatures, validity dates and server-auth purpose against the explicit trusted root. It orders the intermediates, removes duplicates and omits the root from the served full chain. Ambiguous or incomplete chains are rejected for correction by IT. The key must be unencrypted; password-protected private keys are rejected rather than prompting during unattended startup.
+
+After validation it stores a private versioned bundle under `/etc/nginx/tls/hana.dukagroup.local/`, renders the native Nginx site, runs `nginx -t`, reloads Nginx and performs a real HTTPS API health check using the supplied root. The local check uses `--resolve` so it does not depend on server DNS; it still verifies the real hostname. If activation or health fails, the previous site configuration is restored and the failed bundle is removed. Existing successful bundles are retained for manual rollback.
+
+No Docker, Certbot, new self-signed website certificate, database reset, or global root-trust change is involved. Existing unrelated Nginx sites are retained. Resolve duplicate `server_name` entries if you previously configured the same domain elsewhere.
+
+## 7. Test from your laptop and open Hana
+
+The network firewall must permit TCP 443 from your intended LAN/VPN users; port 80 is used only to redirect to HTTPS. Keep port 8080 bound to loopback. Keep the SSH rule that allowed you to connect.
+
+On the laptop:
+
+```bash
+getent hosts hana.dukagroup.local
+curl --fail --cacert company-root.crt https://hana.dukagroup.local/api/health
+```
+
+Use a PEM root for `curl`; if necessary convert a DER root with `openssl x509 -inform DER -in company-root.crt -out company-root.pem` and pass that file. If DNS is not ready, this diagnostic preserves hostname verification:
+
+```bash
+curl --fail --cacert company-root.crt \
+  --resolve hana.dukagroup.local:443:10.0.200.22 \
+  https://hana.dukagroup.local/api/health
+```
+
+Have IT distribute the verified company root to managed client/browser trust stores. On a Debian/Kali client, after confirming its fingerprint, a PEM root can be installed with:
+
+```bash
+sudo install -m 644 company-root.crt /usr/local/share/ca-certificates/duka-company-root.crt
+sudo update-ca-certificates
+```
+
+Firefox or other separately managed browser stores may require their own company policy/import. Never bypass certificate warnings or use `curl -k` as the solution.
+
+Open **https://hana.dukagroup.local**. For a fresh workspace, retrieve the initial setup token on the **server**:
+
+```bash
+sudo cat /var/lib/duka-agent/workspace-setup.token
+```
+
+Create the first account, then connect ChatGPT/Claude under **Cilësimet → Modeli**. The server needs outbound access to the provider services and any authorized database/VPN endpoints. Model sign-in is separate from your website certificate.
+
+## 8. Configure and verify database connections
+
+Open **Cilësimet → Burimet e të dhënave**, edit or add each source, and run **Test connection**. Test database access independently of the website health endpoint. Existing restored source IDs and grants must be retained.
+
+### SQL Server, including GoTech
+
+Use the SQL Server endpoint, actual SQL port, dedicated reporting username/password and optional default database. Keep `SQLSERVER_ENCRYPTION=require`. The native service loads `deploy/freetds.conf` to require encryption, system CA trust and hostname checks.
+
+The GoTech check on 27 October 2026 reached `192.168.7.10:1433`, but TLS validation failed because SQL Server presented an untrusted self-signed certificate. Moving the backend does not repair that server certificate. Ask the DBA to configure a trusted certificate and use its matching DNS hostname, then install its verified CA on this backend server if the CA is private:
+
+```bash
+# Run only after independently confirming the SQL CA fingerprint with the DBA.
+# sql-company-root.crt must contain one PEM CA certificate, not a private key.
+sudo install -m 644 sql-company-root.crt /usr/local/share/ca-certificates/duka-sql-root.crt
+sudo update-ca-certificates
+sudo systemctl restart duka-agent
+```
+
+The website certificate and `.p7b` are separate from database trust unless the DBA confirms the same CA issues both. Installing a CA will not fix an expired certificate or a hostname mismatch.
+
+### SAP HANA
+
+Choose **SAP HANA**, confirm its actual tenant SQL port with the DBA, and keep encryption and certificate validation enabled. `HANA_DATABASE` is an optional tenant name; a SAP Business One company schema is not a tenant name. For private CA trust, configure that source’s **Certifikata CA e besuar** / `HANA_TLS_CA_CERTIFICATE`. If connecting by IP, configure `HANA_TLS_SERVER_NAME` to the verified DNS identity on the server certificate when necessary. Never disable verification as a connectivity fix.
+
+### Access and read-only privileges
+
+Use reporting accounts with SELECT access only. Devs and President have application access to registered sources; Managers need their exact database/company grants. Check privileges with this read-only inventory after startup:
+
+```bash
+cd /var/www/duka-agent/app
+sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka-agent \
+  .venv/bin/python deploy/check_database_permissions.py
+```
+
+`requires_dba` flags visible write/admin/execute permissions; `unverified` is not a successful result. The command does not grant or revoke access.
+
+## 9. Update the frontend or backend
+
+Before an update, create the encrypted backup in section 11 and record the version being deployed. Upload source with the same laptop `rsync` command. `~/hana-source/` is only a staging directory: changes there do not update the live application until copied into `/var/www/duka-agent/app/`.
+
+For a full/backend source update, wait for active chats/reports to finish, then on the server:
+
+```bash
+sudo systemctl stop duka-agent
+rsync -av ~/hana-source/ /var/www/duka-agent/app/
+```
+
+Do not use `--delete` on the live application directory: it contains the server's `.venv`. If using Git instead, deploy a reviewed commit already available in the remote repository, and keep runtime.env and data outside the checkout. Changes that exist only on your laptop must be uploaded or committed/pushed before the server can receive them. Reverting source code alone is not a database-schema rollback; keep the pre-update data backup as well.
+
+For a **frontend-only update**, copy only the frontend source (no backend stop required):
+
+```bash
+rsync -av --exclude='node_modules/' --exclude='dist/' ~/hana-source/frontend/ /var/www/duka-agent/app/frontend/
+```
+
+Build the frontend:
+
+```bash
+cd /var/www/duka-agent/app
+npm --prefix frontend ci
+npm --prefix frontend run build
+chmod -R a+rX frontend/dist
+```
+
+After copying backend/full source with the service stopped above, install dependencies and start it again:
+
+```bash
+cd /var/www/duka-agent/app
+.venv/bin/pip install -r backend/requirements.txt
+sudo systemctl start duka-agent
+sudo systemctl status duka-agent --no-pager
+curl --fail http://127.0.0.1:8080/api/health
+```
+
+For a combined update, build the frontend before starting the backend. The frontend build writes to the live static directory, so schedule it during a maintenance window.
+
+## 10. Renew HTTPS certificates
+
+For certificate renewal, upload the renewed files and rerun step 6 before expiry. The installer never contacts a public CA and does not schedule renewal. Keep your CA's renewal reminders; the served leaf expires on the date shown by `openssl x509 -in ~/hana-tls/hana.crt -noout -enddate`.
+
+## 11. Create and verify encrypted backups
+
+Run from `/var/www/duka-agent/app`. Backups include the complete private data directory, a consistent SQLite copy, environment settings, users, grants, uploads, reports, subscription credentials/history and notification keys. The wrapper briefly stops the service and restarts it even if backup fails. It does not modify grants or business databases.
+
+### Create a backup
+
+```bash
+# Create an authenticated encrypted backup and verify recovery.
+sudo bash deploy/backup.sh
+# List the private archives.
+sudo ls -lh /var/backups/duka-agent
+```
+
+The encryption key is created once at `/var/lib/duka-agent-backup.key` with mode `600`. **Copy it separately to a secure location.** Move archives to a separate backup location too. The key is never included in an archive; losing it makes recovery impossible. No backup schedule is installed automatically.
+
+### Verify or restore
+
+```bash
+# Check authentication, file hashes, SQLite integrity and foreign keys.
+sudo .venv/bin/python deploy/backup.py verify --key-file /var/lib/duka-agent-backup.key --archive /path/to/backup.duka-backup
+# Recover separately; existing workspace data is never overwritten.
+sudo .venv/bin/python deploy/backup.py restore --key-file /var/lib/duka-agent-backup.key --archive /path/to/backup.duka-backup --target /var/lib/duka-agent-recovery
+```
+
+For installation into an empty destination, use the complete restore/cutover instructions in step 4 of this file. For an already active server, recover alongside the live workspace and retain its verified backup; do not merge SQLite databases or delete the live directory.
+
+The private data directory, runtime.env and generated files are not application-encrypted at rest. The backup archive is encrypted. Use appropriate disk encryption and filesystem permissions for the live server, and keep the backup key separately from the archives. No automatic backup schedule or certificate-renewal schedule is installed.
+
+## 12. Troubleshoot in this order
+
+### SSH, GitHub or provider DNS fails
+
+Run diagnostics on the machine where the command failed. A working laptop does not prove DNS works on the server.
+
+```bash
+hostname
+ip -br address
+ip route
+getent ahostsv4 github.com
+getent ahostsv4 auth.openai.com
+getent ahostsv4 chatgpt.com
+cat /etc/resolv.conf
+```
+
+`Could not resolve host: github.com` means DNS failed before Git contacted the repository. Ask IT to configure company DNS forwarding for public names while retaining internal `.local` and database resolution. Do not hardcode GitHub IP addresses or switch protocols as a DNS fix. Once DNS works, retry Git from the intended checkout; pending local changes should be reviewed before pulling.
+
+For SSH `No route to host`, check the LAN/VPN path and the server's IP/power/network state. A VPN route alone does not prove the destination is reachable. Test the SSH listener with `nc -nvz -w 5 10.0.200.22 22` where available; use the server console if SSH cannot be reached. The application HTTPS certificate is not an SSH login certificate.
+
+For provider sign-in problems, check server DNS, outbound HTTPS, proxy/firewall policy and account/subscription status. Complete sign-in only through the official provider flow. The frontend and backend share one website origin; there is no browser-side database connection or API key to configure.
+
+### Backend health and startup
+
+```bash
+cd /var/www/duka-agent/app
+# Check startup errors, then test the backend directly.
+sudo journalctl -u duka-agent -n 60 --no-pager
+curl --fail --max-time 5 http://127.0.0.1:8080/api/health
+```
+
+If health returns `"status":"ok"`, the backend is running. This does **not** prove database connectivity. Test each source in **Cilësimet → Burimet e të dhënave**. If only the public website fails, check the website/HTTPS subsection below.
+
+### A Python package will not install or import
+
+```bash
+# Confirm x86_64 and Python 3.12.
+uname -m
+.venv/bin/python --version
+# Install native runtime libraries, then retry the pinned dependencies using driver wheels.
+sudo apt-get update
+sudo apt-get install -y libgomp1 libstdc++6 libssl3t64
+.venv/bin/python -m pip install --upgrade pip==26.2
+.venv/bin/python -m pip install --only-binary=pymssql,hdbcli -r backend/requirements.txt
+# Confirm both drivers load as the service user.
+sudo -u duka .venv/bin/python -c "import pymssql; from hdbcli import dbapi; print('Both database drivers loaded')"
+```
+
+`No matching distribution` usually means an incompatible Python/CPU/platform, an unavailable pinned release, or a package-index problem. Use the guide's Ubuntu/Python combination and inspect the named package before changing versions. `libgomp.so.1`, `libstdc++.so.6`, or `libssl.so.3` errors point to the runtime libraries above. Do not copy the laptop's virtual environment; install a new one on the VPS.
+
+If reports fail with a **Landlock/seccomp** error, the host kernel or hosting restrictions must be fixed. Use a VM with Ubuntu's standard supported kernel and the required features enabled; do not disable the app's sandbox. An ARM VPS is incompatible with the current sandbox even if a driver installs.
+
+### Database connection times out or hostname is unknown
+
+Replace the host and port below with the exact source endpoint. SQL Server commonly uses `1433`; confirm HANA's actual tenant SQL port with its administrator.
+
+```bash
+# Test DNS and TCP access without database credentials.
+sudo -u duka .venv/bin/python - <<'PY'
+import socket
+host = "YOUR_DATABASE_HOST"
+port = 1433
+with socket.create_connection((host, port), timeout=5):
+    print("TCP connection succeeded")
+PY
+```
+
+- **Unknown hostname:** the VPS needs the company's DNS resolver or a hostname resolvable from its network. The laptop's VPN DNS does not transfer to the VPS. Configure DNS on this server through its network manager or company VPN configuration.
+- **Timeout/no route:** ask the network administrator to verify the VPS-to-database route and permitted source IP. Being a VPS does not itself provide company-network access.
+- **Connection refused:** confirm the server's SQL listener and port.
+- **TCP succeeds:** routing is working; check TLS, login, and database permissions next. TCP alone does not authenticate to the database.
+
+### Database TLS / CA certificate errors
+
+Refresh the VPS's public trust store and verify its clock:
+
+```bash
+sudo apt-get install --reinstall -y ca-certificates
+sudo update-ca-certificates
+timedatectl status
+```
+
+For **HANA**, keep `HANA_ENCRYPT=true` and `HANA_VALIDATE_CERTIFICATE=true` in the source's profile:
+
+- **Unknown issuer/private CA:** obtain the root/intermediate CA certificates from the database administrator. Add them in **Konfiguro lidhjen → Certifikata CA e besuar** (`HANA_TLS_CA_CERTIFICATE`). The app builds its private trust bundle under `/var/lib/duka-agent/tls`.
+- **Hostname mismatch:** use the database's correct DNS name, or set that source's `HANA_TLS_SERVER_NAME` to the verified name on its certificate.
+- **Expired certificate:** renew the server certificate; adding a CA will not fix expiry.
+
+For **SQL Server**, production uses `deploy/freetds.conf` through the unit's `FREETDSCONF` variable. It requires encryption, system CA trust and hostname verification. Keep `SQLSERVER_ENCRYPTION=require`. For a private company CA, obtain the verified CA certificate from the DBA, install it as `/usr/local/share/ca-certificates/duka-company.crt` and run `sudo update-ca-certificates`. Use the database DNS name matching its certificate. HANA certificate settings do not apply to SQL Server. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
+
+The native service reads `/var/lib/duka-agent/runtime.env`, not the checkout's `.env`. After changes, restart it with `sudo systemctl restart duka-agent`. If preflight rejects startup, verify exact HTTPS origins, `SECURE_COOKIES=true`, the supplied FreeTDS file, data directory mode `700`, and environment ownership `duka:duka` with mode `600`. A fresh workspace's setup code is available only through `sudo cat /var/lib/duka-agent/workspace-setup.token`; existing workspaces do not need it.
+
+### Connection settings, logins, or member access fail
+
+The native service reads `/var/lib/duka-agent/runtime.env`, not the laptop's environment or the checkout’s `.env`. Retain existing named profiles and `DUKA_CONNECTION_<ID>_` prefixes; edit the matching source in Settings. Restore the complete workspace data when migrating so saved connections and grants still match.
+
+```bash
+# Check that the service can read/update its configuration and write its data.
+sudo -u duka test -r /var/lib/duka-agent/runtime.env
+sudo -u duka test -w /var/lib/duka-agent/runtime.env
+sudo -u duka test -w /var/lib/duka-agent
+```
+
+These checks return silently on success. If one fails, repeat the relevant ownership/permission commands in the main guide. The service cannot use files kept under your home directory because `ProtectHome=true`.
+
+| Error                                                        | Fix                                                                                                                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL Server `18456` / login failed                          | Check the source login/password and server authentication settings.                                                                            |
+| SQL Server `4060` / cannot open database                   | Check the database name and that login's access. For HANA, the tenant database is different from a company schema.                             |
+| Permission denied / SQL Server `229`                       | Ask the DBA to grant the reporting login SELECT on the required tables/views.                                                                  |
+| Source works for Devs but Manager sees “Qasja nuk lejohet” | Check that member's exact source, database, and company selections. Preserve existing grants; do not grant every database to bypass the error. |
+
+After manual `runtime.env` changes or dependency fixes, restart and retest the affected source:
+
+```bash
+sudo systemctl restart duka-agent
+sudo systemctl status duka-agent --no-pager
+```
+
+### Website shows 502 or HTTPS setup fails
+
+```bash
+# Check the proxy configuration and its recent errors.
+sudo nginx -t
+sudo journalctl -u nginx -n 40 --no-pager
+```
+
+For **502**, first make the loopback backend health check succeed. Nginx must forward `/api/` to `127.0.0.1:8080` and serve frontend files from the built `frontend/dist` directory.
+
+For certificate/chain errors, rerun the provided-certificate installer in step 6 after correcting the files. It verifies the real domain and rolls back a failed activation. Do not run a public certificate-issuance tool for this internal domain. Confirm clients trust the verified root and internal DNS resolves correctly. A default Nginx welcome page or the wrong certificate usually means DNS points to another server, the site was not enabled, or another Nginx site has the same hostname.
+
+For file-permission errors, the `duka` account must be able to traverse the code/virtual-environment directories and read the executable, while Nginx must read `frontend/dist`. Keep private business data mode `700` and runtime.env owned by `duka:duka`, mode `600`. Do not expose `/var/lib/duka-agent` through Nginx or move code into an SSH user's home; the service has `ProtectHome=true`.
+
+## 13. Final verification and file responsibilities
+
+Before handing the site to users, confirm:
+
+1. `systemctl is-enabled duka-agent` and `systemctl is-enabled nginx` report enabled.
+2. `systemctl status duka-agent --no-pager` is healthy and the loopback health check succeeds.
+3. The laptop opens `https://hana.dukagroup.local` without certificate warnings.
+4. Sign-in, a new chat with a sourced current-information lookup, and a report download work.
+5. Each configured database passes its own connection test; Managers see only assigned databases/companies.
+6. You have a verified encrypted backup and its separately protected key.
+
+| Retained deployment file | Responsibility |
+| --- | --- |
+| `deploy/hana-native.env.example` | Fresh-server production settings for this domain |
+| `deploy/duka-agent.service` | Backend process, loopback listener and service restrictions |
+| `deploy/install-service.sh` | Validate/install/start the backend systemd service |
+| `deploy/prepare-env.sh`, `deploy/prepare_env.py` | Preserve or prepare private configuration |
+| `deploy/preflight.py` | Check origins, file permissions and database TLS policy |
+| `deploy/setup-provided-https.sh` | Activate your supplied certificates and Nginx site with rollback |
+| `deploy/provided_tls.py` | Parse `.p7b`, verify certificate/key/chain/domain and stage the bundle |
+| `deploy/nginx-https.conf` | Native frontend and API proxy template; the installer fills its tokens |
+| `deploy/freetds.conf` | SQL Server TLS trust and hostname policy |
+| `deploy/backup.sh`, `deploy/backup.py` | Encrypted, verified workspace backup and recovery |
+| `deploy/check_database_permissions.py` | Read-only reporting-account privilege inventory |
+| `deploy/check-tracked-secrets.py` | Prevent private configuration/credentials entering Git |
+
+The deployment files are executable configuration/helpers used by this guide, not alternate deployment methods. Security reviews in `docs/` are historical audit records; they are not current deployment instructions.
+
+References: [Nginx HTTPS and chains](https://nginx.org/en/docs/http/configuring_https_servers.html), [OpenSSL PKCS#7](https://docs.openssl.org/3.5/man1/openssl-pkcs7/), [OpenSSL verification](https://docs.openssl.org/3.5/man1/openssl-verify/), [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm), [.local DNS behavior](https://www.rfc-editor.org/rfc/rfc6762.html).

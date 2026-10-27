@@ -145,11 +145,7 @@ def stage(bundle, output, domain, template):
             os.open(output / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb"
         ) as target:
             target.write(content)
-    config = template.read_text().replace("reports.example.com", domain)
-    config = config.replace(f"/etc/letsencrypt/live/{domain}/fullchain.pem", str(output / "fullchain.pem"))
-    config = config.replace(f"/etc/letsencrypt/live/{domain}/privkey.pem", str(output / "privkey.pem"))
-    # Provided certificates have no ACME webroot or renewal hook.
-    config = "\n".join(line for line in config.splitlines() if "/.well-known/acme-challenge/" not in line) + "\n"
+    config = template.read_text().replace("__DUKA_DOMAIN__", domain).replace("__DUKA_TLS_DIR__", str(output))
     (output / "site.conf").write_text(config)
     (output / "site.conf").chmod(0o600)
 

@@ -6,7 +6,7 @@
 - The local pre-commit hook checks the Git index for private artifacts and recognizable credential patterns. On another developer clone, enable it with `git config core.hooksPath .githooks`; run `python3 deploy/check-tracked-secrets.py` manually too. Pattern matching cannot detect every possible secret.
 - Public configurations require HTTPS origins and secure cookies. Public HTTP app requests and unexpected hosts are rejected. Fresh production workspaces use a private, single-use first-account token; existing workspaces retain their accounts.
 - Native deployment uses `/var/lib/duka-agent/runtime.env`, verified SQL Server/HANA TLS and an HTTPS-only Nginx proxy. Database-account permissions remain separate from app member grants.
-- [Encrypted recovery](backup-and-restore.md) verifies authentication, hashes, SQLite integrity and foreign keys before publishing recovered data. Restore refuses to overwrite a nonempty directory.
+- [Encrypted recovery](../DEPLOYMENT.md#11-create-and-verify-encrypted-backups) verifies authentication, hashes, SQLite integrity and foreign keys before publishing recovered data. Restore refuses to overwrite a nonempty directory.
 
 ## Git history and credential rotation
 
@@ -26,6 +26,6 @@ sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka
 
 `requires_dba` flags admin/write/execute permissions; `unverified` means the boundary could not be established. Errors never count as success. The inventory checks visible databases and effective permissions, including SQL Server object permissions. It cannot decide which business objects should be approved and never grants or revokes anything. Normal app startup must finish legacy credential migration first. References: [SQL Server permissions](https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-my-permissions-transact-sql), [HANA privileges](https://help.sap.com/docs/PRODUCT_ID/4fe29514fd584807ac9f2a04f6754767/20a2f3ea75191014a4c1d9b0859b9917.html).
 
-The native unit uses `deploy/freetds.conf`, requiring SQL Server encryption, system CA trust and hostname checks. HANA requires encryption and certificate validation in production. For private CAs or hostname mismatches, fix trust/DNS/certificates through [troubleshooting](deploy-troubleshooting.md); do not disable verification. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
+The native unit uses `deploy/freetds.conf`, requiring SQL Server encryption, system CA trust and hostname checks. HANA requires encryption and certificate validation in production. For private CAs or hostname mismatches, fix trust/DNS/certificates through [deployment troubleshooting](../DEPLOYMENT.md#12-troubleshoot-in-this-order); do not disable verification. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
 
 The VPS, actual certificate chains and live database privileges were not accessed during local testing. Keep OS packages patched, restrict administration, store backups separately with a separately protected key, and periodically verify recovery. No firewall rules, subscriptions or automated schedules were changed.

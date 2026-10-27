@@ -227,8 +227,9 @@ def test_native_nginx_https_configuration_parses(tmp_path):
                     '-subj','/CN=reports.example.test','-keyout',str(key),'-out',str(certificate)],
                    check=True, capture_output=True)
     site = (ROOT / 'deploy/nginx-https.conf').read_text()
-    site = site.replace('/etc/letsencrypt/live/reports.example.com/fullchain.pem',str(certificate))
-    site = site.replace('/etc/letsencrypt/live/reports.example.com/privkey.pem',str(key))
+    site = site.replace('__DUKA_DOMAIN__', 'reports.example.test')
+    site = site.replace('__DUKA_TLS_DIR__/fullchain.pem',str(certificate))
+    site = site.replace('__DUKA_TLS_DIR__/privkey.pem',str(key))
     (tmp_path / 'site.conf').write_text(site)
     config = tmp_path / 'nginx.conf'
     config.write_text(f'pid {tmp_path}/nginx.pid; error_log stderr; events {{}} http {{ access_log off; '

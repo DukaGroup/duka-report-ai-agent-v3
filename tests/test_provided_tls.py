@@ -344,12 +344,3 @@ exit 1
         assert old.read_text() == "old working configuration" and enabled.is_symlink()
         assert enabled.resolve() == old
         assert not list(certs.glob("release.*"))
-
-
-def test_certbot_installer_refuses_internal_domain_before_changing_system(tmp_path):
-    script = tmp_path / "setup-nginx.sh"
-    script.write_text((ROOT / "deploy/setup-nginx.sh").read_text())
-    (tmp_path / "nginx.conf").write_text(f"server_name {DOMAIN};\n")
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True)
-    assert result.returncode == 1
-    assert "setup-provided-https.sh" in result.stderr
