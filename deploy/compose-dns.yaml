@@ -1,7 +1,7 @@
 # Optional, deliberate private/VPN DNS override:
-# docker compose -f compose.yaml -f deploy/compose-dns.yaml up -d --force-recreate app
+# docker compose -f compose.yaml -f deploy/compose-dns.yaml up -d --force-recreate backend
 services:
-  app:
+  backend:
     dns:
       - ${DOCKER_DNS_PRIMARY:?Set DOCKER_DNS_PRIMARY to a reachable resolver}
       - ${DOCKER_DNS_SECONDARY:?Set DOCKER_DNS_SECONDARY to a reachable resolver}

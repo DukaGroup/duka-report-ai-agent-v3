@@ -1,10 +1,24 @@
 # VPS deployment without Docker
 
+For **hana.dukagroup.local with an existing certificate, private key and `.p7b` chain**, use the [Hana internal deployment guide](deploy-hana-internal.md). It runs the frontend and backend without Docker and uses company-issued certificates instead of Certbot.
+
 Use **Ubuntu 24.04, x86-64**, with its standard kernel (report isolation needs Landlock ABI 3+ and seccomp). Run commands over SSH with `sudo` available.
 
 If a step fails, use [VPS troubleshooting](deploy-troubleshooting.md) for database routing/VPN, certificates, native drivers, and service errors.
 
-Application files live under `/var/www/duka-agent`; persistent data lives under `/var/lib/duka-agent`. The setup scripts install the supplied service and Nginx files into their standard `/etc` locations.
+Application files live under `/var/www/duka-agent`; persistent data lives under `/var/lib/duka-agent`. The setup scripts install the supplied service and Nginx files into their standard `/etc` locations. For container deployment, use the separate [Docker guide](deploy-with-docker.md).
+
+## Frontend and backend responsibilities
+
+| Component | Location and process |
+| --- | --- |
+| Frontend source/build | `frontend/` → `frontend/dist/`; served directly by Nginx |
+| Backend source/runtime | `backend/`; `duka-agent.service` runs the Python API on `127.0.0.1:8080` |
+| Browser routing | Nginx serves the site and forwards only `/api/` to the backend |
+| Persistent data | `/var/lib/duka-agent/`; owned by the backend service user |
+| Private configuration | `/var/lib/duka-agent/runtime.env`; never served by Nginx |
+
+Both components use one HTTPS origin, preserving existing login cookies and relative API URLs. Native Nginx configuration lives in `deploy/nginx-https.conf`; the backend service is configured independently in `deploy/duka-agent.service`.
 
 ## 1. Install dependencies
 
@@ -77,6 +91,8 @@ sudo bash deploy/install-service.sh
 
 ## 5. Enable Nginx and HTTPS
 
+The following Certbot flow is for public DNS domains only. For internal `.local` domains or supplied company certificates, use `deploy/setup-provided-https.sh` as documented in the [internal guide](deploy-hana-internal.md).
+
 This obtains the HTTPS certificate, installs the HTTPS proxy and renewal hook, and checks health. Follow Certbot's prompts. HTTP never proxies authenticated app traffic.
 
 ```bash
@@ -111,3 +127,9 @@ sudo test -e /var/lib/duka-agent/runtime.env || sudo install -o duka -g duka -m 
 ```
 
 After updating the code, rerun steps 4 and 5. Keep Ubuntu security updates current.
+
+## Update one component
+
+For a frontend-only change, run `npm --prefix frontend ci` and `npm --prefix frontend run build`. Nginx serves the new static files immediately; the backend and data volume do not need to restart. HTML and service-worker caching rules permit clients to pick up the new build. When changing Nginx configuration itself, rerun `deploy/setup-nginx.sh`.
+
+For backend changes, install `backend/requirements.txt` when dependencies change and restart `duka-agent` after active chats/reports finish. Existing users, grants, conversations and reports remain under `/var/lib/duka-agent`. The backend deliberately has no frontend directory in production; use the public Nginx address to open the site.

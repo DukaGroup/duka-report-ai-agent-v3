@@ -1,5 +1,5 @@
 [Unit]
-Description=Duka Report Agent
+Description=Duka Report Agent backend API
 Wants=network-online.target
 After=network-online.target
 
@@ -9,7 +9,7 @@ Group=duka
 WorkingDirectory=/var/www/duka-agent/app
 Environment=PATH=/var/www/duka-agent/app/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=DATA_DIR=/var/lib/duka-agent
-Environment=FRONTEND_DIR=/var/www/duka-agent/app/frontend/dist
+Environment=FRONTEND_DIR=/var/empty/duka-agent-frontend
 Environment=REPORT_QUERY_DIR=/var/www/duka-agent/app/backend/queries
 Environment=ENV_FILE=/var/lib/duka-agent/runtime.env
 Environment=APP_ENV=production

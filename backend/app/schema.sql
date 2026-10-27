@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS subscription_accounts (
 CREATE TABLE IF NOT EXISTS subscription_thread_accounts (
     thread_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES subscription_accounts(id)
 );
+CREATE TABLE IF NOT EXISTS model_thread_capabilities (
+    thread_id TEXT PRIMARY KEY REFERENCES subscription_thread_accounts(thread_id) ON DELETE CASCADE,
+    version TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS model_checkpoints (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
     kind TEXT NOT NULL, scope_id TEXT NOT NULL, access_revision INTEGER NOT NULL,

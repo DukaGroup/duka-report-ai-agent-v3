@@ -11,6 +11,11 @@ if [[ ! "$duka_domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2
     echo "Use a valid DNS domain in deploy/nginx.conf." >&2
     exit 1
 fi
+case "${duka_domain,,}" in
+    *.local|*.localhost|*.internal|*.test)
+        echo 'For internal domains use deploy/setup-provided-https.sh with your company certificate, key, chain and trusted root. See docs/deploy-hana-internal.md.' >&2
+        exit 1 ;;
+esac
 sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka-agent \
     /var/www/duka-agent/app/.venv/bin/python "$duka_deploy_dir/preflight.py" --domain "$duka_domain"
 install -d -m 755 /var/lib/letsencrypt

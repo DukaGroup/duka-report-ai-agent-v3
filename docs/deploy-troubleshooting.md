@@ -4,11 +4,11 @@ Use this only if a step in [the deployment guide](deploy-without-docker.md) fail
 
 ## What changes from the laptop?
 
-| Item | VPS requirement |
-|---|---|
-| Company VPN | Unnecessary **only if the VPS already has network access to the database servers**. A private address such as `192.168.7.10` is not reachable over the public internet. Otherwise, a company-provided private route or VPN is still needed. |
+| Item                     | VPS requirement                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Company VPN              | Unnecessary **only if the VPS already has network access to the database servers**. A private address such as `192.168.7.10` is not reachable over the public internet. Otherwise, a company-provided private route or VPN is still needed.                                                                                                       |
 | Database CA certificates | No custom CA is needed when the database certificate is already trusted by the VPS. A private/company CA still needs configuring, even if the laptop already trusts it. Trusting the business data does not configure certificate trust. Keep the standard `ca-certificates` package installed; the app also needs HTTPS access to the model providers. |
-| Native packages | Docker is not required. Use Ubuntu 24.04 **x86-64**, Python 3.12, and the repository's pinned dependencies. The report sandbox also requires Landlock ABI 3+ and seccomp. |
+| Native packages          | Docker is not required. Use Ubuntu 24.04 **x86-64**, Python 3.12, and the repository's pinned dependencies. The report sandbox also requires Landlock ABI 3+ and seccomp.                                                                                                                                                                           |
 
 The app uses [`pymssql`](https://pypi.org/project/pymssql/2.4.4/) for SQL Server and [`hdbcli`](https://pypi.org/project/hdbcli/2.30.27/) for HANA. Both publish native Linux packages. The official pymssql wheels bundle FreeTDS and SSL support; Microsoft ODBC drivers are not used by this app.
 
@@ -95,11 +95,11 @@ sudo -u duka test -w /var/lib/duka-agent
 
 These checks return silently on success. If one fails, repeat the relevant ownership/permission commands in the main guide. The service cannot use files kept under your home directory because `ProtectHome=true`.
 
-| Error | Fix |
-|---|---|
-| SQL Server `18456` / login failed | Check the source login/password and server authentication settings. |
-| SQL Server `4060` / cannot open database | Check the database name and that login's access. For HANA, the tenant database is different from a company schema. |
-| Permission denied / SQL Server `229` | Ask the DBA to grant the reporting login SELECT on the required tables/views. |
+| Error                                                        | Fix                                                                                                                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL Server `18456` / login failed                          | Check the source login/password and server authentication settings.                                                                            |
+| SQL Server `4060` / cannot open database                   | Check the database name and that login's access. For HANA, the tenant database is different from a company schema.                             |
+| Permission denied / SQL Server `229`                       | Ask the DBA to grant the reporting login SELECT on the required tables/views.                                                                  |
 | Source works for Devs but Manager sees “Qasja nuk lejohet” | Check that member's exact source, database, and company selections. Preserve existing grants; do not grant every database to bypass the error. |
 
 After manual `.env` changes or dependency fixes, restart and retest the affected source:

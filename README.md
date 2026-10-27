@@ -4,7 +4,13 @@ A custom conversation/reporting workspace with a **Python backend**, **React fro
 
 Conversations and reports use either **ChatGPT through the official Codex CLI** or **Claude through the official Claude Agent SDK**, signed in with shared workspace subscriptions managed by Devs. Python talks to `codex app-server` over local stdio or the pinned Claude SDK's bundled CLI. There is no API-key configuration or API billing fallback. Each provider manages its own authentication and renewal; the corresponding subscription limits apply. Neither connection imports existing ChatGPT/Claude chats or memories.
 
-## VPS deployment
+## Deployment
+
+[Deploy Hana at hana.dukagroup.local](docs/deploy-hana-internal.md) — step-by-step native frontend/backend installation over SSH, using your certificate, private key and `.p7b` chain; no Docker required.
+
+[Deployment layout](deploy/README.md) — frontend, backend and storage responsibilities.
+
+[Deploy with Docker](docs/deploy-with-docker.md) — independent frontend/backend images, one browser address, and the existing persistent data volume.
 
 [Deploy without Docker](docs/deploy-without-docker.md) — installation under `/var`, with separate service/Nginx configuration files and setup scripts.
 
@@ -12,7 +18,7 @@ Conversations and reports use either **ChatGPT through the official Codex CLI** 
 
 ## Start
 
-Follow the deployment guide above, then open your configured HTTPS address.
+Choose the Docker or native deployment guide above, then open your configured address.
 
 1. Create the first workspace administrator with your own password.
 2. Open **Cilësimet → Modeli**. Connect ChatGPT, Claude, or both; each has its own connection card.
@@ -20,9 +26,11 @@ Follow the deployment guide above, then open your configured HTTPS address.
 4. For Claude, open **Lidh Claude**, sign in on the official Claude page with a subscription, then paste its single-use code into the app's login dialog. The official CLI completes the login; authorization codes and credentials are excluded from traffic logs and model context.
 5. Choose **Përdor ChatGPT** or **Përdor Claude**, select an available model, and send a message. Both subscriptions can stay connected; the selected provider is saved for the workspace and applies to new chats/reports for all members. Existing messages and saved reports are retained when switching.
 
-For ChatGPT, an eligible subscription with Codex access is required. Enable **device code login** in ChatGPT security settings if necessary; workspace admins may need to permit it. Claude requires an eligible Claude subscription with Claude Code access. [Anthropic's subscription guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) describes SDK and subscription usage. Enter account passwords only on the provider's sign-in page. Workspace login and provider connections are separate: Devs connect ChatGPT and/or Claude once, and every member uses those shared connections and subscription limits. Only Devs may sign in, disconnect, select the workspace provider or inspect subscription account/usage details. Existing original Devs credential directories are adopted in place and recorded in `workspace_subscriptions`; other saved credentials are retained. Independent chat/report processes keep the acting member ID and separate workspaces; sharing provider authentication never shares local conversations, reports or database/company grants. Disconnecting or reconnecting one provider clears that provider's native conversation bindings across the workspace; the other connection remains signed in. Every local chat retains a separate native session per provider and reuses it on reopening. On provider changes the local chat context is replayed so the new provider has the conversation's messages.
+For ChatGPT, an eligible subscription with Codex access is required. Enable **device code login** in ChatGPT security settings if necessary; workspace admins may need to permit it. Claude requires an eligible Claude subscription with Claude Code access. [Anthropic&#39;s subscription guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) describes SDK and subscription usage. Enter account passwords only on the provider's sign-in page. Workspace login and provider connections are separate: Devs connect ChatGPT and/or Claude once, and every member uses those shared connections and subscription limits. Only Devs may sign in, disconnect, select the workspace provider or inspect subscription account/usage details. Existing original Devs credential directories are adopted in place and recorded in `workspace_subscriptions`; other saved credentials are retained. Independent chat/report processes keep the acting member ID and separate workspaces; sharing provider authentication never shares local conversations, reports or database/company grants. Disconnecting or reconnecting one provider clears that provider's native conversation bindings across the workspace; the other connection remains signed in. Every local chat retains a separate native session per provider and reuses it on reopening. On provider changes the local chat context is replayed so the new provider has the conversation's messages.
 
-Claude uses SDK-discovered models, JSON-schema report outputs and the same authorized reporting/attachment tools, complete snapshots, export rules, workbook sandbox and validation as ChatGPT. Built-in shell, file, browser and agent tools are disabled. Its processes use a filtered environment, restricted mode, disabled hooks and only explicitly supplied reporting MCP tools; project/user settings are not loaded. Do not add `--bare`: it disables subscription OAuth. The official SDK and bundled CLI are pinned together; `CLAUDE_BINARY` optionally overrides the bundled executable for development. Claude usage percentages are not fabricated; the UI links to the provider's usage page.
+Claude uses SDK-discovered models, JSON-schema report outputs and the same authorized reporting/attachment tools, complete snapshots, export rules, workbook sandbox and validation as ChatGPT. Public web search and page reading are enabled; shell, file, browser-control and agent tools are disabled. Its processes use a filtered environment, restricted mode, an explicit public-address web hook and only explicitly supplied reporting MCP tools; project/user settings are not loaded. Do not add `--bare`: it disables subscription OAuth. The official SDK and bundled CLI are pinned together; `CLAUDE_BINARY` optionally overrides the bundled executable for development. Claude usage percentages are not fabricated; the UI links to the provider's usage page.
+
+Native model sessions carry a capability revision. On the next message in an older chat, the backend refreshes an outdated native tool/instruction snapshot once and rebuilds context from that member's saved history and permission-checked evidence. The local chat, original answers, uploads, reports and grants are retained. Later messages reuse the updated session. Web research shows **Po kërkoj në internet…** or **Po lexoj faqen…** in the chat progress indicator. Earlier stored replies saying internet access was unavailable remain historical replies; use Retry or send a new message for a fresh lookup.
 
 ## Chat controls and roles
 
@@ -116,32 +124,32 @@ Chat turns send the original request without an extra report-style message. Resp
 
 Copy `.env.example` to `.env` only when overriding defaults. The project-root `.env` is mounted writable at `/run/duka.env` for the backend only. Before starting Docker on Linux, run `bash scripts/allow-env-write.sh` to grant container UID 10001 access while excluding other local users. Admin-saved SQL Server and SAP HANA connections each use a stable `DUKA_CONNECTION_<ID>_` prefix; unrelated settings are preserved. Legacy encrypted connection rows are migrated to this file on startup, and SQLite retains only a storage marker. Environment-backed connections retain their existing profile; generic environment values never override independently saved connections. Password characters such as `$` are preserved literally. Outside Docker, `Settings` reads the project-root file (or the path configured by `ENV_FILE`). Backend connection resolution refreshes changed settings; after replacing `.env` with an editor, rerun the permission script and `docker compose up -d --force-recreate` so editor file replacement and other container variables are refreshed. There is no API-key setting.
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `8080` | Host port; also update `ALLOWED_ORIGINS` if changed |
-| `ALLOWED_ORIGINS` | localhost/127.0.0.1 on 8080 | Exact allowed browser origins |
-| `SECURE_COOKIES` | `false` | Use `true` behind HTTPS |
-| `SESSION_HOURS` | `24` | App session lifetime |
-| `VOICE_ENABLED` | `true` | Enable local transcription |
-| `WHISPER_MODEL` | `base` | Local speech model |
-| `WHISPER_LANGUAGE` | empty | Auto-detect, or ISO code such as `en`/`sq` |
-| `MAX_CODEX_RUNTIMES` | `8` | Maximum live subscription-control runtimes |
-| `TURN_TIMEOUT_SECONDS` | `0` | Model response wall-clock limit; `0` runs until completion or Stop |
-| `DOCKER_DNS_PRIMARY` | host DNS by default | Optional resolver, used only with `deploy/compose-dns.yaml` |
-| `DOCKER_DNS_SECONDARY` | host DNS by default | Optional second resolver, used only with the DNS override |
-| `SQLSERVER_HOST` | empty | SQL Server hostname; backend only |
-| `SQLSERVER_PORT` | `1433` | SQL Server TCP port |
-| `SQLSERVER_USER` | empty | Dedicated SELECT-only login |
-| `SQLSERVER_PASSWORD` | empty | Database password; backend only |
-| `SQLSERVER_DATABASE` | empty | Optional default database; blank discovers accessible business databases |
-| `SQLSERVER_ENCRYPTION` | `require` | Require encrypted database transport |
-| `SQLSERVER_TIMEOUT_SECONDS` | `15` | Login and query timeout |
+| Setting                       | Default                     | Purpose                                                                  |
+| ----------------------------- | --------------------------- | ------------------------------------------------------------------------ |
+| `PORT`                      | `8080`                    | Host port; also update `ALLOWED_ORIGINS` if changed                    |
+| `ALLOWED_ORIGINS`           | localhost/127.0.0.1 on 8080 | Exact allowed browser origins                                            |
+| `SECURE_COOKIES`            | `false`                   | Use `true` behind HTTPS                                                |
+| `SESSION_HOURS`             | `24`                      | App session lifetime                                                     |
+| `VOICE_ENABLED`             | `true`                    | Enable local transcription                                               |
+| `WHISPER_MODEL`             | `base`                    | Local speech model                                                       |
+| `WHISPER_LANGUAGE`          | empty                       | Auto-detect, or ISO code such as `en`/`sq`                           |
+| `MAX_CODEX_RUNTIMES`        | `8`                       | Maximum live subscription-control runtimes                               |
+| `TURN_TIMEOUT_SECONDS`      | `0`                       | Model response wall-clock limit; `0` runs until completion or Stop     |
+| `DOCKER_DNS_PRIMARY`        | host DNS by default         | Optional resolver, used only with `deploy/compose-dns.yaml`            |
+| `DOCKER_DNS_SECONDARY`      | host DNS by default         | Optional second resolver, used only with the DNS override                |
+| `SQLSERVER_HOST`            | empty                       | SQL Server hostname; backend only                                        |
+| `SQLSERVER_PORT`            | `1433`                    | SQL Server TCP port                                                      |
+| `SQLSERVER_USER`            | empty                       | Dedicated SELECT-only login                                              |
+| `SQLSERVER_PASSWORD`        | empty                       | Database password; backend only                                          |
+| `SQLSERVER_DATABASE`        | empty                       | Optional default database; blank discovers accessible business databases |
+| `SQLSERVER_ENCRYPTION`      | `require`                 | Require encrypted database transport                                     |
+| `SQLSERVER_TIMEOUT_SECONDS` | `15`                      | Login and query timeout                                                  |
 
 On the native VPS, SQLite, keys, uploads, reports, shared subscription credentials/native history, caches and private `runtime.env` live under `/var/lib/duka-agent`. Real `.env` files and generated financial artifacts must not be committed to Git. The native installer migrates an existing project `.env` without replacing existing private settings. See [deployment](docs/deploy-without-docker.md), [encrypted backup and recovery](docs/backup-and-restore.md), and [security follow-up](docs/security-maintenance.md).
 
 The app uses Docker's `unless-stopped` restart policy and inherits Docker/host DNS by default. This avoids pinning an office/VPN resolver that is unreachable on another network. If private database names require explicit resolvers, set both `DOCKER_DNS_*` values and deliberately start with `docker compose -f compose.yaml -f deploy/compose-dns.yaml up -d`; use reachable resolvers and repeat the same file arguments for subsequent Compose operations. Without that override the two variables are unused. On Linux, Docker itself must start at boot (`systemctl is-enabled docker`). Saved ChatGPT credentials are reused after startup. If the browser opens while the backend or account-routing service is temporarily unavailable, it checks again every five seconds and on network-online/page-visible events; requests do not overlap. Recovery stops once the connection service is available. This does not automatically initiate new logins or override expired credentials. If you deliberately stop the container, start it with `docker compose up -d`.
 
-The container runs non-root with a read-only filesystem, dropped capabilities, a writable data volume, and a single writable project `.env` bind mount. The host port binds to loopback. Keep the prototype local; remote access needs an authenticated HTTPS deployment, secure cookies, exact origins, and appropriate subscription eligibility/deployment review.
+The frontend and backend run in separate non-root containers with read-only filesystems and dropped capabilities. Only the backend mounts persistent data and the private `.env`; only the frontend publishes a loopback host port. The frontend serves static files and forwards `/api/` to the private backend on the dedicated Compose network. See the [deployment layout](deploy/README.md) and [Docker deployment guide](docs/deploy-with-docker.md). Keep the prototype local; remote access needs an authenticated HTTPS deployment, secure cookies, exact origins, and appropriate subscription eligibility/deployment review.
 
 ## Development and tests
 
@@ -174,13 +182,13 @@ For native Codex protocol regression checks, set `NATIVE_CODEX_BINARY` to the in
 ## Troubleshooting
 
 - **Device sign-in fails:** Enable device code login in ChatGPT security/workspace settings, check outbound OpenAI access, and start a fresh code.
-- **Device-code request and workspace routing both fail after a restart:** check `docker compose exec app python -c "import socket; print(socket.getaddrinfo('auth.openai.com', 443)); print(socket.getaddrinfo('chatgpt.com', 443))"`. Default Compose inherits host DNS. If using `deploy/compose-dns.yaml`, check that its two resolvers are reachable on the current network; office-only resolvers can break public provider access away from the office/VPN. Recreate the container after correcting DNS configuration and after active work finishes. Proxy/firewall restrictions and expired subscription credentials require their own fixes.
+- **Device-code request and workspace routing both fail after a restart:** check `docker compose exec backend python -c "import socket; print(socket.getaddrinfo('auth.openai.com', 443)); print(socket.getaddrinfo('chatgpt.com', 443))"`. Default Compose inherits host DNS. If using `deploy/compose-dns.yaml`, check that its two resolvers are reachable on the current network; office-only resolvers can break public provider access away from the office/VPN. Recreate the container after correcting DNS configuration and after active work finishes. Proxy/firewall restrictions and expired subscription credentials require their own fixes.
 - **Usage limit reached:** Wait for the reset or manage your plan in ChatGPT. No API billing fallback is provided.
 - **Model unavailable:** Reload the account/model picker and choose a permitted model. A catalog alone is not an entitlement guarantee.
 - **Runtime capacity:** Administration → People & access → Restart an idle runtime, or increase `MAX_CODEX_RUNTIMES`. Saved credentials remain.
 - **Microphone over a LAN IP:** Use HTTPS.
 - **Voice fails:** Check model download access to Hugging Face and RAM/disk, or choose a smaller model.
-- **Startup errors:** `docker compose logs --tail=100 app`. Access logs and Codex stderr are suppressed to avoid credential/auth-URL exposure.
+- **Startup errors:** `docker compose logs --tail=100 backend`. Access logs and Codex stderr are suppressed to avoid credential/auth-URL exposure.
 
 ## References
 

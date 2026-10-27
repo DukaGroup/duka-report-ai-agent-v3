@@ -11,12 +11,15 @@ export function streamActivity(
       reasoning: "Po arsyetoj…",
       recovering: "Po rifilloj hetimin…",
       switching: "Po kaloj te abonimi tjetër…",
+      refreshing: "Po përditësoj bisedën…",
     };
     return Object.hasOwn(labels, event.activity)
       ? labels[event.activity]
       : undefined;
   }
   if (event.type === "tool") {
+    if (event.name === "WebSearch") return "Po kërkoj në internet…";
+    if (event.name === "WebFetch") return "Po lexoj faqen…";
     if (event.name === "calculate_data") return "Po llogaris…";
     if (event.name?.startsWith("create_")) return "Po përgatis raportin…";
     return "Po kontrolloj të dhënat…";

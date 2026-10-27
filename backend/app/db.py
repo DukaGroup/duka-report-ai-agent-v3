@@ -63,6 +63,7 @@ class Database:
         with self.connect() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript((Path(__file__).parent / "schema.sql").read_text())
+            c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(15,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(14,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(13,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(12,?)', (now(),))

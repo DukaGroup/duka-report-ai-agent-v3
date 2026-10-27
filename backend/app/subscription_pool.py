@@ -10,7 +10,7 @@ import json
 import time
 
 from .db import now, uid
-from .provider import ProviderError
+from .provider import CONTEXT_CAPABILITY_VERSION, ProviderError
 
 
 def encoded(value):
@@ -203,6 +203,7 @@ class PooledRuntime:
         self.thread_aliases = set()
         self.compaction = None
         self.pending_handoff = False
+        self.context_refreshed = False
         self.context_error = None
 
     def __getattr__(self, name):
@@ -259,6 +260,7 @@ class PooledRuntime:
 
     async def thread(self, thread_id, model):
         self.requested_model = model
+        self.context_refreshed = False
         self.tried = set()
         binding = (
             self.db.one("SELECT account_id FROM subscription_thread_accounts WHERE thread_id=?", (thread_id,))
@@ -273,6 +275,14 @@ class PooledRuntime:
                 if self.account_record["id"] == preferred and not (thread_id or "").startswith("unavailable:")
                 else None
             )
+            if reusable:
+                capabilities = self.db.one("SELECT version FROM model_thread_capabilities WHERE thread_id=?", (reusable,))
+                if not capabilities or capabilities['version'] != CONTEXT_CAPABILITY_VERSION:
+                    # Old chats can retain a catalog without web tools and the
+                    # earlier no-internet instructions. Rebuild native context
+                    # through the existing owner-scoped checkpoint/replay path.
+                    reusable = None
+                    self.context_refreshed = True
             try:
                 self.native_thread = await self.native.thread(
                     reusable, model if self.provider == self.manager.model_provider(model) else None
@@ -293,6 +303,10 @@ class PooledRuntime:
         with self.db.connect() as c:
             c.execute(
                 "INSERT OR REPLACE INTO subscription_thread_accounts VALUES(?,?)", (thread, self.account_record["id"])
+            )
+            c.execute(
+                "INSERT INTO model_thread_capabilities VALUES(?,?) ON CONFLICT(thread_id) DO UPDATE SET version=excluded.version",
+                (thread, CONTEXT_CAPABILITY_VERSION),
             )
             if self.kind == "chat" and update_scope:
                 c.execute(
@@ -511,7 +525,7 @@ class PooledRuntime:
         if self.pending_handoff:
             checkpoint, data = self.checkpoint(original, "")
             self.pending_handoff = False
-            yield {"type": "snapshot", "text": "", "activity": "switching", "provider": self.provider}
+            yield {"type": "snapshot", "text": "", "activity": "refreshing" if self.context_refreshed else "switching", "provider": self.provider}
         while True:
             try:
                 await self.require_account()
@@ -554,7 +568,7 @@ class PooledRuntime:
                     "provider": self.provider,
                     "model": effective_model,
                     "reasoning_effort": effort or "",
-                    "switched": bool(checkpoint),
+                    "switched": bool(checkpoint) and not self.context_refreshed,
                 }
                 complete = None
                 async for event in self.native.stream(
@@ -602,6 +616,7 @@ class PooledRuntime:
                 # Thread/model/account initialization also belongs to the next
                 # guarded attempt: an account can expire between status and use.
                 self.native_thread = None
+                self.context_refreshed = False
                 self.db.audit(
                     self.user_id,
                     "subscription.failover",

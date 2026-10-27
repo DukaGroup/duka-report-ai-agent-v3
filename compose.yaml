@@ -1,17 +1,44 @@
 services:
-  app:
-    build: .
+  frontend:
+    image: ${DUKA_FRONTEND_IMAGE:-duka-report-agent-frontend:local}
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    init: true
+    restart: unless-stopped
+    environment:
+      HOST_PROXY_IP: ${HOST_PROXY_IP:-}
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - application
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    image: ${DUKA_BACKEND_IMAGE:-duka-report-agent-backend:local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     init: true
     restart: unless-stopped
     # Inherit Docker/host DNS as networks change. A pinned office/VPN resolver
     # can disable provider access away from that network. See deploy/compose-dns.yaml.
-    ports:
-      - "127.0.0.1:${PORT:-8080}:8080"
+    networks:
+      - application
     environment:
       DATA_DIR: /data
       APP_ENV: ${APP_ENV:-development}
       REQUIRE_SETUP_TOKEN: ${REQUIRE_SETUP_TOKEN:-false}
-      FRONTEND_DIR: /app/frontend
+      FRONTEND_DIR: /app/no-frontend
       ENV_FILE: /run/duka.env
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
@@ -37,7 +64,7 @@ services:
       - workspace-data:/data
       - ./backend/queries:/app/queries:ro
       - type: bind
-        source: ./.env
+        source: ${DUKA_ENV_FILE:-./.env}
         target: /run/duka.env
         read_only: false
         bind:
@@ -51,4 +78,9 @@ services:
       - no-new-privileges:true
     stop_grace_period: 20s
 volumes:
+  # Keep this key and Compose project name: existing installations reuse their
+  # original database/uploads/reports volume when moving from the old app service.
   workspace-data:
+networks:
+  application:
+    driver: bridge
