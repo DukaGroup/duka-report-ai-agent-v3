@@ -1,13 +1,25 @@
+import asyncio
 import hashlib
 import hmac
 import secrets
 import time
-from collections import defaultdict, deque
 
 from fastapi import HTTPException, Request, Response
 
 COOKIE = "duka_session"
 PASSWORD_SCHEME = "scrypt-v2"
+
+
+async def password_work(state, function, *args):
+    # Queue no more than two expensive KDF operations. A disconnected request
+    # retains its slot until the actual thread ends, even after cancellation.
+    slots = state.password_slots
+    if slots.locked():
+        raise HTTPException(429, "Authentication is busy. Try again shortly.", headers={"Retry-After": "1"})
+    await slots.acquire()
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    task.add_done_callback(lambda completed: slots.release())
+    return await asyncio.shield(task)
 
 
 def hash_password(password: str) -> str:
@@ -30,7 +42,7 @@ def verify_password(password, encoded):
             # password; otherwise timing could identify unmigrated accounts.
             hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=4)
         return hmac.compare_digest(key.hex(), expected)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError, UnicodeError):
         return False
 
 
@@ -42,12 +54,16 @@ def public_user(user):
     return {key: user[key] for key in ("id", "email", "name", "role", "active", "created_at")}
 
 
-def create_session(db, settings, response: Response, user_id):
+def create_session(db, settings, response: Response, user_id, expected_hash=None):
     token = secrets.token_urlsafe(32)
-    db.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
-    db.execute(
-        "INSERT INTO sessions VALUES(?,?,?)", (token_hash(token), user_id, time.time() + settings.session_hours * 3600)
-    )
+    with db.connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        user = c.execute("SELECT password_hash FROM users WHERE id=? AND active=1", (user_id,)).fetchone()
+        if not user or (expected_hash is not None and user["password_hash"] != expected_hash):
+            raise HTTPException(401, "Account credentials changed. Sign in again.")
+        c.execute("DELETE FROM sessions WHERE expires_at <= ?", (time.time(),))
+        c.execute("INSERT INTO sessions VALUES(?,?,?)",
+                  (token_hash(token), user_id, time.time() + settings.session_hours * 3600))
     response.set_cookie(
         COOKIE,
         token,
@@ -86,17 +102,65 @@ def member_administrator(request: Request):
 
 
 class LoginLimiter:
-    def __init__(self):
-        self.attempts = defaultdict(deque)
+    """Atomic, persistent budgets shared by workers, with no stored emails/IPs.
 
-    def check(self, key):
-        current = time.monotonic()
-        # Keep the unauthenticated limiter bounded even with changing remote addresses.
-        if len(self.attempts) > 10000:
-            self.attempts.clear()
-        bucket = self.attempts[key]
-        while bucket and bucket[0] < current - 300:
-            bucket.popleft()
-        if len(bucket) >= 10:
-            raise HTTPException(429, "Too many sign-in attempts. Try again in five minutes.")
-        bucket.append(current)
+    Count every accepted attempt, including successes. Blocked attempts do not
+    extend the five-minute window. Capacity exhaustion fails closed without
+    erasing other accounts' budgets.
+    """
+    limit = 10
+    window = 300
+    capacity = 10000
+
+    def __init__(self, db):
+        self.db = db
+
+    def check(self, *keys):
+        keys = list(dict.fromkeys(token_hash(key) for key in keys))
+        current = time.time()
+        retry = 0
+        with self.db.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("DELETE FROM auth_attempts WHERE expires_at<=?", (current,))
+            rows = {key: c.execute("SELECT attempts,expires_at FROM auth_attempts WHERE key_hash=?", (key,)).fetchone()
+                    for key in keys}
+            retry = max((max(1, int(row["expires_at"] - current) + 1)
+                         for row in rows.values() if row and row["attempts"] >= self.limit), default=0)
+            if not retry and (c.execute("SELECT count(*) FROM auth_attempts").fetchone()[0]
+                              + sum(row is None for row in rows.values()) > self.capacity):
+                retry = self.window
+            if not retry:
+                for key in keys:
+                    c.execute("INSERT INTO auth_attempts VALUES(?,?,?) ON CONFLICT(key_hash) DO UPDATE SET attempts=attempts+1",
+                              (key, 1, current + self.window))
+        if retry:
+            raise HTTPException(429, "Too many sign-in attempts. Try again in five minutes.",
+                                headers={"Retry-After": str(retry)})
+
+
+class AuthBodyLimitMiddleware:
+    """Bound auth JSON before parsing, including chunked bodies and false lengths."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "POST" or not scope["path"].startswith("/api/auth/"):
+            return await self.app(scope, receive, send)
+        messages, size = [], 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            size += len(message.get("body", b""))
+            if size > 16384 or len(messages) >= 1024:
+                from fastapi.responses import JSONResponse
+                return await JSONResponse({"detail": "Authentication request is too large."}, status_code=413)(scope, receive, send)
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+        iterator = iter(messages)
+
+        async def replay():
+            return next(iterator, None) or await receive()
+
+        await self.app(scope, replay, send)

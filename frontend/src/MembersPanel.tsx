@@ -126,17 +126,17 @@ export function MembersPanel({
                         </IconButton>
                       </>
                     )}
-                    {member.id !== actor.id &&
-                      (isDev || member.role !== "devs") && (
-                        <IconButton
-                          danger
-                          className="action-destructive"
-                          label={`Fshi anëtarin: ${member.name}`}
-                          onClick={() => onRemove(member)}
-                        >
-                          <Trash2 size={18} />
-                        </IconButton>
-                      )}
+                    {(isDev ||
+                      (member.id !== actor.id && member.role !== "devs")) && (
+                      <IconButton
+                        danger
+                        className="action-destructive"
+                        label={`Fshi anëtarin: ${member.name}`}
+                        onClick={() => onRemove(member)}
+                      >
+                        <Trash2 size={18} />
+                      </IconButton>
+                    )}
                   </div>
                 </td>
               </tr>

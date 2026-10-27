@@ -99,6 +99,8 @@ class Settings:
     def prepare(self):
         from .deployment_security import validate_web_settings
         validate_web_settings(self)
+        if not 1 <= self.session_hours <= 168:
+            raise ValueError("SESSION_HOURS must be between 1 and 168.")
         if self.turn_timeout < 0:
             raise ValueError("TURN_TIMEOUT_SECONDS must be nonnegative; 0 disables the response time limit.")
         if not 1 <= self.workbook_timeout <= 300 or not 256 <= self.workbook_memory_mb <= 4096:

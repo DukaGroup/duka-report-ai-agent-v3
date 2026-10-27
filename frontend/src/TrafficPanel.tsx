@@ -304,6 +304,7 @@ export function TrafficPanel() {
             <button
               className="icon-button"
               aria-label="Mbyll detajet"
+              data-tooltip="Mbyll detajet"
               onClick={() => {
                 detailSerial.current++;
                 setSelected(null);

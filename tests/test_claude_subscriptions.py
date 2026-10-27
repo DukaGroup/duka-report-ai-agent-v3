@@ -30,7 +30,7 @@ def claude(client, monkeypatch):
             calls.append(self)
 
         async def __aenter__(self):
-            assert self.options.tools == []
+            assert self.options.tools == ["WebSearch", "WebFetch"]
             assert self.options.permission_mode == "dontAsk"
             assert self.options.strict_mcp_config is True
             assert self.options.setting_sources == []
@@ -233,7 +233,7 @@ async def test_tools_forward_original_schemas_and_user_chat_context_without_buil
     options = runtime.options()
     assert options.env["ANTHROPIC_API_KEY"] == "" and options.env["SQLSERVER_PASSWORD"] == ""
     assert "ANTHROPIC_API_KEY" not in runtime.environment()
-    assert options.tools == [] and options.allowed_tools == []
+    assert options.tools == ["WebSearch", "WebFetch"] and options.allowed_tools == []
     assert set(t.name for t in captured).isdisjoint({"Bash", "Read", "Edit", "WebFetch", "Agent"})
 
 

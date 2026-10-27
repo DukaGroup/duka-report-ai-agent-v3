@@ -4,12 +4,14 @@ import mimetypes
 import sqlite3
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Literal
+from zipfile import BadZipFile
 
 from fastapi.exceptions import RequestValidationError
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
+from openpyxl.utils.exceptions import InvalidFileException
 
 from .config import Settings
 from .connectors import ConnectorRegistry, SourceNotConfigured
@@ -41,12 +43,14 @@ from .schemas import (
 from .security import (
     COOKIE,
     LoginLimiter,
+    AuthBodyLimitMiddleware,
     admin_user,
     member_administrator,
     create_session,
     current_user,
     hash_password,
     public_user,
+    password_work,
     token_hash,
     verify_password,
 )
@@ -56,6 +60,7 @@ from .workbooks import current_workbook, ReportDataError
 from .attachments import AttachmentStore
 from .traffic import TrafficLog, TrafficMiddleware, DIRECTIONS
 from .workbook_runner import rebuild_excel
+from .workbook_preview import PreviewSheetNotFound, workbook_preview
 from .reasoning import saved_effort, validate_effort
 from .chat_jobs import ChatJobs
 from .notifications import PushNotifications, register_notifications
@@ -88,7 +93,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.attachments = AttachmentStore(settings, app.state.db)
         app.state.manager.attachments = app.state.attachments
         app.state.voice = VoiceService(settings)
-        app.state.limiter = LoginLimiter()
+        app.state.limiter = LoginLimiter(app.state.db)
+        app.state.password_slots = asyncio.Semaphore(2)
         app.state.locks = {}
         # Short mutations serialize acceptance, replacement, uploads and deletion.
         # The separate response lock remains held throughout native inference.
@@ -122,6 +128,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         title="Duka Report Agent", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
     )
     app.add_middleware(TrafficMiddleware)
+    app.add_middleware(AuthBodyLimitMiddleware)
     register_accounts(app, settings)
     register_branches(app)
     register_subscriptions(app)
@@ -189,7 +196,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @app.post("/api/auth/setup")
     async def setup(body: SetupWorkspace, request: Request, response: Response):
         db = request.app.state.db
-        request.app.state.limiter.check(request.client.host)
+        request.app.state.limiter.check("setup:ip:" + request.client.host)
         user_id = uid()
         with db.connect() as c:
             c.execute("BEGIN IMMEDIATE")
@@ -214,18 +221,21 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @app.post("/api/auth/login")
     async def login(body: Credentials, request: Request, response: Response):
         db = request.app.state.db
-        request.app.state.limiter.check(request.client.host)
+        request.app.state.limiter.check("login:ip:" + request.client.host, "login:account:" + body.email)
         user = db.one("SELECT * FROM users WHERE email=? AND active=1", (body.email,))
         # Do the expensive password work even for unknown accounts.
         encoded = user["password_hash"] if user else dummy_password_hash
-        if not verify_password(body.password, encoded) or not user:
+        if not await password_work(app.state, verify_password, body.password, encoded) or not user:
             raise HTTPException(401, "Email or password is incorrect.")
         if encoded.startswith("scrypt$"):
             # A successful login upgrades only this verifier; passwords, grants
             # and existing sessions remain valid. Never overwrite a newer hash.
-            db.execute("UPDATE users SET password_hash=? WHERE id=? AND password_hash=? AND active=1",
-                       (hash_password(body.password), user["id"], encoded))
-        create_session(db, settings, response, user["id"])
+            upgraded = await password_work(app.state, hash_password, body.password)
+            if not db.execute("UPDATE users SET password_hash=? WHERE id=? AND password_hash=? AND active=1",
+                              (upgraded, user["id"], encoded)):
+                raise HTTPException(401, "Account credentials changed. Sign in again.")
+            encoded = upgraded
+        create_session(db, settings, response, user["id"], expected_hash=encoded)
         db.audit(user["id"], "workspace.login")
         return public_user(user)
 
@@ -1163,6 +1173,42 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         report["document"] = json.loads(report["content_json"]) if report["content_json"] else None
         return report
 
+    async def saved_workbook(request, report, user_id, scope):
+        path = request.app.state.settings.data_dir / "reports" / (report["id"] + ".xlsx")
+        if not await asyncio.to_thread(current_workbook, path):
+            snapshot = request.app.state.db.one(
+                "SELECT * FROM dataset_snapshots WHERE id=? AND user_id=?", (report["snapshot_id"], user_id)
+            )
+            # Rebuild old exports from the saved snapshot without a model request.
+            content = await rebuild_excel(request.app.state.manager, report, snapshot)
+            check_saved_report_scope(request, user_id, scope)
+            save_excel(request.app.state.manager, report, snapshot, content)
+        check_saved_report_scope(request, user_id, scope)
+        return path
+
+    @app.get("/api/reports/{identifier}/preview")
+    async def preview_report(
+        identifier: str,
+        request: Request,
+        sheet: int = Query(0, ge=0),
+        row: int = Query(1, ge=1),
+        column: int = Query(1, ge=1),
+        user=Depends(current_user),
+    ):
+        report = owned_report(request, identifier, user["id"])
+        scope = await readable_report_scope(request, report, user["id"])
+        if report["status"] != "completed":
+            raise HTTPException(409, "This report is not ready to preview.")
+        path = await saved_workbook(request, report, user["id"], scope)
+        try:
+            preview = await asyncio.to_thread(workbook_preview, path, sheet, row, column)
+        except PreviewSheetNotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except (OSError, BadZipFile, InvalidFileException, ValueError) as exc:
+            raise HTTPException(409, "Pamja paraprake nuk mund të hapet. Shkarkoni Excel-in për ta parë.") from exc
+        check_saved_report_scope(request, user["id"], scope)
+        return preview
+
     @app.get("/api/reports/{identifier}/export/{format}")
     async def export_report(identifier: str, format: str, request: Request, user=Depends(current_user)):
         report = owned_report(request, identifier, user["id"])
@@ -1173,13 +1219,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             "SELECT * FROM dataset_snapshots WHERE id=? AND user_id=?", (report["snapshot_id"], user["id"])
         )
         if format == "xlsx":
-            path = request.app.state.settings.data_dir / "reports" / (identifier + ".xlsx")
-            if not await asyncio.to_thread(current_workbook, path):
-                # Refresh presentation from the saved snapshot, without another subscription request.
-                content = await rebuild_excel(request.app.state.manager, report, snapshot)
-                check_saved_report_scope(request, user["id"], scope)
-                save_excel(request.app.state.manager, report, snapshot, content)
-            check_saved_report_scope(request, user["id"], scope)
+            path = await saved_workbook(request, report, user["id"], scope)
             return FileResponse(
                 path,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1322,9 +1362,15 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             raise HTTPException(403, 'Only Devs can create Devs accounts.')
         selections,legacy = await validated_access(user['id'],body.database_access or MemberDataAccess())
         identifier = uid()
+        encoded = await password_work(app.state, hash_password, body.password)
+        # Hashing yields to other requests; deactivation/demotion must take
+        # effect before a new member or Devs account is committed.
+        user = member_administrator(request)
+        if user['role'] != 'devs' and body.role == 'devs':
+            raise HTTPException(403, 'Only Devs can create Devs accounts.')
         try:
             with request.app.state.db.connect() as c:
-                c.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)", (identifier,body.email,body.name,hash_password(body.password),body.role,1,now()))
+                c.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?)", (identifier,body.email,body.name,encoded,body.role,1,now()))
                 DataAccess(request.app.state.db).replace(c,identifier,selections,legacy)
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "A user with that email already exists.") from exc
@@ -1332,7 +1378,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return public_user(request.app.state.db.one("SELECT * FROM users WHERE id=?", (identifier,)))
 
     @app.delete("/api/admin/users/{identifier}")
-    async def remove_user(identifier: str, request: Request, user=Depends(member_administrator)):
+    async def remove_user(identifier: str, request: Request, response: Response, background_tasks: BackgroundTasks, user=Depends(member_administrator)):
         from .accounts import revoke_work
         from .data_access import DataAccess
         db = request.app.state.db
@@ -1341,11 +1387,12 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             target = c.execute('SELECT * FROM users WHERE id=?', (identifier,)).fetchone()
             if not target:
                 raise HTTPException(404, 'User not found.')
-            if identifier == user['id']:
+            removing_self = identifier == user['id']
+            if removing_self and user['role'] != 'devs':
                 raise HTTPException(422, 'You cannot remove your own account.')
             if user['role'] != 'devs' and target['role'] == 'devs':
                 raise HTTPException(403, 'Only Devs can remove Devs accounts.')
-            if target['role'] == 'devs' and target['active']:
+            if target['role'] == 'devs' and target['active'] and not removing_self:
                 if c.execute("SELECT count(*) FROM users WHERE role='devs' AND active=1").fetchone()[0] <= 1:
                     raise HTTPException(422, 'Keep at least one active Devs account.')
             # Remove membership without erasing business records or saved grants.
@@ -1354,8 +1401,14 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             c.execute('DELETE FROM sessions WHERE user_id=?', (identifier,))
             c.execute('DELETE FROM password_resets WHERE user_id=?', (identifier,))
             DataAccess.bump(c, identifier)
-        await revoke_work(app.state, identifier)
         db.audit(user['id'], 'user.removed', identifier)
+        if removing_self:
+            response.delete_cookie(COOKIE, path='/')
+            # Sessions and data authorization are already revoked. Deliver logout
+            # immediately while native workers finish shutting down.
+            background_tasks.add_task(revoke_work, app.state, identifier)
+        else:
+            await revoke_work(app.state, identifier)
         return {'ok': True}
 
     @app.patch("/api/admin/users/{identifier}")
@@ -1385,6 +1438,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
                 DataAccess(db).replace(c,identifier,*access_change)
             if not active:
                 c.execute("DELETE FROM sessions WHERE user_id=?", (identifier,))
+                c.execute("DELETE FROM password_resets WHERE user_id=?", (identifier,))
         # Existing grants remain untouched when roles change.
         if not active:
             for chat in db.all('SELECT id FROM conversations WHERE user_id=?', (identifier,)):

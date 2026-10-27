@@ -97,13 +97,61 @@ def test_president_can_add_scoped_members_and_remove_without_widening_existing_g
     }).status_code == 401
 
 
-def test_devs_can_remove_members_but_not_self_and_removed_accounts_cannot_be_reactivated(client, admin):
+def test_devs_can_remove_members_and_removed_accounts_cannot_be_reactivated(client, admin):
     target = add(client, 'devs', 'Developer')
-    assert client.delete(f"/api/admin/users/{admin['id']}", headers=HEADERS).status_code == 422
     assert client.delete(f"/api/admin/users/{target['id']}", headers=HEADERS).status_code == 200
     assert client.patch(f"/api/admin/users/{target['id']}", headers=HEADERS, json={'active': True}).status_code == 409
     assert client.app.state.db.one("SELECT count(*) AS n FROM users WHERE role='devs' AND active=1")['n'] == 1
     with client.app.state.db.connect() as connection:
+        assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
+
+
+@pytest.mark.parametrize('another_dev', [False, True])
+def test_dev_self_removal_revokes_all_sessions_preserves_data_and_does_not_reopen_setup(client, admin, database, another_dev, monkeypatch):
+    import time
+    from app.security import token_hash
+    source, _ = database
+    if another_dev:
+        add(client, 'devs', 'Developer')
+    db = client.app.state.db
+    chat = client.post('/api/conversations', headers=HEADERS, json={'title': 'Keep this history'}).json()
+    db.execute('INSERT OR IGNORE INTO source_grants VALUES(?,?)', (source['id'], admin['id']))
+    grants = db.all('SELECT * FROM source_grants WHERE user_id=?', (admin['id'],))
+    cookie = client.cookies.get('duka_session')
+    second_cookie = 'another-existing-session'
+    db.execute('INSERT INTO sessions VALUES(?,?,?)', (token_hash(second_cookie), admin['id'], time.time() + 3600))
+    db.execute('INSERT INTO password_resets VALUES(?,?,?)', (admin['id'], 'reset-hash', time.time() + 3600))
+    stopped = []
+
+    async def stop_work(state, identifier):
+        assert state.db.all('SELECT * FROM sessions WHERE user_id=?', (identifier,)) == []
+        assert state.db.one('SELECT active FROM users WHERE id=?', (identifier,))['active'] == 0
+        stopped.append(identifier)
+
+    monkeypatch.setattr('app.accounts.revoke_work', stop_work)
+    response = client.delete(f"/api/admin/users/{admin['id']}", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    assert 'duka_session=""' in response.headers['set-cookie']
+    assert 'Max-Age=0' in response.headers['set-cookie']
+    assert client.cookies.get('duka_session') is None
+    assert stopped == [admin['id']]
+    assert db.one('SELECT * FROM removed_members WHERE user_id=?', (admin['id'],))
+    assert db.all('SELECT * FROM password_resets WHERE user_id=?', (admin['id'],)) == []
+    assert db.all('SELECT * FROM source_grants WHERE user_id=?', (admin['id'],)) == grants
+    assert db.one('SELECT * FROM conversations WHERE id=?', (chat['id'],))
+    assert db.one("SELECT count(*) AS n FROM users WHERE role='devs' AND active=1")['n'] == int(another_dev)
+    for token in [cookie, second_cookie]:
+        client.cookies.set('duka_session', token)
+        for path in ['/api/conversations', '/api/reports', '/api/admin/users']:
+            assert client.get(path).status_code == 401
+    assert client.get('/api/auth/status').json() == {'needs_setup': False, 'setup_token_required': False, 'user': None}
+    assert client.post('/api/auth/login', headers=HEADERS, json={
+        'email': admin['email'], 'password': 'a-long-test-password',
+    }).status_code == 401
+    assert client.post('/api/auth/setup', headers=HEADERS, json={
+        'email': 'takeover@example.com', 'name': 'Takeover', 'password': 'a-long-test-password',
+    }).status_code == 409
+    with db.connect() as connection:
         assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
 
 

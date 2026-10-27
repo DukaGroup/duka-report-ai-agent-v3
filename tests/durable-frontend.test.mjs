@@ -8,9 +8,46 @@ async function compile(name, replacement = s => s) {
   const compiled = ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 }
-const {streamChat} = await compile('api', s=>s.replace('import { errorMessage } from "./locale";', 'const errorMessage = value=>value;'));
+const sessionSource=await readFile(new URL('../frontend/src/session.ts',import.meta.url),'utf8');
+const sessionCompiled=ts.transpileModule(sessionSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const sessionUrl=`data:text/javascript;base64,${Buffer.from(sessionCompiled).toString('base64')}`;
+const {onSessionEnded}=await import(sessionUrl);
+const {api,streamChat} = await compile('api', s=>s
+  .replace('import { errorMessage } from "./locale";', 'const errorMessage = value=>value;')
+  .replace('"./session"',JSON.stringify(sessionUrl)));
 const {loadDrafts,saveDrafts} = await compile('drafts');
 const ndjson = events => new Response(events.map(e=>JSON.stringify(e)+'\n').join(''));
+
+test('revoked API and chat sessions log out and never retry unauthorized work',async t=>{
+  const previous=globalThis.window;
+  globalThis.window=new EventTarget();
+  let logouts=0,calls=0;
+  const stop=onSessionEnded('dev',()=>logouts++);
+  t.after(()=>{stop();if(previous===undefined)delete globalThis.window;else globalThis.window=previous;});
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({detail:'Sign in first.'},{status:401});});
+  await assert.rejects(api('/reports'),/Sign in first/);
+  assert.equal(logouts,1);
+  await assert.rejects(api('/auth/login'),/Sign in first/);
+  assert.equal(logouts,1);
+  await assert.rejects(streamChat('chat','Request','fixture',()=>{}),/Sign in first/);
+  assert.equal(logouts,2);
+  assert.equal(calls,3);
+});
+
+test('revocation during request recovery stops reconnecting after the unauthorized lookup',async t=>{
+  const previous=globalThis.window;
+  globalThis.window=new EventTarget();
+  let calls=0,logouts=0;
+  const stop=onSessionEnded('dev',()=>logouts++);
+  t.after(()=>{stop();if(previous===undefined)delete globalThis.window;else globalThis.window=previous;});
+  t.mock.method(globalThis,'fetch',async()=>{
+    if(++calls===1)throw new TypeError('Connection lost');
+    return Response.json({detail:'Sign in first.'},{status:401});
+  });
+  await assert.rejects(streamChat('chat','Request','fixture',()=>{}),/Sign in first/);
+  assert.equal(calls,2);
+  assert.equal(logouts,1);
+});
 
 test('subscription handoff resets an abandoned draft and reconnects without resubmitting', async t=>{
   const urls=[], events=[];let text='';

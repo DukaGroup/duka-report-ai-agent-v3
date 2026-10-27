@@ -5,7 +5,7 @@ from conftest import HEADERS
 from test_application import create_member, sign_in_member
 
 
-def test_delete_conversation_is_owned_and_cascades_messages_only(client, admin):
+def test_delete_conversation_is_owned_and_trashes_before_permanent_purge(client, admin):
     create_member(client)
     chat = client.post("/api/conversations", json={}, headers=HEADERS).json()
     db = client.app.state.db
@@ -21,6 +21,11 @@ def test_delete_conversation_is_owned_and_cascades_messages_only(client, admin):
     assert client.delete(f"/api/conversations/{chat['id']}").status_code == 403
     assert client.delete(f"/api/conversations/{chat['id']}", headers=HEADERS).status_code == 200
     assert client.get(f"/api/conversations/{chat['id']}").status_code == 404
+    # Deletion is recoverable; only an explicit purge cascades messages.
+    assert db.one("SELECT * FROM messages WHERE id='m'")
+    assert db.one("SELECT * FROM reports WHERE id='r'")["conversation_id"] == chat["id"]
+    assert client.post('/api/conversations/bulk-delete', headers=HEADERS,
+                       json={'conversation_ids': [chat['id']], 'permanent': True}).status_code == 200
     assert not db.one("SELECT * FROM messages WHERE id='m'")
     assert db.one("SELECT * FROM reports WHERE id='r'")["conversation_id"] is None
 

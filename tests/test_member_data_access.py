@@ -412,6 +412,7 @@ def test_both_provider_report_tools_export_only_granted_companies(client, admin,
         denied = client.get(f"/api/reports/{result['report_id']}/export/{kind}")
         assert denied.status_code == 403, (provider, kind)
         assert 'Qasja nuk lejohet' in denied.json()['detail']
+    assert client.get(f"/api/reports/{result['report_id']}/preview").status_code == 403
     blocked = call_tool(
         client,
         member,

@@ -1,4 +1,7 @@
 import { errorMessage } from "./locale";
+import { endSession } from "./session";
+
+class SessionExpiredError extends Error {}
 
 export async function api<T>(
   path: string,
@@ -14,9 +17,11 @@ export async function api<T>(
     credentials: "same-origin",
   });
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/")) endSession();
     const payload = await response.json().catch(() => ({}));
     const detail = payload.detail;
-    throw new Error(
+    const RequestError = response.status === 401 ? SessionExpiredError : Error;
+    throw new RequestError(
       typeof detail === "string"
         ? errorMessage(detail)
         : Array.isArray(detail)
@@ -76,6 +81,7 @@ export async function streamChat(
         },
       );
       if (!response.ok) {
+        if (response.status === 401) endSession();
         const payload = await response.json().catch(() => ({}));
         terminal =
           response.status < 500 && !(response.status === 409 && reconnects > 0);
@@ -135,7 +141,8 @@ export async function streamChat(
             `/conversations/${id}/requests/${requestId}`,
           );
           runId = accepted.run_id;
-        } catch {
+        } catch (error) {
+          if (error instanceof SessionExpiredError) throw error;
           first = true;
           continue;
         }

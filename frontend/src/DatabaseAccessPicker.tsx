@@ -252,7 +252,7 @@ export function DatabaseAccessPicker({
                       type="button"
                       className="text-button"
                       aria-label={`${expanded[id] ? "Mbyll" : "Shfaq"} kompanitë në ${database.name}`}
-                      title={`${expanded[id] ? "Mbyll" : "Shfaq"} kompanitë në ${database.name}`}
+                      data-tooltip={`${expanded[id] ? "Mbyll" : "Shfaq"} kompanitë në ${database.name}`}
                       aria-expanded={!!expanded[id]}
                       onClick={() =>
                         void toggleCompanies(source, database.name)

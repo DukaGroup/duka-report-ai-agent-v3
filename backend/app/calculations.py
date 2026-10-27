@@ -15,6 +15,7 @@ from .calculation_script import number, validate_script
 from .database_tools import DatabaseQuery
 from .db import now, uid
 from .upload_queries import UploadQuery
+from .script_reuse import ScriptReuse, apply_reuse
 
 
 class CalculationInput(BaseModel):
@@ -40,10 +41,13 @@ class CalculationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     inputs: list[Annotated[DatabaseInput | AttachmentInput, Field(discriminator="kind")]] = Field(min_length=1, max_length=8)
     rules: str = Field(min_length=1, max_length=6000, description="Explain the chosen business rules, exclusions, dates, units and unresolved assumptions. These are model decisions, not backend-certified accounting rules.")
-    script: str = Field(min_length=1, max_length=65536)
+    script: str | None = Field(default=None, min_length=1, max_length=65536)
+    script_reuse: ScriptReuse | None = None
 
 
-CALCULATION_API = """Define only def calculate(tables). tables is a dictionary of named COMPLETE input row lists; query preview limits do not apply.
+CALCULATION_API = """Before writing a new calculation, find_calculation_scripts then read_calculation_script for a relevant successful script. Reuse compatible code rather than rewriting it.
+Supply exactly one of script (full new code) or script_reuse={source_id,sha256,edits:[{before,after,occurrences:1}]}. Empty edits reuse unchanged code. Edits apply in order and require exact occurrence counts. Always supply current inputs and rules; prior dates, client/company filters, exclusions, currency and output scope must be reviewed and explicitly updated. Saved results are never reused: all current inputs are fetched again and the resolved code is validated and executed. If there is no compatible script, write a new one.
+Define only def calculate(tables). tables is a dictionary of named COMPLETE input row lists; query preview limits do not apply.
 Use ordinary Python locals, for/if, comprehensions, dictionaries/sets/lists and these helpers:
 number(value) converts finite numeric data to exact Decimal; number(None) fails (handle missing values explicitly).
 date_of(value) normalizes ISO/SAP YYYYMMDD dates to YYYY-MM-DD; missing/zero dates return None.
@@ -125,6 +129,13 @@ class CalculationService:
     async def execute(self, user, conversation, specification):
         self.conversation(user, conversation)
         plan = CalculationPlan.model_validate(specification)
+        if (plan.script is None) == (plan.script_reuse is None):
+            raise ValueError("Supply exactly one of script or script_reuse.")
+        reuse = plan.script_reuse
+        if reuse is not None:
+            from .script_library import ScriptLibrary
+            saved = ScriptLibrary(self.db).calculation(user, reuse.source_id)
+            plan.script = apply_reuse(saved['script'], reuse)
         # Reject unsupported code before touching a business database.
         validate_script(plan.script)
         if len({s.name for s in plan.inputs}) != len(plan.inputs):
@@ -168,6 +179,11 @@ class CalculationService:
                 identifier, user, conversation, json.dumps(provenance), json.dumps(tables, allow_nan=False),
                 json.dumps(result, allow_nan=False), now(), "complete"))
             self.db.audit(user, "calculation.completed", identifier, {"input_rows": count, "datasets": len(result["datasets"])})
+            if reuse is not None:
+                self.db.audit(user, "calculation.script_reused", identifier, {
+                    "source_id": reuse.source_id, "source_sha256": reuse.sha256, "edit_count": len(reuse.edits),
+                    "script_sha256": hashlib.sha256(plan.script.encode()).hexdigest(),
+                })
             return self.preview(identifier, result, provenance)
 
     async def run(self, script, tables):

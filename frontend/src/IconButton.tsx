@@ -12,7 +12,7 @@ export function IconButton({ label, danger, className = "", ...props }: Props) {
       type={props.type || "button"}
       className={`icon-button action-button${danger ? " danger-text" : ""} ${className}`}
       aria-label={label}
-      title={label}
+      data-tooltip={label}
     />
   );
 }

@@ -13,6 +13,7 @@ import { api } from "./api";
 import type { Login, Provider } from "./types";
 import { Select } from "./Select";
 import { IconButton } from "./IconButton";
+import { useModalKeyboard } from "./useModalKeyboard";
 
 type Account = {
   id: string;
@@ -41,6 +42,8 @@ export function SubscriptionAccounts({
     (Login & { subscription_id: string }) | null
   >(null);
   const [code, setCode] = useState("");
+  const addingModalRef = useModalKeyboard(adding);
+  const loginModalRef = useModalKeyboard(!!login);
 
   async function refresh() {
     setAccounts(await api<Account[]>("/admin/subscriptions"));
@@ -259,16 +262,19 @@ export function SubscriptionAccounts({
       {adding && (
         <div className="modal-scrim">
           <section
+            ref={addingModalRef}
             className="modal"
             role="dialog"
             aria-modal="true"
             aria-label="Shto abonim"
+            tabIndex={-1}
           >
             <div className="modal-title">
               <h2>Shto abonim</h2>
               <button
                 className="icon-button"
                 aria-label="Mbyll dritaren"
+                data-tooltip="Mbyll dritaren"
                 onClick={() => setAdding(false)}
               >
                 <X size={20} />
@@ -305,16 +311,19 @@ export function SubscriptionAccounts({
       {login && (
         <div className="modal-scrim">
           <section
+            ref={loginModalRef}
             className="modal"
             role="dialog"
             aria-modal="true"
             aria-label="Lidh abonimin"
+            tabIndex={-1}
           >
             <div className="modal-title">
               <h2>Lidh abonimin</h2>
               <button
                 className="icon-button"
                 aria-label="Mbyll dritaren"
+                data-tooltip="Mbyll dritaren"
                 onClick={() => setLogin(null)}
               >
                 <X size={20} />
@@ -326,6 +335,7 @@ export function SubscriptionAccounts({
             {login.verificationUrl && (
               <a
                 className="button primary"
+                data-modal-default={!login.requiresCode ? "" : undefined}
                 href={login.verificationUrl}
                 target="_blank"
                 rel="noopener noreferrer"

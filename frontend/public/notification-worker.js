@@ -85,14 +85,14 @@ self.addEventListener("push", (event) => {
             break;
           }
         }
-        await self.registration.showNotification("Asistenti Duka", {
+        await self.registration.showNotification("Hana", {
           body:
             owned.reportCount > 1
               ? "Raportet tuaja janë gati për t’u hapur ose shkarkuar."
               : owned.reportCount
                 ? "Raporti juaj është gati për t’u hapur ose shkarkuar."
                 : "Përgjigjja juaj është gati. Shtypni këtu për të hapur bisedën.",
-          icon: "/brand/duka-group-icon-192.webp",
+          icon: "/brand/hana-avatar.png",
           lang: "sq",
           tag: "duka-reply-" + data.messageId,
           renotify: false,

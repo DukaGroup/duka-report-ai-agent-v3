@@ -21,6 +21,7 @@ for index, value in enumerate(sys.argv):
 assert "sandbox_mode" not in config
 assert config["default_permissions"] == "duka_read_only"
 assert config["project_doc_max_bytes"] == 0
+assert config["web_search"] == "live"
 profile = config["permissions"]["duka_read_only"]
 assert len(profile["filesystem"]) == 1
 root, access = next(iter(profile["filesystem"].items()))

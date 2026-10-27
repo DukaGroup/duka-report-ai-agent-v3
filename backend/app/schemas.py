@@ -6,10 +6,21 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from .database_tools import DatabaseQuery
 from .upload_queries import UploadQuery
 from .balance_reconciliation import BalanceRequest
+from .script_reuse import ScriptReuse
 
 
 class InputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def valid_unicode(cls, value):
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8")
+            except UnicodeError:
+                raise ValueError("Text must contain valid Unicode characters.") from None
+        return value
 
 
 class Credentials(InputModel):
@@ -343,6 +354,7 @@ class WorkbookPresentation(InputModel):
     labels: list[WorkbookLabel] = Field(default_factory=list, max_length=120)
     analyses: list[AnalysisLabels] = Field(default_factory=list, max_length=11)
     python_script: str | None = Field(default=None, max_length=65536)
+    script_reuse: ScriptReuse | None = None
 
 
 class WorkbookScriptRepair(InputModel):

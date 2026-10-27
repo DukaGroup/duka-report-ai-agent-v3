@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from pydantic import Field, SecretStr
 
 from .schemas import InputModel, Credentials
-from .security import admin_user, current_user, create_session, hash_password, token_hash, verify_password
+from .security import admin_user, current_user, create_session, hash_password, password_work, token_hash, verify_password
 
 
 class PasswordChange(InputModel):
@@ -31,19 +31,21 @@ def register_accounts(app, settings):
     async def change_password(body: PasswordChange, request: Request, response: Response, user=Depends(current_user)):
         state, db = app.state, app.state.db
         state.limiter.check("password:" + user["id"])
-        encoded = hash_password(body.new_password.get_secret_value())
+        if not await password_work(state, verify_password, body.current_password.get_secret_value(), user["password_hash"]):
+            raise HTTPException(422, "The current password is incorrect.")
+        encoded = await password_work(state, hash_password, body.new_password.get_secret_value())
         with db.connect() as c:
             # Compare the current hash within the write transaction: concurrent resets
             # must not be overwritten using a password that has just been revoked.
             c.execute("BEGIN IMMEDIATE")
             row = c.execute("SELECT password_hash FROM users WHERE id=? AND active=1", (user["id"],)).fetchone()
-            if not row or not verify_password(body.current_password.get_secret_value(), row["password_hash"]):
+            if not row or row["password_hash"] != user["password_hash"]:
                 raise HTTPException(422, "The current password is incorrect.")
             c.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, user["id"]))
             c.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
             c.execute("DELETE FROM password_resets WHERE user_id=?", (user["id"],))
         await revoke_work(state, user["id"])
-        create_session(db, settings, response, user["id"])
+        create_session(db, settings, response, user["id"], expected_hash=encoded)
         db.audit(user["id"], "user.password_changed", user["id"])
         return {"ok": True}
 
@@ -64,10 +66,10 @@ def register_accounts(app, settings):
     @app.post("/api/auth/password-reset")
     async def reset_password(body: PasswordRecovery, request: Request):
         state, db = app.state, app.state.db
-        state.limiter.check("recovery:" + request.client.host)
+        state.limiter.check("recovery:ip:" + request.client.host, "recovery:account:" + body.email)
         if len(body.password) < 12:
             raise HTTPException(422, "Use a password with at least 12 characters.")
-        encoded = hash_password(body.password)
+        encoded = await password_work(state, hash_password, body.password)
         with db.connect() as c:
             c.execute("BEGIN IMMEDIATE")
             row = c.execute(

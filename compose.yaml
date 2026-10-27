@@ -3,11 +3,8 @@ services:
     build: .
     init: true
     restart: unless-stopped
-    # Persist upstream resolvers even when Docker starts before networking.
-    # Use local/VPN DNS in .env when SQL Server has a private hostname.
-    dns:
-      - ${DOCKER_DNS_PRIMARY:-1.1.1.1}
-      - ${DOCKER_DNS_SECONDARY:-1.0.0.1}
+    # Inherit Docker/host DNS as networks change. A pinned office/VPN resolver
+    # can disable provider access away from that network. See deploy/compose-dns.yaml.
     ports:
       - "127.0.0.1:${PORT:-8080}:8080"
     environment:

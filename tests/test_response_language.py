@@ -54,6 +54,8 @@ def test_albanian_policy_is_system_context_for_slang_history_and_resumed_chats(c
     if provider == 'chatgpt':
         assert [method for method, _ in contexts] == ['thread/start', 'thread/resume']
     assert 'Always write all user-facing responses in Albanian (shqip).' in BASE_INSTRUCTIONS
+    assert 'Your name is Hana.' in BASE_INSTRUCTIONS
+    assert 'When introducing yourself or asked your name, answer Hana' in BASE_INSTRUCTIONS
     assert '"ca bone?"' in BASE_INSTRUCTIONS
     assert 'Do not switch languages' in BASE_INSTRUCTIONS
     assert "Automatically answer in the language" not in BASE_INSTRUCTIONS

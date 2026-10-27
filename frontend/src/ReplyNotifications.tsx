@@ -82,7 +82,7 @@ export function ReplyNotifications({
             type="button"
             className="icon-button reply-notification-dismiss"
             aria-label={`Mbyll njoftimin: ${item.title}`}
-            title="Mbyll njoftimin"
+            data-tooltip="Mbyll njoftimin"
             onClick={() => onDismiss(item.id)}
           >
             <X size={17} />

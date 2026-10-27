@@ -34,6 +34,7 @@ import {
   X,
 } from "lucide-react";
 import { MarkdownContent } from "./MarkdownContent";
+import { ReportWorkbookPreview } from "./ReportWorkbookPreview";
 import { Brand } from "./Brand";
 import { SubscriptionAccounts } from "./SubscriptionAccounts";
 import { Select } from "./Select";
@@ -41,6 +42,8 @@ import { IconButton } from "./IconButton";
 import { SourceConnectionForm } from "./SourceConnectionForm";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { ThinkingStatus } from "./ThinkingStatus";
+import { TooltipLayer } from "./TooltipLayer";
+import { useModalKeyboard } from "./useModalKeyboard";
 import { ReplyNotifications } from "./ReplyNotifications";
 import { ReplyCompletions } from "./replyNotifications";
 import { playNotificationSound, ReplySound } from "./replySound";
@@ -49,7 +52,11 @@ import { TrafficPanel } from "./TrafficPanel";
 import { DatabaseAccessPicker, emptyDataAccess } from "./DatabaseAccessPicker";
 import type { MemberDataAccess } from "./DatabaseAccessPicker";
 import { api, streamChat } from "./api";
-import { shouldCaptureTyping } from "./composerKeyboard";
+import { endSession, onSessionEnded } from "./session";
+import {
+  shouldCaptureTyping,
+  shouldSubmitComposerOnEnter,
+} from "./composerKeyboard";
 import { loadDrafts, saveDrafts } from "./drafts";
 import {
   PasswordChangeForm,
@@ -146,16 +153,19 @@ function Modal({
   className?: string;
   dismissOnBackdrop?: boolean;
 }) {
+  const modalRef = useModalKeyboard();
   return (
     <div
       className="modal-scrim"
       onClick={dismissOnBackdrop ? onClose : undefined}
     >
       <section
+        ref={modalRef}
         className={`modal ${className || ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-title">
@@ -163,6 +173,7 @@ function Modal({
           <button
             className="icon-button"
             aria-label="Mbyll dritaren"
+            data-tooltip="Mbyll dritaren"
             onClick={onClose}
           >
             <X size={20} />
@@ -234,6 +245,7 @@ function Auth({
                 name="setup_token"
                 type="password"
                 required
+                autoFocus
                 autoComplete="off"
                 maxLength={100}
               />
@@ -249,6 +261,7 @@ function Auth({
               <input
                 name="name"
                 required
+                autoFocus={!setupTokenRequired}
                 autoComplete="name"
                 placeholder="Administratori i hapësirës"
               />
@@ -261,6 +274,7 @@ function Auth({
               name="email"
               type="email"
               required
+              autoFocus={!setup}
               autoComplete="username"
               placeholder="you@company.com"
             />
@@ -286,7 +300,7 @@ function Auth({
               {error}
             </p>
           )}
-          <button className="button primary wide" disabled={busy}>
+          <button type="submit" className="button primary wide" disabled={busy}>
             {busy ? (
               <LoaderCircle className="spin" size={18} />
             ) : (
@@ -323,6 +337,13 @@ export default function App() {
     [setupTokenRequired, setSetupTokenRequired] = useState(false),
     [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState("");
+  useEffect(() => {
+    if (!user) return;
+    return onSessionEnded(user.id, () => {
+      setUser(null);
+      setError("");
+    });
+  }, [user?.id]);
   useEffect(() => {
     let active = true;
     const stop = recoverSubscription(
@@ -388,12 +409,18 @@ export default function App() {
         }}
       />
     );
-  return <Workspace key={user.id} user={user} onLogout={() => setUser(null)} />;
+  return (
+    <>
+      <TooltipLayer />
+      <Workspace key={user.id} user={user} onLogout={() => endSession(user.id)} />
+    </>
+  );
 }
 
 function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const isDev = user.role === "devs";
   const canManageMembers = isDev || user.role === "president";
+  const [hanaProfileOpen, setHanaProfileOpen] = useState(false);
   const [page, setPage] = useState<Page>("conversations"),
     [error, setError] = useState("");
   const [subscription, setSubscription] =
@@ -477,6 +504,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const listeners = useRef(new Map<string, AbortController>());
+  useEffect(() => {
+    const controllers = listeners.current;
+    return () => {
+      controllers.forEach((controller) => controller.abort());
+      controllers.clear();
+    };
+  }, []);
   const requestKeys = useRef(new Map<string, string>());
   const submitting = useRef(new Set<string>());
   const [limits, setLimits] = useState<RateLimits | null>(null);
@@ -505,7 +539,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     busy || reportBusy || !reportsLoaded || stoppingReports || uploading;
   const reasoningControl = (
     <label className="reasoning-picker">
-      Arsyetimi
+      <span className="reasoning-caption">Arsyetimi</span>
       <Select
         aria-label="Niveli i arsyetimit"
         value={effort}
@@ -633,6 +667,24 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     scrolledConversation = useRef<string | null>(null),
     mounted = useRef(true),
     activeId = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const field = composer.current;
+    if (page !== "chat" || !field) return;
+    const resize = () => {
+      const scroll = messageScroll.current;
+      const followBottom =
+        scroll &&
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 48;
+      field.style.height = "auto";
+      const maxHeight = parseFloat(getComputedStyle(field).maxHeight) || 220;
+      field.style.height = `${Math.min(field.scrollHeight, maxHeight)}px`;
+      if (followBottom) scroll.scrollTop = scroll.scrollHeight;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [draft, page, currentId]);
 
   const fail = (e: unknown) =>
     setError(errorMessage((e as Error).message || "Ndodhi një gabim."));
@@ -1751,6 +1803,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             type="button"
             className="icon-button"
             aria-label={`Hiq skedarin ${item.name}`}
+            data-tooltip={`Hiq skedarin ${item.name}`}
             disabled={uploading || deleting}
             onClick={() =>
               setPendingAttachments((items) =>
@@ -2224,6 +2277,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setRemovingMember(true);
     try {
       await api(`/admin/users/${deleteMember.id}`, { method: "DELETE" });
+      if (deleteMember.id === user.id) {
+        onLogout();
+        return;
+      }
       setDeleteMember(null);
       await loadAdmin();
     } catch (e) {
@@ -2331,7 +2388,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         }}
       />
       <aside className="sidebar">
-        <button className="brand" onClick={() => navigate("conversations")}>
+        <button
+          className="brand"
+          aria-label="Kthehu te bisedat"
+          data-tooltip="Kthehu te bisedat"
+          onClick={() => navigate("conversations")}
+        >
           <Brand light />
         </button>
         <button
@@ -2391,7 +2453,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 className="delete-conversation"
                 disabled={uploading || deleting}
                 aria-label={`Fshi bisedën: ${c.title}`}
-                title="Fshi bisedën"
+                data-tooltip="Fshi bisedën"
                 onClick={() => {
                   setError("");
                   setDeleteChat(c);
@@ -2408,7 +2470,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         <div className="sidebar-bottom">
           <button
             className={`nav-item ${page === "settings" ? "selected" : ""}`}
-            title="Cilësimet"
+            data-tooltip="Cilësimet"
             aria-label="Cilësimet"
             onClick={() => navigate("settings")}
           >
@@ -2425,6 +2487,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="icon-button"
               aria-label="Dil nga llogaria"
+              data-tooltip="Dil nga llogaria"
               disabled={chatLocked}
               onClick={() => {
                 void api("/auth/logout", { method: "POST" })
@@ -2444,7 +2507,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 className="icon-button"
                 aria-label="Kthehu te bisedat"
-                title="Kthehu te bisedat"
+                data-tooltip="Kthehu te bisedat"
                 onClick={() => navigate("conversations")}
               >
                 <ArrowLeft size={18} />
@@ -2455,7 +2518,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 <span className="slash">/</span>
               </>
             )}
-            <span className="page-caption" title={caption}>
+            <span className="page-caption" data-tooltip={caption}>
               {caption}
             </span>
           </div>
@@ -2481,7 +2544,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="icon-button"
               aria-label="Historiku i bisedave"
-              title="Historiku i bisedave"
+              data-tooltip="Historiku i bisedave"
               onClick={() => setChatHistory(true)}
             >
               <History size={19} />
@@ -2513,6 +2576,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="icon-button"
               aria-label="Mbyll gabimin"
+              data-tooltip="Mbyll gabimin"
               onClick={() => setError("")}
             >
               <X size={17} />
@@ -2617,7 +2681,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   >
                     <label
                       className="conversation-card-select"
-                      title={`Zgjidh bisedën: ${c.title}`}
+                      data-tooltip={`Zgjidh bisedën: ${c.title}`}
                     >
                       <input
                         type="checkbox"
@@ -2670,7 +2734,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     {conversationTrash && (
                       <button
                         className="icon-button conversation-card-restore"
-                        title="Rikthe bisedën"
+                        data-tooltip="Rikthe bisedën"
                         aria-label={`Rikthe bisedën: ${c.title}`}
                         disabled={conversationActionBusy}
                         onClick={() => void restoreConversation([c.id])}
@@ -2684,7 +2748,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     )}
                     <button
                       className="icon-button conversation-card-delete"
-                      title={
+                      data-tooltip={
                         conversationTrash ? "Fshi përgjithmonë" : "Kalo në kosh"
                       }
                       aria-label={`${conversationTrash ? "Fshi përgjithmonë bisedën" : "Fshi bisedën"}: ${c.title}`}
@@ -2734,9 +2798,15 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               >
                 {empty ? (
                   <section className="chat-welcome">
-                    <div className="welcome-symbol">
-                      <Sparkles size={27} />
-                    </div>
+                    <button
+                      type="button"
+                      className="welcome-symbol"
+                      aria-label="Shiko profilin e Hanës"
+                      data-tooltip="Shiko profilin e Hanës"
+                      onClick={() => setHanaProfileOpen(true)}
+                    >
+                      <img src="/brand/hana-avatar.png" alt="" />
+                    </button>
                     <span className="eyebrow"> BIZNESI JUAJ NË BISEDË </span>
                     <h1>
                       {" "}
@@ -2799,21 +2869,37 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             key={entry.key}
                             className={`message ${m.role}`}
                           >
-                            <div className={`message-avatar ${m.role}`}>
-                              {m.role === "assistant" ? (
-                                <Sparkles size={18} />
-                              ) : (
-                                user.name.slice(0, 1)
-                              )}
-                            </div>
+                            {m.role === "assistant" ? (
+                              <button
+                                type="button"
+                                className="message-avatar assistant"
+                                aria-label="Shiko profilin e Hanës"
+                                data-tooltip="Shiko profilin e Hanës"
+                                onClick={() => setHanaProfileOpen(true)}
+                              >
+                                <img src="/brand/hana-avatar.png" alt="" />
+                              </button>
+                            ) : (
+                              <div className="message-avatar user">
+                                {user.name.slice(0, 1)}
+                              </div>
+                            )}
                             <div className="message-body">
                               <div className="message-author">
-                                {m.role === "assistant"
-                                  ? "Asistenti Duka"
-                                  : user.name}
-                                <span>
-                                  {m.role === "assistant" ? "AI" : "Ju"}
-                                </span>
+                                {m.role === "assistant" ? (
+                                  <button
+                                    type="button"
+                                    className="assistant-name"
+                                    data-tooltip="Shiko profilin e Hanës"
+                                    onClick={() => setHanaProfileOpen(true)}
+                                  >
+                                    Hana
+                                  </button>
+                                ) : (
+                                  <>
+                                    {user.name} <span>Ju</span>
+                                  </>
+                                )}
                               </div>
                               {!!m.attachments?.length && (
                                 <div className="message-attachments">
@@ -2834,7 +2920,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                     type="button"
                                     className="icon-button"
                                     aria-label="Ndrysho mesazhin"
-                                    title="Ndrysho mesazhin dhe rinis bisedën"
+                                    data-tooltip="Ndrysho mesazhin dhe rinis bisedën"
                                     onClick={() => {
                                       setRetryMessageId(m.id);
                                       setDraft(m.content);
@@ -2849,7 +2935,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                     type="button"
                                     className="icon-button"
                                     aria-label="Ridërgo"
-                                    title="Ridërgo dhe rinis bisedën nga ky mesazh"
+                                    data-tooltip="Ridërgo dhe rinis bisedën nga ky mesazh"
                                     onClick={() =>
                                       void send(
                                         m.content,
@@ -2905,25 +2991,46 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                             </p>
                           )}
                           {r.status === "completed" && (
-                            <a
-                              className="button primary small"
-                              href={`/api/reports/${r.id}/export/xlsx`}
-                            >
-                              <ArrowDownToLine size={16} />
-                              Shkarko Excel
-                            </a>
+                            <div className="chat-report-actions">
+                              <button
+                                type="button"
+                                className="report-preview-link"
+                                onClick={() => void openReport(r)}
+                              >
+                                <Eye size={17} /> Shiko paraprakisht
+                              </button>
+                              <a
+                                className="button outline small"
+                                href={`/api/reports/${r.id}/export/xlsx`}
+                              >
+                                <ArrowDownToLine size={16} /> Shkarko Excel
+                              </a>
+                            </div>
                           )}
                         </div>
                       );
                     })}
                     {reportBusy && pendingMessages.size === 0 && (
                       <article className="message assistant">
-                        <div className="message-avatar assistant">
-                          <Sparkles size={18} />
-                        </div>
+                        <button
+                          type="button"
+                          className="message-avatar assistant"
+                          aria-label="Shiko profilin e Hanës"
+                          data-tooltip="Shiko profilin e Hanës"
+                          onClick={() => setHanaProfileOpen(true)}
+                        >
+                          <img src="/brand/hana-avatar.png" alt="" />
+                        </button>
                         <div className="message-body">
                           <div className="message-author">
-                            Asistenti Duka <span>{effectiveProviderName}</span>
+                            <button
+                              type="button"
+                              className="assistant-name"
+                              data-tooltip="Shiko profilin e Hanës"
+                              onClick={() => setHanaProfileOpen(true)}
+                            >
+                              Hana
+                            </button>
                           </div>
                           <ThinkingStatus description={pendingDescription} />
                         </div>
@@ -2997,19 +3104,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   )}
                   <textarea
                     ref={composer}
+                    rows={1}
                     aria-label="Mesazhi"
                     placeholder="Bëni një pyetje ose kërkoni analizë dhe raport nga databaza…"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     disabled={openingConversation || deleting}
                     onKeyDown={(e) => {
-                      if (
-                        e.key === "Enter" &&
-                        !e.shiftKey &&
-                        !e.nativeEvent.isComposing
-                      ) {
+                      if (shouldSubmitComposerOnEnter(e.nativeEvent)) {
                         e.preventDefault();
-                        void send(draft);
+                        const form = e.currentTarget.form;
+                        const sendButton = form?.querySelector<HTMLButtonElement>(
+                          'button[type="submit"]',
+                        );
+                        if (sendButton && !sendButton.disabled)
+                          form?.requestSubmit(sendButton);
                       }
                     }}
                   />
@@ -3039,7 +3148,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         type="button"
                         className="button outline small upload-button"
                         aria-label="Ngarko skedar"
-                        title="Ngarko Excel, CSV, PDF, Word ose tekst (deri në 12 MB)"
+                        data-tooltip="Ngarko Excel, CSV, PDF, Word ose tekst (deri në 12 MB)"
                         disabled={
                           uploading ||
                           openingConversation ||
@@ -3062,6 +3171,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         aria-label={
                           reportBusy ? "Ndërprit raportin" : "Ndalo përgjigjen"
                         }
+                        data-tooltip={
+                          reportBusy ? "Ndërprit raportin" : "Ndalo përgjigjen"
+                        }
                         disabled={stoppingReports || (!busy && !reportBusy)}
                         onClick={() => void stopResponse()}
                       >
@@ -3076,6 +3188,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       type="submit"
                       className="send-button"
                       aria-label="Dërgo mesazhin"
+                      data-tooltip="Dërgo mesazhin"
                       disabled={
                         uploading ||
                         !reportsLoaded ||
@@ -3854,7 +3967,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       <div className="report-card-leading">
                         <label
                           className="report-card-select"
-                          title={`Zgjidh raportin: ${r.title}`}
+                          data-tooltip={`Zgjidh raportin: ${r.title}`}
                         >
                           <input
                             type="checkbox"
@@ -3923,26 +4036,30 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         </IconButton>
                       ) : (
                         <>
-                          <IconButton
-                            label={`Hap raportin: ${r.title}`}
+                          <button
+                            type="button"
+                            className="report-preview-link"
                             onClick={() => void openReport(r)}
                           >
-                            <Eye size={18} />
-                          </IconButton>
+                            <Eye size={17} />
+                            {r.status === "completed"
+                              ? "Shiko paraprakisht"
+                              : "Shiko gjendjen"}
+                          </button>
                           {r.status === "completed" && (
                             <a
-                              className="button primary small"
+                              className="button outline small"
                               aria-label={`Shkarko Excel: ${r.title}`}
                               href={`/api/reports/${r.id}/export/xlsx`}
                             >
                               <ArrowDownToLine size={15} />
-                              Excel
+                              Shkarko Excel
                             </a>
                           )}
                           <button
                             className="icon-button report-card-delete"
                             aria-label={`Fshi raportin: ${r.title}`}
-                            title={
+                            data-tooltip={
                               ["queued", "running"].includes(r.status)
                                 ? "Ndërpriteni raportin para fshirjes"
                                 : "Fshi raportin"
@@ -3982,6 +4099,43 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           </main>
         )}
       </div>
+
+      {hanaProfileOpen && (
+        <Modal
+          title="Hana"
+          className="hana-profile-modal"
+          onClose={() => setHanaProfileOpen(false)}
+        >
+          <div className="hana-profile-intro">
+            <div className="hana-profile-portrait">
+              <img src="/brand/hana-avatar.png" alt="Portreti i Hanës" />
+            </div>
+            <div>
+              <span className="eyebrow">ASISTENTJA JUAJ</span>
+              <p>
+                Hana ju ndihmon të analizoni të dhënat e biznesit, të gjeni
+                përgjigje për pyetjet tuaja dhe të krijoni raporte Excel nga
+                burimet ku keni qasje.
+              </p>
+            </div>
+          </div>
+          <dl className="hana-profile-details">
+            <div>
+              <dt>Gjuha</dt>
+              <dd>Shqip</dd>
+            </div>
+            <div>
+              <dt>Modeli aktual</dt>
+              <dd>
+                {selectedModel?.displayName || model || "Nuk është zgjedhur"}
+              </dd>
+            </div>
+          </dl>
+          <p className="hana-profile-note">
+            Emri dhe roli i Hanës mbeten të njëjtë kur ndryshoni modelin.
+          </p>
+        </Modal>
+      )}
 
       {databaseBrowser && (
         <Modal
@@ -4069,6 +4223,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           }}
         >
           <p>
+            {deleteMember.id === user.id && (
+              <>Po hiqni llogarinë tuaj. Do të dilni menjëherë nga hapësira. </>
+            )}
             Hiqni {deleteMember.name} nga hapësira? Qasja do të ndërpritet
             menjëherë. Bisedat, raportet dhe regjistrat ekzistues do të ruhen.
           </p>
@@ -4125,7 +4282,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           />
         </Modal>
       )}
-      {page === "reports" && report && (
+      {report && (
         <Modal
           title={report.title}
           onClose={closeReport}
@@ -4166,6 +4323,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             </div>
             {report.error && (
               <p className="error-box">{errorMessage(report.error || "")}</p>
+            )}
+            {report.status === "completed" && (
+              <ReportWorkbookPreview key={report.id} reportId={report.id} />
             )}
             {["queued", "running"].includes(report.status) && (
               <div className="working">
@@ -4342,6 +4502,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <button
                 className="delete-conversation"
                 aria-label={`Fshi bisedën: ${c.title}`}
+                data-tooltip={`Fshi bisedën: ${c.title}`}
                 disabled={uploading || deleting}
                 onClick={() => {
                   setChatHistory(false);
@@ -4413,6 +4574,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="button outline"
               disabled={deleting}
+              data-modal-default={conversationDeleteRequest.permanent ? "" : undefined}
               onClick={() => setConversationDeleteRequest(null)}
             >
               Anulo
@@ -4460,6 +4622,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="button danger"
               disabled={deletingReport}
+              data-modal-default=""
               onClick={() => void removeReport()}
             >
               {deletingReport ? "Duke fshirë…" : "Fshi raportin"}
@@ -4489,6 +4652,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="button outline"
               disabled={deletingSelectedReports}
+              data-modal-default={reportDeleteRequest.permanent ? "" : undefined}
               onClick={() => setReportDeleteRequest(null)}
             >
               Anulo

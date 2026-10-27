@@ -94,4 +94,5 @@ def prepare_bootstrap(settings, db):
 
 
 def verify_bootstrap(settings, supplied):
-    return not bootstrap_required(settings) or hmac.compare_digest(bootstrap_token(settings), supplied or "")
+    return not bootstrap_required(settings) or hmac.compare_digest(
+        bootstrap_token(settings).encode(), (supplied or "").encode("utf-8", errors="replace"))

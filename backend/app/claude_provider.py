@@ -166,13 +166,18 @@ class ClaudeRuntime:
 
     def options(self, model=None, **kwargs):
         from claude_agent_sdk import ClaudeAgentOptions
+        from claude_agent_sdk.types import HookMatcher
+        from .internet_access import public_web_fetch
         return ClaudeAgentOptions(
-            tools=[], permission_mode="dontAsk", setting_sources=[], strict_mcp_config=True,
+            tools=["WebSearch", "WebFetch"], permission_mode="dontAsk", setting_sources=[], strict_mcp_config=True,
+            hooks={"PreToolUse": [HookMatcher(matcher="WebFetch", hooks=[public_web_fetch])]},
             cwd=str(self.workspace), cli_path=self.binary(), env=self.environment(sdk=True),
             system_prompt=BASE_INSTRUCTIONS, model=model.removeprefix("claude:") if model else None,
-            settings=json.dumps({"forceLoginMethod": "claudeai", "disableAllHooks": True}),
+            # Empty setting_sources prevents user/project hooks; the explicit
+            # SDK WebFetch hook must run, so do not globally disable all hooks.
+            settings=json.dumps({"forceLoginMethod": "claudeai"}),
             # --bare disables subscription OAuth. Use restricted mode with an
-            # empty built-in toolset, private directories and explicit MCP only.
+            # public-web-only built-ins, private directories and explicit MCP.
             extra_args={"restricted": None, "no-chrome": None, "disable-slash-commands": None,
                         "system-prompt-snapshot": "off"},
             stderr=lambda _: None, **kwargs,
@@ -252,7 +257,7 @@ class ClaudeRuntime:
         turn = str(uuid4())
         self.active_turns[thread_id] = turn
         options = self.options(model, effort=reasoning_effort, mcp_servers={"duka_reporting": self.tool_server(thread_id, turn)},
-                               allowed_tools=["mcp__duka_reporting__" + t["name"] for t in REPORT_TOOLS[0]["tools"]],
+                               allowed_tools=["WebSearch", "WebFetch", *["mcp__duka_reporting__" + t["name"] for t in REPORT_TOOLS[0]["tools"]]],
                                include_partial_messages=True,
                                output_format={"type": "json_schema", "schema": output_schema} if output_schema else None,
                                **({"resume": session} if persisted else {"session_id": session}))

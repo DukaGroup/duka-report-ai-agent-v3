@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS auth_attempts (
+    key_hash TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS auth_attempts_expiry ON auth_attempts(expires_at);
 CREATE TABLE IF NOT EXISTS web_push_subscriptions (
     endpoint_hash TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
