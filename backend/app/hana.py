@@ -18,14 +18,10 @@ def hana_error(exc):
         return "SAP HANA denied access. Check SELECT and catalog metadata permissions for the reporting user."
     if code in (259, 260):
         return "The SAP HANA table, view or column is unavailable. Refresh the schema and check object permissions."
-    if "certificate" in text and ("does not match" in text or "hostname mismatch" in text):
-        return "SAP HANA certificate hostname mismatch. Use the DNS name on the certificate or configure HANA_TLS_SERVER_NAME to the verified server identity."
-    if "certificate" in text and "expired" in text:
-        return "The SAP HANA server certificate has expired. Ask the server administrator to renew it."
-    if "certificate" in text and ("verify failed" in text or "validation failed" in text):
-        return "SAP HANA certificate verification failed. Configure HANA_TLS_CA_CERTIFICATE with the trusted root/intermediate CA chain and check the certificate hostname and validity."
-    if "certificate" in text or "ssl" in text or "tls" in text:
-        return "SAP HANA TLS validation failed. Check the encryption setting and the server certificate trust chain."
+    from .database_tls import connection_error
+    tls_error = connection_error(text, "SAP HANA")
+    if tls_error:
+        return tls_error
     if "timeout" in text or "timed out" in text:
         return "SAP HANA timed out. Check the host, SQL port, network and query performance."
     if code in (-10709, -10719) or "connect" in text:
@@ -67,9 +63,11 @@ class HanaConnector(SQLServerConnector):
         return ["HANA_" + key.upper() for key in ("host", "port", "user", "password") if not getattr(self.settings, "hana_" + key)]
 
     def _connect(self):
-        from .deployment_security import production
-        if production(self.settings) and not (self.settings.hana_encrypt and self.settings.hana_validate_certificate):
-            raise SourceNotConfigured("Production HANA connections require encryption and certificate validation.")
+        from .database_tls import options as tls_options
+        try:
+            tls = tls_options(self.settings, "saphana")
+        except ValueError as exc:
+            raise SourceNotConfigured(str(exc)) from None
         if self.missing():
             raise SourceNotConfigured("Missing connection settings: " + ", ".join(self.missing()))
         try:
@@ -87,12 +85,12 @@ class HanaConnector(SQLServerConnector):
             driver = dbapi
         options = {"address": self.settings.hana_host, "port": port, "user": self.settings.hana_user,
                    "password": self.settings.hana_password, "autocommit": False,
-                   "encrypt": self.settings.hana_encrypt, "sslValidateCertificate": self.settings.hana_validate_certificate,
+                   "encrypt": tls["encrypt"], "sslValidateCertificate": tls["validate_certificate"],
                    "connectTimeout": self.settings.sqlserver_timeout * 1000,
                    "communicationTimeout": self.settings.sqlserver_timeout * 1000}
-        if self.settings.hana_encrypt:
+        if tls["encrypt"]:
             options["sslCryptoProvider"] = "openssl"
-            if self.settings.hana_validate_certificate:
+            if tls["validate_certificate"]:
                 try:
                     options["sslTrustStore"] = trust_store(self.settings)
                 except (OSError, ValueError):

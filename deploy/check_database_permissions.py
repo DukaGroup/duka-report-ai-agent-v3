@@ -87,7 +87,7 @@ async def run(source_id=None):
                     raise ValueError('Start the upgraded app to finish legacy credential migration first.')
                 updates = {key[len(prefix):].lower(): value or '' for key,value in values.items()
                            if key.startswith(prefix) and key != prefix + 'PRESENT'}
-                for key in ('hana_encrypt','hana_validate_certificate'):
+                for key in ('hana_encrypt','hana_validate_certificate','sqlserver_validate_certificate'):
                     if key in updates:
                         if updates[key] not in ('true','false'):
                             raise ValueError('Invalid TLS option')

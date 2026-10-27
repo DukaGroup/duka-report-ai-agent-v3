@@ -123,7 +123,7 @@ def test_native_preflight_matches_service_environment_and_rejects_insecure_file(
                    'ALLOWED_ORIGINS=https://reports.example.test\nSECURE_COOKIES=true\n')
     env.chmod(0o600)
     process_env = {k: v for k, v in os.environ.items() if k not in ('APP_ENV','ALLOWED_ORIGINS','SECURE_COOKIES')}
-    process_env.update(ENV_FILE=str(env), DATA_DIR=str(data))
+    process_env.update(ENV_FILE=str(env), DATA_DIR=str(data), FREETDSCONF=str(ROOT / "deploy/freetds.conf"))
     command = [str(ROOT / 'work/venv/bin/python'), str(ROOT / 'deploy/preflight.py')]
     assert subprocess.run(command, env=process_env, capture_output=True).returncode == 0
     assert subprocess.run(command + ['--domain','reports.example.test'], env=process_env, capture_output=True).returncode == 0
@@ -270,14 +270,24 @@ def test_operator_privilege_checks_are_read_only_and_conservative(dialect, permi
     assert module.inspect(connector)['status'] == expected
 
 
-def test_production_connectors_refuse_weakened_transport_before_connecting(tmp_path):
-    from app.connectors import SQLServerConnector, SourceNotConfigured
+@pytest.mark.parametrize("kind", ["sqlserver", "saphana"])
+@pytest.mark.parametrize("encrypt", [True, False])
+def test_production_connectors_accept_explicit_transport_choices(tmp_path, kind, encrypt):
+    from app.connectors import SQLServerConnector
     from app.hana import HanaConnector
     settings = replace(production_settings(tmp_path), sqlserver_host='fixture',sqlserver_user='fixture',
-                       sqlserver_password='fixture',sqlserver_encryption='off',hana_encrypt=False)
+                       sqlserver_password='fixture',sqlserver_encryption='require' if encrypt else 'off',
+                       hana_host='fixture',hana_user='fixture',hana_password='fixture',
+                       hana_encrypt=encrypt,hana_validate_certificate=False)
     class Driver:
+        options = None
         def connect(self, **kwargs):
-            raise AssertionError('Insecure connection must not be attempted')
-    for connector in [SQLServerConnector(settings, None, Driver()), HanaConnector(settings, None, Driver())]:
-        with pytest.raises(SourceNotConfigured, match='Production'):
-            connector._connect()
+            self.options = kwargs
+            return self
+    driver = Driver()
+    (HanaConnector if kind == 'saphana' else SQLServerConnector)(settings, None, driver)._connect()
+    if kind == 'saphana':
+        assert driver.options['encrypt'] is encrypt and driver.options['sslValidateCertificate'] is False
+        assert 'sslTrustStore' not in driver.options
+    else:
+        assert driver.options['encryption'] == ('require' if encrypt else 'off')

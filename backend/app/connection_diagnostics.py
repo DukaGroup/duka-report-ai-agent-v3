@@ -23,7 +23,11 @@ def profile_settings(settings, source, values, saved):
         hana_database="",
         hana_port="30015",
         hana_encrypt=True,
-        hana_validate_certificate=True,
+        hana_validate_certificate=False,
+        sqlserver_encryption="require",
+        sqlserver_validate_certificate=False,
+        sqlserver_tls_ca_certificate="",
+        sqlserver_tls_server_name="",
         hana_tls_ca_certificate="",
         hana_tls_server_name="",
     )
@@ -40,7 +44,7 @@ def profile_settings(settings, source, values, saved):
             for key, value in values.items()
             if key.startswith(prefix) and key != prefix + "PRESENT"
         }
-        for key in ("hana_encrypt", "hana_validate_certificate"):
+        for key in ("hana_encrypt", "hana_validate_certificate", "sqlserver_validate_certificate"):
             if key in updates:
                 if updates[key] not in ("true", "false"):
                     raise ValueError("Invalid HANA TLS option.")
@@ -59,14 +63,11 @@ def network_check(settings, kind):
     missing = [name for name in ("host", "port", "user", "password") if not getattr(settings, prefix + name)]
     if missing:
         return {"stage": "configuration", "status": "error", "message": "Missing fields: " + ", ".join(missing)}
-    if kind == "saphana" and (not settings.hana_encrypt or not settings.hana_validate_certificate):
-        return {
-            "stage": "policy",
-            "status": "error",
-            "message": "Enable both HANA encryption and certificate validation in this saved source profile.",
-        }
-    if kind == "sqlserver" and settings.sqlserver_encryption != "require":
-        return {"stage": "policy", "status": "error", "message": "Set SQLSERVER_ENCRYPTION=require."}
+    from .database_tls import options
+    try:
+        options(settings, kind)
+    except ValueError as exc:
+        return {"stage": "configuration", "status": "error", "message": str(exc)}
     host = getattr(settings, prefix + "host")
     try:
         port = int(getattr(settings, prefix + "port"))

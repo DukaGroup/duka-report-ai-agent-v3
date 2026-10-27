@@ -27,11 +27,14 @@ def settings(**kwargs):
     )
 
 
-def test_hana_policy_is_checked_before_any_network_or_login(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: pytest.fail("No network before policy check"))
+def test_optional_certificate_choices_reach_network_checks_in_production(monkeypatch):
+    def dns(*args, **kwargs):
+        raise socket.gaierror("fixture")
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
     for field in ("hana_encrypt", "hana_validate_certificate"):
-        result = network_check(replace(settings(), **{field: False}), "saphana")
-        assert result["stage"] == "policy" and "Enable both" in result["message"]
+        result = network_check(replace(settings(production=True), **{field: False}), "saphana")
+        assert result["stage"] == "dns"
+    assert network_check(settings(production=True, sqlserver_encryption="off"), "sqlserver")["stage"] == "dns"
 
 
 def test_dns_tcp_success_and_timeout_do_not_expose_settings(monkeypatch):
@@ -84,9 +87,14 @@ def test_saved_hana_profile_preserves_false_values_and_does_not_borrow_generic_c
         profile_settings(settings(), source, {}, {"ciphertext": "env"})
 
 
-async def test_login_check_reports_production_policy_without_raw_driver_errors():
+async def test_login_check_reports_endpoint_tls_requirements_without_raw_driver_errors(monkeypatch):
+    from app.connectors import DatabaseUnavailable
+    from app.hana import HanaConnector
+    async def failed(self):
+        raise DatabaseUnavailable("SAP HANA requires TLS encryption. Enable TLS for this source and test again.")
+    monkeypatch.setattr(HanaConnector, "check", failed)
     result = await check_login(settings(production=True, hana_encrypt=False), "saphana")
-    assert result["status"] == "error" and "Production HANA" in result["message"]
+    assert result["status"] == "error" and "requires TLS encryption" in result["message"]
     assert "private-" not in str(result)
 
 
@@ -97,7 +105,7 @@ def test_native_diagnostic_command_reads_profiles_without_changing_grants_or_cre
         json={
             "name": "HANA fixture",
             "kind": "saphana",
-            "HANA_HOST": "private-hana",
+            "HANA_HOST": "database-fixture.invalid",
             "HANA_PORT": 30015,
             "HANA_USER": "private-login",
             "HANA_PASSWORD": "private-password",
@@ -118,6 +126,6 @@ def test_native_diagnostic_command_reads_profiles_without_changing_grants_or_cre
         timeout=15,
     )
     assert result.returncode == 1, result.stderr
-    assert json.loads(result.stdout)["sources"][0]["checks"][0]["stage"] == "policy"
+    assert json.loads(result.stdout)["sources"][0]["checks"][0]["stage"] == "dns"
     assert "private-" not in result.stdout and "private-" not in result.stderr
     assert before == {table: db.all("SELECT * FROM " + table) for table in tables}

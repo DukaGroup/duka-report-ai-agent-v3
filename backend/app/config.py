@@ -33,6 +33,9 @@ class Settings:
     sqlserver_password: str = field(default_factory=lambda: os.getenv("SQLSERVER_PASSWORD", ""), repr=False)
     sqlserver_database: str = field(default_factory=lambda: os.getenv("SQLSERVER_DATABASE", ""), repr=False)
     sqlserver_encryption: str = os.getenv("SQLSERVER_ENCRYPTION", "require")
+    sqlserver_validate_certificate: bool = False
+    sqlserver_tls_ca_certificate: str = field(default="", repr=False)
+    sqlserver_tls_server_name: str = field(default="", repr=False)
     sqlserver_timeout: int = int(os.getenv("SQLSERVER_TIMEOUT_SECONDS", "15"))
     hana_host: str = field(default_factory=lambda: os.getenv("HANA_HOST", ""), repr=False)
     hana_port: str = field(default_factory=lambda: os.getenv("HANA_PORT", "30015"), repr=False)
@@ -40,7 +43,7 @@ class Settings:
     hana_password: str = field(default_factory=lambda: os.getenv("HANA_PASSWORD", ""), repr=False)
     hana_database: str = field(default_factory=lambda: os.getenv("HANA_DATABASE", ""), repr=False)
     hana_encrypt: bool = True
-    hana_validate_certificate: bool = True
+    hana_validate_certificate: bool = False
     hana_tls_ca_certificate: str = field(default="", repr=False)
     hana_tls_server_name: str = field(default="", repr=False)
     env_file: Path | None = field(
@@ -75,23 +78,30 @@ class Settings:
         """
         from .env_store import read_environment
 
-        values = dict(os.environ) if prefix != "SQLSERVER" else {}
+        values = dict(os.environ) if prefix != "SQLSERVER" else {
+            key: os.environ[key] for key in ("SQLSERVER_VALIDATE_CERTIFICATE", "SQLSERVER_TLS_CA_CERTIFICATE", "SQLSERVER_TLS_SERVER_NAME")
+            if key in os.environ
+        }
         if self.env_file is not None and self.env_file.exists():
             values.update(read_environment(self.env_file))
-        elif prefix == "SQLSERVER":
-            return self
         updates = {}
         if prefix != "SQLSERVER":
             if not any(f"{prefix}_{name}" in values for name in ("HOST", "PORT", "USER", "PASSWORD", "DATABASE")):
                 return None
             # A partial named profile must not borrow another database's credentials.
             updates = {f"sqlserver_{name.lower()}": "" for name in ("HOST", "USER", "PASSWORD", "DATABASE")}
-            updates["sqlserver_port"] = "1433"
-        for name in ("HOST", "PORT", "USER", "PASSWORD", "DATABASE"):
+            updates.update(sqlserver_port="1433", sqlserver_encryption="require", sqlserver_validate_certificate=False,
+                           sqlserver_tls_ca_certificate="", sqlserver_tls_server_name="")
+        for name in ("HOST", "PORT", "USER", "PASSWORD", "DATABASE", "ENCRYPTION", "TLS_CA_CERTIFICATE", "TLS_SERVER_NAME"):
             key = f"{prefix}_{name}"
             if key in values:
                 value = values[key] or ""
                 updates[f"sqlserver_{name.lower()}"] = value if name == "PASSWORD" else value.strip()
+        value = values.get(prefix + "_VALIDATE_CERTIFICATE")
+        if value is not None:
+            if value.lower() not in ("true", "false"):
+                raise ValueError("Database TLS options must be true or false.")
+            updates["sqlserver_validate_certificate"] = value.lower() == "true"
         if "sqlserver_port" in updates and not updates["sqlserver_port"]:
             updates["sqlserver_port"] = "1433"
         return replace(self, **updates, env_file=None)

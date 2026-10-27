@@ -117,7 +117,11 @@ def test_connection_check_uses_saved_settings_and_redacts_driver_errors(client, 
     assert response.status_code == 200
     assert response.json()["status"] == "error" and "authentication failed" in response.json()["last_error"]
     assert "private-" not in response.text
-    assert driver.options["server"] == "private-host" and driver.options["password"] == "private-password"
+    assert driver.options["server"].startswith("duka_") and driver.options["password"] == "private-password"
+    import configparser, os
+    aliases = configparser.ConfigParser()
+    aliases.read(os.environ["FREETDSCONF"])
+    assert aliases[driver.options["server"]]["host"] == "private-host"
 
 
 def test_subscription_process_never_receives_database_environment(client, admin, monkeypatch):

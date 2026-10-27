@@ -49,6 +49,7 @@ export function SourceConnectionForm({
   const supported = hana || kind === "sqlserver";
   const changingKind = !!source && source.kind !== kind;
   const keepFields = !!source;
+  const tls = changingKind ? undefined : source?.tls;
   function field(name: string) {
     const port = name === "PORT",
       password = name === "PASSWORD";
@@ -176,26 +177,30 @@ export function SourceConnectionForm({
                   },
                 )}
               </dl>
-              {hana && (
+              {supported && (
                 <div
                   className="source-tls-summary"
                   aria-label="Siguria e lidhjes"
                 >
                   <span>
                     <ShieldCheck size={16} />
-                    {source?.tls?.encrypt === false
-                      ? "TLS i çaktivizuar"
-                      : "TLS i aktivizuar"}
+                    {tls?.encryption === "request"
+                      ? "TLS kur ofrohet nga serveri"
+                      : tls?.encrypt === false
+                        ? "TLS i çaktivizuar"
+                        : "TLS i aktivizuar"}
                   </span>
                   <span>
-                    {source?.tls?.validate_certificate === false
-                      ? "Pa verifikim certifikate"
-                      : "Certifikata verifikohet"}
+                    {tls?.validate_certificate
+                      ? "Certifikata verifikohet"
+                      : "Identiteti i serverit nuk verifikohet"}
                   </span>
                   <span>
-                    {source?.tls?.custom_ca ? "CA e ruajtur" : "CA e sistemit"}
+                    {tls?.custom_ca
+                      ? "Certifikata e ruajtur"
+                      : "Pa certifikatë të ngarkuar"}
                   </span>
-                  {source?.tls?.server_name_configured && (
+                  {tls?.server_name_configured && (
                     <span>Emri DNS i ruajtur</span>
                   )}
                 </div>
@@ -266,7 +271,7 @@ export function SourceConnectionForm({
                       : "Bosh për zbulim automatik në një lidhje të re."}
                 </p>
               </div>
-              {hana && (
+              {supported && (
                 <div className="source-security-section">
                   <div className="source-section-heading">
                     <ShieldCheck size={17} />
@@ -275,33 +280,51 @@ export function SourceConnectionForm({
                   <div className="source-fields-grid">
                     <label>
                       Kriptimi TLS
-                      <Select
-                        name="HANA_ENCRYPT"
-                        aria-label="Kriptimi TLS"
-                        defaultValue={
-                          source?.tls?.encrypt === false ? "false" : "true"
-                        }
-                      >
-                        <option value="true">I aktivizuar</option>
-                        <option value="false">I çaktivizuar</option>
-                      </Select>
+                      {hana ? (
+                        <Select
+                          name="HANA_ENCRYPT"
+                          aria-label="Kriptimi TLS"
+                          defaultValue={
+                            tls?.encrypt === false ? "false" : "true"
+                          }
+                        >
+                          <option value="true">I aktivizuar</option>
+                          <option value="false">I çaktivizuar</option>
+                        </Select>
+                      ) : (
+                        <Select
+                          name="SQLSERVER_ENCRYPTION"
+                          aria-label="Kriptimi TLS"
+                          defaultValue={tls?.encryption || "require"}
+                        >
+                          <option value="require">I aktivizuar</option>
+                          <option value="request">
+                            Kur ofrohet nga serveri
+                          </option>
+                          <option value="off">I çaktivizuar</option>
+                        </Select>
+                      )}
                     </label>
                     <label>
                       Verifikimi i certifikatës
                       <Select
-                        name="HANA_VALIDATE_CERTIFICATE"
+                        name={prefix + "_VALIDATE_CERTIFICATE"}
                         aria-label="Verifikimi i certifikatës"
                         defaultValue={
-                          source?.tls?.validate_certificate === false
-                            ? "false"
-                            : "true"
+                          tls?.validate_certificate ? "true" : "false"
                         }
                       >
-                        <option value="true">Verifiko certifikatën</option>
                         <option value="false">Pa verifikim</option>
+                        <option value="true">Verifiko certifikatën</option>
                       </Select>
                     </label>
                   </div>
+                  <p className="source-form-help">
+                    Certifikata është opsionale. Pa verifikim, identiteti i
+                    serverit nuk kontrollohet. Nëse çaktivizoni TLS, të dhënat
+                    mund të kalojnë pa kriptim. Një certifikatë e besuar e
+                    ngarkuar aktivizon gjithmonë TLS dhe verifikimin.
+                  </p>
                   <details className="source-certificate-options">
                     <summary>
                       Certifikata CA dhe emri DNS <span>Opsionale</span>
@@ -310,34 +333,36 @@ export function SourceConnectionForm({
                       <label>
                         Certifikata CA e besuar (PEM)
                         <textarea
-                          name="HANA_TLS_CA_CERTIFICATE"
+                          name={prefix + "_TLS_CA_CERTIFICATE"}
                           rows={4}
                           maxLength={65536}
                           autoComplete="off"
                           spellCheck={false}
                           placeholder={
-                            source?.tls?.custom_ca
+                            tls?.custom_ca
                               ? "Certifikata është ruajtur. Bosh = pa ndryshim."
-                              : "-----BEGIN CERTIFICATE-----\nCertifikata nga administratori SAP HANA\n-----END CERTIFICATE-----"
+                              : "-----BEGIN CERTIFICATE-----\nCertifikata nga administratori i databazës\n-----END CERTIFICATE-----"
                           }
                         />
                       </label>
                       <label>
                         Emri DNS në certifikatën e serverit
                         <input
-                          name="HANA_TLS_SERVER_NAME"
+                          name={prefix + "_TLS_SERVER_NAME"}
                           maxLength={253}
                           autoComplete="off"
                           placeholder={
-                            source?.tls?.server_name_configured
+                            tls?.server_name_configured
                               ? "Emri është ruajtur. Bosh = pa ndryshim."
-                              : "P.sh. hana.company.internal"
+                              : "P.sh. database.company.internal"
                           }
                         />
                       </label>
                       <p className="source-form-help">
-                        Merren nga administratori SAP HANA. Mos vendosni çelësa
-                        privatë.
+                        Përdorni certifikatën publike të besuar nga
+                        administratori i databazës. Mos vendosni çelësa privatë.
+                        Për CA-të që besohen nga sistemi, mjafton të zgjidhni
+                        verifikimin pa ngarkuar certifikatë.
                       </p>
                     </div>
                   </details>

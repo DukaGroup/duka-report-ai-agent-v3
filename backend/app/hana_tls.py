@@ -19,13 +19,14 @@ def validate_ca(value):
     return value
 
 
-def trust_store(settings):
+def trust_store(settings, kind="hana"):
+    custom = getattr(settings, kind + "_tls_ca_certificate")
     system = ssl.get_default_verify_paths().cafile
-    if not settings.hana_tls_ca_certificate:
+    if not custom:
         if not system:
             raise OSError("System CA bundle unavailable")
         return system
-    certificate = validate_ca(settings.hana_tls_ca_certificate)
+    certificate = validate_ca(custom)
     bundle = (Path(system).read_bytes() if system else b"") + b"\n" + certificate.encode() + b"\n"
     directory = settings.data_dir / "tls"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)

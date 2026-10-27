@@ -106,6 +106,8 @@ export interface Source {
   credential_storage?: string;
   env_prefix?: string;
   tls?: {
+    encryption?: "require" | "request" | "off";
+    warnings?: string[];
     encrypt: boolean;
     validate_certificate: boolean;
     custom_ca: boolean;

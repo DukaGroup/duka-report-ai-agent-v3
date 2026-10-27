@@ -22,6 +22,7 @@ async def main(source_id=None):
     from app.db import Database
     from app.env_store import read_environment
     from app.connection_diagnostics import profile_settings, network_check, check_login
+    from app.database_tls import warnings as tls_warnings
 
     settings = Settings(env_file=path)
 
@@ -52,6 +53,7 @@ async def main(source_id=None):
                 values,
                 db.one("SELECT ciphertext FROM source_credentials WHERE source_id=?", (source["id"],)),
             )
+            result["tls_warnings"] = tls_warnings(configured, source["kind"])
             network = network_check(configured, source["kind"])
             result["checks"].append(network)
             if network["status"] == "ok":

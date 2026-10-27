@@ -124,6 +124,10 @@ class NewSource(InputModel):
     SQLSERVER_USER: str | None = Field(default=None, min_length=1, max_length=255, repr=False)
     SQLSERVER_PASSWORD: SecretStr | None = Field(default=None, max_length=1024, repr=False)
     SQLSERVER_DATABASE: str | None = Field(default=None, max_length=128, repr=False)
+    SQLSERVER_ENCRYPTION: Literal["require", "request", "off"] | None = None
+    SQLSERVER_VALIDATE_CERTIFICATE: bool | None = None
+    SQLSERVER_TLS_CA_CERTIFICATE: SecretStr | None = Field(default=None, max_length=65536, repr=False)
+    SQLSERVER_TLS_SERVER_NAME: str | None = Field(default=None, max_length=253, repr=False)
     HANA_HOST: str | None = Field(default=None, min_length=1, max_length=255, repr=False)
     HANA_PORT: int | None = Field(default=None, ge=1, le=65535, repr=False)
     HANA_USER: str | None = Field(default=None, min_length=1, max_length=255, repr=False)
@@ -134,7 +138,7 @@ class NewSource(InputModel):
     HANA_TLS_CA_CERTIFICATE: SecretStr | None = Field(default=None, max_length=65536, repr=False)
     HANA_TLS_SERVER_NAME: str | None = Field(default=None, max_length=253, repr=False)
 
-    @field_validator("HANA_TLS_CA_CERTIFICATE")
+    @field_validator("HANA_TLS_CA_CERTIFICATE", "SQLSERVER_TLS_CA_CERTIFICATE")
     @classmethod
     def hana_ca_certificate(cls, value):
         from .hana_tls import validate_ca
@@ -142,11 +146,11 @@ class NewSource(InputModel):
             validate_ca(value.get_secret_value())
         return value
 
-    @field_validator("HANA_TLS_SERVER_NAME")
+    @field_validator("HANA_TLS_SERVER_NAME", "SQLSERVER_TLS_SERVER_NAME")
     @classmethod
     def hana_server_name(cls, value):
         if value and not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?", value):
-            raise ValueError("Use the DNS server name from the HANA certificate, without a scheme, port or path.")
+            raise ValueError("Use the DNS server name from the database certificate, without a scheme, port or path.")
         return value
 
     @field_validator("SQLSERVER_HOST", "SQLSERVER_USER", "HANA_HOST", "HANA_USER")
@@ -179,15 +183,14 @@ class NewSource(InputModel):
             if values.get(prefix + "_DATABASE"):
                 raise ValueError("Choose automatic discovery or a database name, not both.")
             values[prefix + "_DATABASE"] = ""
-        if prefix == "HANA":
-            for name in ("TLS_CA_CERTIFICATE", "TLS_SERVER_NAME"):
-                if "HANA_" + name in self.model_fields_set:
-                    value = getattr(self, "HANA_" + name)
-                    values["HANA_" + name] = value.get_secret_value() if isinstance(value, SecretStr) else value or ""
-            for name in ("ENCRYPT", "VALIDATE_CERTIFICATE"):
-                value = getattr(self, "HANA_" + name)
-                if value is not None:
-                    values["HANA_" + name] = str(value).lower()
+        for name in ("TLS_CA_CERTIFICATE", "TLS_SERVER_NAME"):
+            if prefix + "_" + name in self.model_fields_set:
+                value = getattr(self, prefix + "_" + name)
+                values[prefix + "_" + name] = value.get_secret_value() if isinstance(value, SecretStr) else value or ""
+        for name in (("ENCRYPT", "VALIDATE_CERTIFICATE") if prefix == "HANA" else ("ENCRYPTION", "VALIDATE_CERTIFICATE")):
+            value = getattr(self, prefix + "_" + name)
+            if value is not None:
+                values[prefix + "_" + name] = str(value).lower()
         return values
 
 

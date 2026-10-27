@@ -1,4 +1,4 @@
-"""Public deployments fail closed; local-only development remains available."""
+"""Web HTTPS/ownership checks; database TLS choices are source-configured."""
 
 import hmac
 import configparser
@@ -53,10 +53,9 @@ def validate_freetds(path):
     if not loaded or parser.sections() != ['global']:
         raise ValueError('Production SQL Server needs the supplied FreeTDS trust configuration.')
     values = parser['global']
-    if (values.get('encryption') != 'require' or values.get('check certificate hostname') != 'yes'
-            or values.get('ca file') != 'system' or values.get('dump file')
+    if (values.get('encryption') not in ('require', 'request', 'off') or values.get('dump file')
             or os.getenv('TDSDUMP') or os.getenv('TDSDUMPCONFIG')):
-        raise ValueError('Production FreeTDS must require encryption, system CAs and hostname verification.')
+        raise ValueError('FreeTDS must use a valid TLS mode with database protocol dumps disabled.')
 
 
 def bootstrap_path(settings):

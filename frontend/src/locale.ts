@@ -57,12 +57,47 @@ const labels: Record<string, string> = {
 };
 export const label = (value: string) => labels[value] || value;
 const errors: Record<string, string> = {
+  "Database TLS is disabled. The connection may expose credentials and data on the network.":
+    "TLS i databazës është i çaktivizuar. Kredencialet dhe të dhënat mund të ekspozohen në rrjet.",
+  "Database TLS is optional. The connection may be unencrypted if the server does not support TLS.":
+    "TLS është opsional. Lidhja mund të jetë pa kriptim nëse serveri nuk mbështet TLS.",
+  "Database certificate verification is disabled. The server identity is not verified.":
+    "Verifikimi i certifikatës është i çaktivizuar. Identiteti i serverit nuk verifikohet.",
+  "SQL Server TLS configuration is invalid or unavailable. Check the database host, certificate and backend storage permissions.":
+    "Konfigurimi TLS i SQL Server është i pavlefshëm ose i paarritshëm. Kontrolloni adresën, certifikatën dhe lejet e ruajtjes në backend.",
+  "SAP HANA requires a client certificate. Ask the DBA for its authentication requirements; client-certificate login is not supported by this connector. A trusted CA certificate alone is not a client certificate.":
+    "SAP HANA kërkon certifikatë klienti. Kërkoni udhëzimet e autentikimit nga administratori; ky konektor nuk mbështet hyrjen me certifikatë klienti. Vetëm certifikata CA nuk mjafton.",
+  "SAP HANA requires TLS encryption. Enable TLS for this source and test again.":
+    "SAP HANA kërkon kriptim TLS. Aktivizoni TLS te kjo lidhje dhe provoni përsëri.",
+  "SAP HANA certificate hostname mismatch. Use the DNS name on the certificate or configure the verified TLS server name.":
+    "Emri i serverit SAP HANA nuk përputhet me certifikatën. Përdorni emrin DNS të certifikatës ose konfiguroni emrin TLS të verifikuar.",
+  "The SAP HANA server certificate has expired. Ask the DBA to renew it.":
+    "Certifikata e serverit SAP HANA ka skaduar. Kërkoni rinovimin nga administratori.",
+  "SAP HANA certificate verification failed. Add the trusted public CA certificate for this source, or configure system trust. Check its DNS name and validity.":
+    "Verifikimi i certifikatës SAP HANA dështoi. Vendosni certifikatën publike CA të besuar te kjo lidhje ose konfiguroni besimin e sistemit. Kontrolloni emrin DNS dhe vlefshmërinë.",
+  "SAP HANA TLS negotiation failed. Check this source's TLS mode with the DBA; add a trusted certificate if verification is enabled.":
+    "Negocimi TLS me SAP HANA dështoi. Konfirmoni mënyrën TLS me administratorin; vendosni certifikatën e besuar nëse verifikimi është aktiv.",
+  "SQL Server requires a client certificate. Ask the DBA for its authentication requirements; client-certificate login is not supported by this connector. A trusted CA certificate alone is not a client certificate.":
+    "SQL Server kërkon certifikatë klienti. Kërkoni udhëzimet e autentikimit nga administratori; ky konektor nuk mbështet hyrjen me certifikatë klienti. Vetëm certifikata CA nuk mjafton.",
+  "SQL Server requires TLS encryption. Enable TLS for this source and test again.":
+    "SQL Server kërkon kriptim TLS. Aktivizoni TLS te kjo lidhje dhe provoni përsëri.",
+  "SQL Server certificate hostname mismatch. Use the DNS name on the certificate or configure the verified TLS server name.":
+    "Emri i serverit SQL Server nuk përputhet me certifikatën. Përdorni emrin DNS të certifikatës ose konfiguroni emrin TLS të verifikuar.",
+  "The SQL Server server certificate has expired. Ask the DBA to renew it.":
+    "Certifikata e serverit SQL Server ka skaduar. Kërkoni rinovimin nga administratori.",
+  "SQL Server certificate verification failed. Add the trusted public CA certificate for this source, or configure system trust. Check its DNS name and validity.":
+    "Verifikimi i certifikatës SQL Server dështoi. Vendosni certifikatën publike CA të besuar te kjo lidhje ose konfiguroni besimin e sistemit. Kontrolloni emrin DNS dhe vlefshmërinë.",
+  "SQL Server TLS negotiation failed. Check this source's TLS mode with the DBA; add a trusted certificate if verification is enabled.":
+    "Negocimi TLS me SQL Server dështoi. Konfirmoni mënyrën TLS me administratorin; vendosni certifikatën e besuar nëse verifikimi është aktiv.",
+
   "Production HANA connections require encryption and certificate validation.":
-    "Në prodhim, aktivizoni Kriptimin TLS dhe Verifikimin e certifikatës te kjo lidhje SAP HANA. Nëse CA nuk njihet, vendosni certifikatat CA të besuara të databazës.",
+    "Ky është një kufizim i versionit të vjetër. Përditësoni backend-in, pastaj konfiguroni Kriptimin TLS dhe Verifikimin e certifikatës te lidhja SAP HANA.",
   "Backend started.": "Backend-i u nis.",
   "Backend stopped.": "Backend-i u ndal.",
-  "Checking the saved database connection.": "Po kontrollohet lidhja e ruajtur me databazën.",
-  "Database connection check succeeded.": "Kontrolli i lidhjes me databazën përfundoi me sukses.",
+  "Checking the saved database connection.":
+    "Po kontrollohet lidhja e ruajtur me databazën.",
+  "Database connection check succeeded.":
+    "Kontrolli i lidhjes me databazën përfundoi me sukses.",
   "An operation failed. Check its status code and the relevant connection settings.":
     "Një veprim dështoi. Kontrolloni kodin e gabimit dhe konfigurimin e lidhjes.",
   "The current password is incorrect.": "Fjalëkalimi aktual është i pasaktë.",

@@ -14,8 +14,9 @@ async function moduleUrl(file,imports={}){
 }
 const {SourceConnectionForm}=await import(await moduleUrl('SourceConnectionForm.tsx',{'./Select':await moduleUrl('Select.tsx')}));
 const {errorMessage}=await import(await moduleUrl('locale.ts'));
-test('production HANA policy errors explain the saved TLS settings that must be enabled',()=>{
+test('old HANA policy errors identify an outdated backend',()=>{
  const message=errorMessage('Production HANA connections require encryption and certificate validation.');
+ assert.match(message,/Përditësoni backend/);
  assert.match(message,/Kriptimin TLS/);
  assert.match(message,/Verifikimin e certifikatës/);
  assert.doesNotMatch(message,/Production HANA/);
@@ -54,6 +55,20 @@ test('new connections require credentials, default to their correct port and use
   assert.equal(input(html,prefix+'_DATABASE'),undefined);assert.doesNotMatch(html,/<select\b/);
  }
 });
+test('both database forms offer optional certificates and unverified TLS by default',()=>{
+ for(const [kind,prefix] of [['sqlserver','SQLSERVER'],['saphana','HANA']]){
+  const html=render({kind});
+  assert.match(input(html,prefix+'_VALIDATE_CERTIFICATE'),/value="false"/);
+  assert.match(html,new RegExp(`<textarea[^>]*name="${prefix}_TLS_CA_CERTIFICATE"`));
+  assert.ok(input(html,prefix+'_TLS_SERVER_NAME'));
+  assert.match(html,/Certifikata është opsionale/);
+  assert.match(html,/identiteti i serverit nuk kontrollohet/);
+  assert.match(html,/aktivizon gjithmonë TLS dhe verifikimin/);
+ }
+ const sql=render({kind:'sqlserver'});
+ assert.match(input(sql,'SQLSERVER_ENCRYPTION'),/value="require"/);
+});
+
 test('changing database type requires its new port and never exposes fields for the old engine',()=>{
  const html=render({source:source('sqlserver'),kind:'saphana'});
  assert.match(input(html,'HANA_PORT'),/required=""/);assert.doesNotMatch(input(html,'HANA_HOST'),/required=""/);

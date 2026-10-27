@@ -23,7 +23,7 @@ def test_logs_capture_source_errors_without_credentials(client, admin):
     assert client.cookies.get("duka_session") not in json.dumps(result)
 
 
-def test_hana_production_policy_failure_is_logged_without_connecting(client, admin):
+def test_hana_production_tls_requirement_and_transport_warning_are_logged(client, admin):
     source = client.post(
         "/api/admin/sources",
         headers=HEADERS,
@@ -45,14 +45,17 @@ def test_hana_production_policy_failure_is_logged_without_connecting(client, adm
 
     class NoNetwork:
         def connect(self, **kwargs):
-            raise AssertionError("Production policy must reject before any database connection.")
+            assert kwargs["encrypt"] is False and kwargs["sslValidateCertificate"] is False
+            raise RuntimeError(-10709, "TLS is required private-password private-hana")
 
     connector.driver = NoNetwork()
     response = client.post(f"/api/admin/sources/{source['id']}/check", headers=HEADERS)
     assert response.status_code == 200
-    assert "Production HANA" in response.json()["last_error"]
+    assert "requires TLS encryption" in response.json()["last_error"]
     events = client.get("/api/admin/system-logs?component=database").json()["events"]
-    assert any("Production HANA" in e["message"] for e in events)
+    assert any("requires TLS encryption" in e["message"] for e in events)
+    assert any(e["level"] == "warning" and e["event"] == "connection.tls.warning" for e in events)
+    assert "private-" not in json.dumps(events)
 
 
 def test_missing_saved_profile_is_logged_as_configuration_failure(client, admin):

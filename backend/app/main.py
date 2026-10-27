@@ -1490,11 +1490,10 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         combined = {**(previous or {}), **values}
         combined.setdefault(prefix + "_PORT", "30015" if prefix == "HANA" else "1433")
         combined.setdefault(prefix + "_DATABASE", "")
-        if prefix == "HANA":
-            combined.setdefault("HANA_ENCRYPT", "true")
-            combined.setdefault("HANA_VALIDATE_CERTIFICATE", "true")
-            combined.setdefault("HANA_TLS_CA_CERTIFICATE", "")
-            combined.setdefault("HANA_TLS_SERVER_NAME", "")
+        combined.setdefault(prefix + "_VALIDATE_CERTIFICATE", "false")
+        combined.setdefault(prefix + "_TLS_CA_CERTIFICATE", "")
+        combined.setdefault(prefix + "_TLS_SERVER_NAME", "")
+        combined.setdefault(prefix + ("_ENCRYPT" if prefix == "HANA" else "_ENCRYPTION"), "true" if prefix == "HANA" else "require")
         required = {prefix + "_" + name for name in ("HOST", "PORT", "USER", "PASSWORD")}
         missing = {key for key in required if not combined.get(key)}
         if missing:

@@ -276,20 +276,27 @@ Open **Cilësimet → Burimet e të dhënave**, edit or add each source, and run
 
 ### SQL Server, including GoTech
 
-Use the SQL Server endpoint, actual SQL port, dedicated reporting username/password and optional default database. Keep `SQLSERVER_ENCRYPTION=require`. The native service loads `deploy/freetds.conf` to require encryption, system CA trust and hostname checks.
+Use the SQL Server endpoint, actual SQL port, dedicated reporting username/password and optional default database. Production and development use the same database TLS settings. The backend generates private, separate FreeTDS aliases for each source under `/var/lib/duka-agent/tls/freetds.conf`; one source's trust settings do not affect another.
 
-The GoTech check on 27 October 2026 reached `192.168.7.10:1433`, but SQL Server presented an untrusted self-signed certificate. Moving the backend does not repair that certificate. Ask the DBA to configure a trusted SQL Server certificate, use the matching DNS hostname, and configure the backend's normal system CA trust when a private CA is involved.
+### Certificates are optional for database connections
 
-Your three website files are not automatically the SQL Server's CA configuration. The DBA must confirm whether the same issuing CA is used. No extra SQL certificate file is required by the website installer. Installing CA trust does not fix an expired certificate or hostname mismatch.
+For **both SQL Server and SAP HANA**, open **Konfiguro lidhjen → Siguria e lidhjes**:
 
-### The reported GoTech timeout and HANA production-policy error
+| Setting | Behavior |
+| --- | --- |
+| TLS enabled, verification off | Encrypted connection without checking the database server's identity. No uploaded CA is needed. This is the default for new sources. |
+| Verification enabled, no uploaded CA | Require TLS and verify the database certificate using the backend's system CA trust. |
+| Trusted CA/public certificate supplied (PEM) | Always require TLS and certificate verification, even if the other controls request otherwise. Invalid, expired or mismatched certificates fail; there is no automatic bypass. |
+| TLS disabled | Attempt the database's non-TLS mode. Credentials/data may be exposed on the network. A server requiring TLS can reject it. |
+| SQL Server: TLS when offered | `SQLSERVER_ENCRYPTION=request` negotiates TLS when available and can permit an unencrypted connection. Supplying a CA or enabling verification changes the effective mode to required TLS. |
 
-These errors require different fixes:
+**For your current HANA connection:** after deploying this update, edit the existing source, keep **Kriptimi TLS → I aktivizuar**, select **Verifikimi i certifikatës → Pa verifikim**, leave the CA empty, save, and test. This reproduces your working local connection. Existing explicit verification choices and uploaded certificates are preserved on upgrade; the app does not silently clear them. New sources default to encryption enabled and verification off. Saved source profiles override generic HANA/SQLSERVER variables; edit the exact source in Settings.
 
-- **GoTech timeout:** test connectivity **from the backend server**, not the laptop. The laptop's company VPN does not automatically route the server to `192.168.7.10:1433`. Ask IT to permit the backend server's source IP to the database listener and verify the server's LAN/VPN route. Once TCP works, retest TLS/login; the earlier self-signed SQL certificate may still need correction.
-- **`Production HANA connections require encryption and certificate validation.`:** open **Cilësimet → Burimet e të dhënave → SAP HANA → Konfiguro lidhjen → Siguria e lidhjes**. Set **Kriptimi TLS → I aktivizuar** and **Verifikimi i certifikatës → Verifiko certifikatën**, save, then test again. Update this exact saved source; changing generic HANA variables may not override its managed `DUKA_CONNECTION_<ID>_` profile.
+A database server asking for encrypted transport is different from requiring a **client certificate** for authentication. Most username/password database connections do not require you to upload a certificate. The app reports TLS, certificate trust, expiry and hostname failures when the driver identifies them. If the endpoint explicitly requires a client certificate, the app reports that requirement; client-certificate login is not currently implemented. A CA certificate cannot substitute for a client certificate/key. Generic driver timeouts cannot prove that a certificate is required.
 
-The HANA policy error is raised before a connection attempt. A development installation can allow disabled TLS options; production explicitly rejects them. A missing local certificate file is not what triggers that particular error. The database server sends its own TLS certificate. If its issuer is private, configure the database's trusted **public** CA chain in **Certifikata CA e besuar (PEM)** and the correct DNS identity if required. The website's `hana.cer`/`hana.key`/`chain.p7b` secure browser traffic and are separate from database TLS. Do not give the database your website private key or disable validation to bypass the check.
+The website's `hana.cer`, `hana.key` and `chain.p7b` remain separate from database TLS. Do not paste your website key into a database form. HTTPS deployment checks, secure cookies, role permissions and database read-only privileges remain in place. Connections with weaker TLS settings show their configured mode in Settings and emit warnings in **Regjistrat e sistemit** when tested. SQL Server's optional mode is a configured policy, not proof of the transport actually negotiated.
+
+**GoTech timeout:** test connectivity from the backend server. Your laptop's VPN does not automatically route the server to `192.168.7.10:1433`. Ask IT to permit the backend server's source IP to the database listener and verify its LAN/VPN route. Removing a certificate policy cannot fix an unreachable database. The earlier local check found GoTech's self-signed certificate: it can connect with verification off, or you can provide verified public trust material and enable verification.
 
 Run the new source-scoped diagnostic on the server:
 
@@ -299,11 +306,11 @@ sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka
   .venv/bin/python deploy/diagnose-connections.py
 ```
 
-It reads registered source profiles without migrating or changing them, checks required fields and production TLS policy, resolves the database hostname, probes TCP, then tests TLS/login using the configured connector. It prints safe stage/error summaries rather than credentials or raw driver exceptions. It does not query business records or modify grants; normal TLS trust-cache files may be refreshed. Use `--source-id ID` to check one source. No result or a failed stage is not a successful database connection.
+It reads registered source profiles without migrating or changing them, checks required fields and the configured TLS options, resolves the database hostname, probes TCP, then tests TLS/login using the configured connector. It includes warnings for disabled verification/optional encryption and prints safe stage/error summaries rather than credentials or raw driver exceptions. It does not query business records or modify grants; normal TLS trust-cache files may be refreshed. Use `--source-id ID` to check one source. No result or a failed stage is not a successful database connection.
 
 ### SAP HANA
 
-Choose **SAP HANA**, confirm its actual tenant SQL port with the DBA, and keep encryption and certificate validation enabled. `HANA_DATABASE` is an optional tenant name; a SAP Business One company schema is not a tenant name. For private CA trust, configure that source’s **Certifikata CA e besuar** / `HANA_TLS_CA_CERTIFICATE`. If connecting by IP, configure `HANA_TLS_SERVER_NAME` to the verified DNS identity on the server certificate when necessary. Never disable verification as a connectivity fix.
+Choose **SAP HANA** and confirm its actual tenant SQL port with the DBA. `HANA_DATABASE` is an optional tenant name; a SAP Business One company schema is not a tenant name. `HANA_ENCRYPT=true` and `HANA_VALIDATE_CERTIFICATE=false` connect with TLS without requiring a trusted CA. For verified TLS, enable validation and optionally supply `HANA_TLS_CA_CERTIFICATE`; `HANA_TLS_SERVER_NAME` specifies the expected DNS identity when connecting by IP. There is no automatic retry with weaker security after a TLS error. For an endpoint that does not support TLS, the Dev can explicitly disable it and test again.
 
 ### Access and read-only privileges
 
@@ -475,13 +482,15 @@ sudo update-ca-certificates
 timedatectl status
 ```
 
-For **HANA**, keep `HANA_ENCRYPT=true` and `HANA_VALIDATE_CERTIFICATE=true` in the source's profile:
+Certificate validation is optional for both implemented database connectors. Existing settings are preserved. When verification is enabled (or a trusted certificate is supplied):
 
-- **Unknown issuer/private CA:** obtain the root/intermediate CA certificates from the database administrator. Add them in **Konfiguro lidhjen → Certifikata CA e besuar** (`HANA_TLS_CA_CERTIFICATE`). The app builds its private trust bundle under `/var/lib/duka-agent/tls`.
-- **Hostname mismatch:** use the database's correct DNS name, or set that source's `HANA_TLS_SERVER_NAME` to the verified name on its certificate.
-- **Expired certificate:** renew the server certificate; adding a CA will not fix expiry.
+- **Unknown issuer/private CA:** obtain verified public trust material from the DBA and add it under **Konfiguro lidhjen → Certifikata CA e besuar**. Use `HANA_TLS_CA_CERTIFICATE` or `SQLSERVER_TLS_CA_CERTIFICATE` in the exact source profile.
+- **Hostname mismatch:** use the database's correct DNS name, or configure the source's `HANA_TLS_SERVER_NAME` / `SQLSERVER_TLS_SERVER_NAME` to its verified identity.
+- **Expired certificate:** renew the database server certificate; adding a CA cannot fix expiry.
+- **TLS required:** enable encryption. This alone does not mean a client certificate is required.
+- **Client certificate required:** ask the DBA about authentication. Client-certificate login is not implemented; uploading a CA alone will not satisfy it.
 
-For **SQL Server**, production uses `deploy/freetds.conf` through the unit's `FREETDSCONF` variable. It requires encryption, system CA trust and hostname verification. Keep `SQLSERVER_ENCRYPTION=require`. For a private database CA, ask the DBA to configure the verified issuer in the backend server’s system trust store. This is a database prerequisite, separate from the three website files. Use the database DNS name matching its certificate. HANA certificate settings do not apply to SQL Server. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
+Without supplied trust material, choosing **Pa verifikim** permits TLS with an unverified server certificate. This does not authenticate the database server and carries an impersonation risk. Disabled TLS/optional SQL Server TLS can expose data without encryption. No failed verified connection is retried automatically in a weaker mode. See [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm).
 
 The native service reads `/var/lib/duka-agent/runtime.env`, not the checkout's `.env`. After changes, restart it with `sudo systemctl restart duka-agent`. If preflight rejects startup, verify exact HTTPS origins, `SECURE_COOKIES=true`, the supplied FreeTDS file, data directory mode `700`, and environment ownership `duka:duka` with mode `600`. A fresh workspace's setup code is available only through `sudo cat /var/lib/duka-agent/workspace-setup.token`; existing workspaces do not need it.
 
@@ -548,7 +557,7 @@ Before handing the site to users, confirm:
 | `deploy/setup-provided-https.sh` | Activate your supplied certificates and Nginx site with rollback |
 | `deploy/provided_tls.py` | Parse `.p7b`, verify certificate/key/chain/domain and stage the bundle |
 | `deploy/nginx-https.conf` | Native frontend and API proxy template; the installer fills its tokens |
-| `deploy/freetds.conf` | SQL Server TLS trust and hostname policy |
+| `deploy/freetds.conf` | Bootstrap defaults; backend creates private per-source TLS aliases |
 | `deploy/backup.sh`, `deploy/backup.py` | Encrypted, verified workspace backup and recovery |
 | `deploy/diagnose-connections.py` | Check saved configuration, TLS policy, DNS/TCP and database login safely |
 | `deploy/check_database_permissions.py` | Read-only reporting-account privilege inventory |

@@ -81,7 +81,7 @@ class HanaSession:
 
 
 def hana(driver):
-    settings = Settings(env_file=None, hana_host='private-host',hana_user='private-user',hana_password='private-password')
+    settings = Settings(env_file=None, hana_host='private-host',hana_user='private-user',hana_password='private-password',hana_validate_certificate=True)
     return HanaConnector(settings, QueryCatalog(settings.query_dir), driver)
 
 

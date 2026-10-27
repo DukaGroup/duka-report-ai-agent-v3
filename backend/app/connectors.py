@@ -51,8 +51,10 @@ def safe_database_error(exc):
         return "The configured database could not be opened. Check SQLSERVER_DATABASE and login access."
     if "permission" in message or "229" in message:
         return "SQL Server denied access. Grant the reporting account SELECT on the approved tables/views."
-    if "certificate" in message or "ssl" in message or "tls" in message:
-        return "SQL Server TLS negotiation failed. Check the server encryption and certificate configuration."
+    from .database_tls import connection_error
+    tls_error = connection_error(message, "SQL Server")
+    if tls_error:
+        return tls_error
     if "timeout" in message or "timed out" in message:
         return "SQL Server timed out. Check the host, port, firewall, and query performance."
     return "SQL Server could not complete the request. Check connectivity, database permissions, and the approved query script."
@@ -137,36 +139,40 @@ class SQLServerConnector:
             raise SourceNotConfigured("SQLSERVER_PORT must be a number between 1 and 65535.") from exc
         if self.settings.sqlserver_encryption not in ("require", "request", "off"):
             raise SourceNotConfigured("SQLSERVER_ENCRYPTION must be require, request, or off.")
-        from .deployment_security import production
-        if production(self.settings) and self.settings.sqlserver_encryption != "require":
-            raise SourceNotConfigured("Production SQL Server connections require encryption.")
-        if production(self.settings):
-            import os
-            from .deployment_security import validate_freetds
-            try:
-                validate_freetds(os.getenv('FREETDSCONF'))
-            except (OSError, ValueError):
-                raise SourceNotConfigured("Production SQL Server requires the trusted FreeTDS configuration with CA and hostname validation.") from None
+        from .database_tls import options as tls_options
+        try:
+            tls = tls_options(self.settings, "sqlserver")
+        except ValueError as exc:
+            raise SourceNotConfigured(str(exc)) from None
         driver = self.driver
         if driver is None:
             import pymssql
 
             driver = pymssql
-        return driver.connect(
-            server=self.settings.sqlserver_host,
-            port=str(port),
-            user=self.settings.sqlserver_user,
-            password=self.settings.sqlserver_password,
-            database=self.settings.sqlserver_database or "master",
-            as_dict=True,
-            login_timeout=self.settings.sqlserver_timeout,
-            timeout=self.settings.sqlserver_timeout,
-            tds_version="7.4",
-            encryption=self.settings.sqlserver_encryption,
-            read_only=True,
-            autocommit=False,
-            appname="Duka reporting",
-        )
+        from .sqlserver_tls import connection_options
+        try:
+            context = connection_options(self.settings, tls)
+            alias = context.__enter__()
+        except (OSError, ValueError):
+            raise SourceNotConfigured("SQL Server TLS configuration is invalid or unavailable. Check the database host, certificate and backend storage permissions.") from None
+        try:
+            return driver.connect(
+                server=alias,
+                port=str(port),
+                user=self.settings.sqlserver_user,
+                password=self.settings.sqlserver_password,
+                database=self.settings.sqlserver_database or "master",
+                as_dict=True,
+                login_timeout=self.settings.sqlserver_timeout,
+                timeout=self.settings.sqlserver_timeout,
+                tds_version="7.4",
+                encryption=tls["encryption"],
+                read_only=True,
+                autocommit=False,
+                appname="Duka reporting",
+            )
+        finally:
+            context.__exit__(None, None, None)
 
     def _run(self, sql, parameters, max_rows=500):
         return self._execute(sql, parameters, max_rows, 100000)
@@ -249,8 +255,11 @@ class SQLServerConnector:
         catalog.traffic = getattr(self, "traffic", None)
         try:
             return catalog._run(sql, parameters)
-        except DatabaseUnavailable:
-            # Some restricted logins can inspect the catalog only via their DB.
+        except DatabaseUnavailable as exc:
+            # Only a database/catalog access error merits a different database.
+            # TLS, certificate and network failures must not trigger another login.
+            if exc.category == "connection" and exc.code != 4060 and "configured database could not be opened" not in str(exc):
+                raise
             return self._run(sql, parameters)
 
     async def databases(self, offset=0, limit=100):
@@ -468,7 +477,7 @@ class ConnectorRegistry:
         if type(connector) in (SQLServerConnector, self.connector_class("saphana")):
             effective = self.source_settings(source_id)
             prefix = "hana_" if connector.dialect == "hana" else "sqlserver_"
-            fields = ("host", "port", "user", "password", "database", "encrypt", "validate_certificate", "tls_ca_certificate", "tls_server_name") if prefix == "hana_" else ("host", "port", "user", "password", "database", "encryption", "timeout")
+            fields = ("host", "port", "user", "password", "database", "encrypt", "validate_certificate", "tls_ca_certificate", "tls_server_name") if prefix == "hana_" else ("host", "port", "user", "password", "database", "encryption", "timeout", "validate_certificate", "tls_ca_certificate", "tls_server_name")
             if any(
                 getattr(effective, prefix + key) != getattr(connector.settings, prefix + key)
                 for key in fields
@@ -521,15 +530,15 @@ class ConnectorRegistry:
                     raise ValueError()
             except (TypeError, ValueError):
                 raise SecretsUnavailable("The SQL Server timeout must be a positive number.") from None
-        for key in ("hana_encrypt", "hana_validate_certificate"):
+        for key in ("hana_encrypt", "hana_validate_certificate", "sqlserver_validate_certificate"):
             if key in updates:
                 if updates[key] not in ("true", "false"):
-                    raise SecretsUnavailable("HANA TLS options must be true or false.")
+                    raise SecretsUnavailable("Database TLS options must be true or false.")
                 updates[key] = updates[key] == "true"
         return replace(self.empty_connection_settings(), **updates)
 
     def empty_connection_settings(self):
-        return replace(self.settings, sqlserver_host="", sqlserver_user="", sqlserver_password="", sqlserver_database="", sqlserver_port="1433", hana_host="", hana_user="", hana_password="", hana_database="", hana_port="30015", hana_encrypt=True, hana_validate_certificate=True, hana_tls_ca_certificate="", hana_tls_server_name="")
+        return replace(self.settings, sqlserver_host="", sqlserver_user="", sqlserver_password="", sqlserver_database="", sqlserver_port="1433", hana_host="", hana_user="", hana_password="", hana_database="", hana_port="30015", hana_encrypt=True, hana_validate_certificate=False, hana_tls_ca_certificate="", hana_tls_server_name="", sqlserver_encryption="require", sqlserver_validate_certificate=False, sqlserver_tls_ca_certificate="", sqlserver_tls_server_name="")
 
     def source_environment(self, source_id):
         source = self.db.one("SELECT name,kind,credential_profile FROM data_sources WHERE id=?", (source_id,))
@@ -591,10 +600,12 @@ class ConnectorRegistry:
                 for key in ("host", "port", "user", "password", "database")
             }
             result["database_scope"] = "default" if getattr(effective, prefix.lower()+"_database") else "all"
-            if prefix == "HANA":
-                result["tls"] = {"encrypt": effective.hana_encrypt, "validate_certificate": effective.hana_validate_certificate,
-                                 "custom_ca": bool(effective.hana_tls_ca_certificate), "server_name_configured": bool(effective.hana_tls_server_name)}
-        except SecretsUnavailable as exc:
+            if source["kind"] in ("saphana", "sqlserver"):
+                from .database_tls import options as tls_options, warnings as tls_warnings
+                result["tls"] = tls_options(effective, source["kind"])
+                result["tls"]["warnings"] = tls_warnings(effective, source["kind"])
+
+        except (SecretsUnavailable, ValueError) as exc:
             result["connection_fields"] = {}
             result.update(status="error", last_error=str(exc), error_scope="connection")
             self.status(source["id"], "error", str(exc))
@@ -631,6 +642,10 @@ class ConnectorRegistry:
                 if source and source["kind"] in ("sqlserver", "saphana") and source["last_error"]:
                     raise SourceNotConfigured(source["last_error"])
                 raise SourceNotConfigured("No connector is implemented for this source type. Choose SQL Server or SAP HANA.")
+            if log and isinstance(connector, SQLServerConnector):
+                from .database_tls import warnings as tls_warnings
+                for message in tls_warnings(connector.settings, "saphana" if connector.dialect == "hana" else "sqlserver"):
+                    log.record('warning', 'database', 'connection.tls.warning', message, source_id=source_id)
             await connector.check()
             if self.connectors.get(source_id) is connector:
                 self.status(source_id, "connected")
