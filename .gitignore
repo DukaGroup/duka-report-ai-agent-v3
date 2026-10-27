@@ -17,3 +17,11 @@ test-results/
 outputs/
 *.duka-backup
 *.backup-key
+# Deployment certificate material stays outside the GitHub source checkout.
+*.key
+*.pem
+*.crt
+*.cer
+*.p7b
+*.pfx
+*.p12

@@ -6,7 +6,7 @@ Conversations and reports use either **ChatGPT through the official Codex CLI** 
 
 ## Deployment
 
-Use [DEPLOYMENT.md](DEPLOYMENT.md) for the complete native deployment of **hana.dukagroup.local**: SSH upload, frontend, backend, certificates, database access, updates, backups and troubleshooting. Nginx serves the frontend; systemd runs the backend. Docker is not required.
+Use [DEPLOYMENT.md](DEPLOYMENT.md) for the complete native deployment of **hana.dukagroup.local**: GitHub clone/pull, one-command native installation, frontend, backend, certificates, database access, updates, backups and troubleshooting. Nginx serves the frontend; systemd runs the backend. Docker is not required.
 
 ## Start
 

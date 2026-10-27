@@ -1,12 +1,12 @@
 # Deploy Hana without Docker
 
-This is the single deployment guide for **https://hana.dukagroup.local**. Follow steps 1–7 in order; the later sections cover database connectivity, updates, renewal, backup/recovery and troubleshooting.
+This is the single deployment guide for **https://hana.dukagroup.local**. The short path is: clone GitHub on the server, upload only your certificate files, then run one installer. Follow steps 1–7 in order; the later sections cover database connectivity, updates, renewal, backup/recovery and troubleshooting.
 
 SSH is how you administer the server. Your website certificate, private key and `.p7b` chain secure the browser's HTTPS connection. No Docker is used in this guide: Nginx serves the frontend; systemd runs the Python backend on `127.0.0.1:8080`.
 
 These steps assume the server is still `10.0.200.22`, your SSH user is `hana`, and the server runs **Ubuntu 24.04 x86-64**. First check on the server with `cat /etc/os-release` and `uname -m`. Other operating systems need different dependency installation steps. Report isolation requires Landlock ABI 3+ and seccomp, provided by the standard supported Ubuntu kernel.
 
-**Existing data:** this is a fresh-server installation. Uploading source code does not move the laptop's Docker database, reports, users, grants or model credentials. To retain an existing workspace, obtain a verified encrypted workspace backup and its separate key, then use **Restore an existing workspace before the first start** in step 4 below. Restore the complete data and configuration before starting the service. Never replace an existing `runtime.env` with the example below.
+**Existing data:** this is a fresh-server installation. Cloning source code does not move the laptop's Docker database, reports, users, grants or model credentials. To retain an existing workspace, obtain a verified encrypted workspace backup and its separate key, then use **Restore an existing workspace before the first start** in step 4 below. Restore the complete data and configuration before starting the service. Never replace an existing `runtime.env` with the example below.
 
 ## Deployment layout and requirements
 
@@ -52,7 +52,7 @@ df -h /var
 timedatectl status
 ```
 
-Continue with the dependency commands below only for Ubuntu 24.04 and `x86_64`. Return to your laptop terminal for step 2 (`exit` closes the SSH session).
+Continue with the dependency commands below only for Ubuntu 24.04 and `x86_64`. Steps 2 and 4 run on the server. Step 3 explicitly switches back to your laptop only to upload certificate files.
 
 ## 1. Check DNS and certificates
 
@@ -77,73 +77,75 @@ The root's fingerprint must be confirmed through a trusted channel. Finding a ro
 
 This setup uses your company PKI; **do not run Certbot for `.local`**. Client operating systems/browsers must trust the company root CA. The installer validates against the explicit root you supply but does not add it to any trust store. Some systems resolve `.local` via multicast DNS; if `getent hosts hana.dukagroup.local` fails or gives a different address, IT must configure the appropriate internal/split-DNS resolution on LAN/VPN clients.
 
-## 2. Upload code and certificate files — on your laptop
+## 2. Get all application code from GitHub — on the server
 
-Open a laptop terminal (outside the SSH session):
-
-```bash
-ssh hana@10.0.200.22 'mkdir -p ~/hana-source; mkdir -p -m 700 ~/hana-tls'
-
-cd /home/pume-laptop/Documents/duka-group/duka-report-ai-agent-v3
-rsync -av \
-  --exclude='.git/' --exclude='.env' --exclude='.env.*' \
-  --exclude='work/' --exclude='data/' --exclude='outputs/' \
-  --exclude='*.sqlite*' --exclude='*.duka-backup' --exclude='*.backup-key' \
-  --exclude='*.key' --exclude='*.pem' --exclude='*.p7b' --exclude='*.pfx' --exclude='*.p12' \
-  --exclude='node_modules/' --exclude='.venv/' --exclude='__pycache__/' \
-  --exclude='.pytest_cache/' --exclude='.ruff_cache/' --exclude='frontend/dist/' \
-  ./ hana@10.0.200.22:~/hana-source/
-```
-
-The domain-specific environment example is `deploy/hana-native.env.example`, so it is included even though project `.env` files are excluded. No `--delete` is used.
-
-In the directory containing your actual certificate files, upload them separately (replace these filenames with yours):
-
-```bash
-chmod 600 hana.key
-scp hana.crt hana.key chain.p7b company-root.crt hana@10.0.200.22:~/hana-tls/
-ssh hana@10.0.200.22
-```
-
-The remaining installation commands run **inside SSH, on the server**.
-
-## 3. Install runtime dependencies — on the server
+Inside your SSH session:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl openssl rsync libgomp1 libstdc++6 \
-  python3.12 python3.12-venv nginx
-curl -fsSL https://deb.nodesource.com/setup_24.x -o ~/node24-setup.sh
-sudo bash ~/node24-setup.sh
-sudo apt-get install -y nodejs
-node --version
+sudo apt-get install -y git ca-certificates
+sudo install -d -m 755 -o "$(id -un)" -g "$(id -gn)" /var/www/duka-agent
+git clone --branch main https://github.com/pellumbmaraj/duka-report-ai-agent-v3.git /var/www/duka-agent/app
+cd /var/www/duka-agent/app
 ```
 
-Node should report version 24. The backend uses it for the Codex CLI; frontend files are compiled with it and then served as static assets.
+**The server downloads the frontend, backend, deployment scripts and configuration templates directly from GitHub. Do not copy application source from your laptop.** Private runtime configuration and certificate files stay outside Git.
 
-## 4. Put the application in its native directory
+If `/var/www/duka-agent/app` already contains a Git checkout, do not clone over it. Finish active work, back up the existing workspace, stop the backend and use the update commands in section 9. If that directory contains a previous non-Git installation, keep its private configuration/data and arrange a separate reviewed cutover; do not delete it to make clone succeed.
 
-Create the service account only if it does not already exist:
+For a private repository, authenticate Git using your organization's approved credential helper or read-only deploy key. Do not put a GitHub token in the clone URL or in this guide. If Git reports `Could not resolve host`, fix DNS on the server as described in section 12 before retrying.
+
+**These deployment changes must be committed and pushed to GitHub first.** A server clone/pull only receives files that exist in the remote repository. Dependencies are downloaded from their normal package sources by the installer.
+
+## 3. Upload only certificate files — on your laptop
+
+Keep your existing SSH terminal open. In a second terminal on your laptop, change to the directory containing the actual certificate files. Rename them to the filenames below, or use the individual certificate command in step 6 with your filenames.
 
 ```bash
-if ! id duka >/dev/null 2>&1; then
-  sudo useradd --system --user-group --home-dir /var/lib/duka-agent --shell /usr/sbin/nologin duka
-fi
-sudo install -d -o "$(id -un)" -g "$(id -gn)" /var/www/duka-agent
-sudo install -d -o duka -g duka -m 700 /var/lib/duka-agent
-rsync -av ~/hana-source/ /var/www/duka-agent/app/
-cd /var/www/duka-agent/app
-
-python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip==26.2
-.venv/bin/pip install -r backend/requirements.txt
-npm install --prefix /var/www/duka-agent/codex --save-exact @openai/codex@0.162.1
-npm --prefix frontend ci
-npm --prefix frontend run build
-chmod -R a+rX frontend/dist
+ssh hana@10.0.200.22 'mkdir -p -m 700 ~/hana-tls'
+chmod 600 hana.key
+scp hana.crt hana.key chain.p7b company-root.crt hana@10.0.200.22:~/hana-tls/
 ```
 
-The `duka` service account needs read/execute access to `/var/www/duka-agent` and its application files. Private business data remains under `/var/lib/duka-agent`, mode `700`; never make that directory readable to Nginx.
+Only certificate material is transferred from the laptop. The company root CA is a public certificate confirmed with IT; no CA private key is required. If the files are already on the server, skip this upload.
+
+Confirm the root CA fingerprint with IT before running the installer. For a PEM root, inspect it with:
+
+```bash
+openssl x509 -in company-root.crt -noout -subject -fingerprint -sha256
+```
+
+For a DER root add `-inform DER`. The installer accepts both.
+
+## 4. Install everything with one command — on the server
+
+Return to the server's SSH terminal:
+
+```bash
+cd /var/www/duka-agent/app
+sudo bash deploy/install-native.sh --tls-dir "$HOME/hana-tls"
+```
+
+For a **fresh workspace**, this is the main installation command. It:
+
+1. Checks Ubuntu 24.04/x86-64, a clean GitHub checkout and the four supplied certificate files.
+2. Installs the required system packages and Node 24 when needed.
+3. Creates the `duka` service account and private data directory.
+4. Installs pinned backend dependencies and the Codex CLI, and builds the frontend.
+5. Creates the domain's production `runtime.env` only if none exists.
+6. Installs/starts the backend systemd service, checks its health, then validates and activates Nginx HTTPS.
+
+Build/package commands run as your normal SSH user; the backend runs separately as `duka`. The installer refuses to update an active backend so it cannot interrupt chats/reports unexpectedly. It does not fetch or merge source code itself: the `git clone`/`git pull --ff-only` commands select the revision first. If a build fails, the backend is not started; correct the named error and rerun. If TLS activation fails after backend startup, use the certificate command in step 6 after correcting the certificate files; you do not need to rebuild the application.
+
+The `duka` account needs read/execute access to the checkout and virtual environment. Nginx reads only the frontend build. The private data directory remains mode `700`.
+
+**Restoring an existing workspace:** instead of the main command above, prepare dependencies without starting services or creating runtime.env:
+
+```bash
+sudo bash deploy/install-native.sh --prepare-only
+```
+
+Then follow the restore subsection below. Before the first start, set `ALLOWED_ORIGINS=https://hana.dukagroup.local` and `SECURE_COOKIES=true` in the restored private runtime.env, retaining its database profiles. Then run the main `--tls-dir` command to start the existing workspace.
 
 ### Restore an existing workspace before the first start
 
@@ -179,18 +181,16 @@ sudo chmod 700 /var/lib/duka-agent
 
 `rmdir` deliberately fails if the destination is not empty; `set -e` prevents continuing after that failure. Do not replace it with recursive deletion. For an existing destination, retain its own verified backup and arrange a separate recovery/cutover instead. After restore, adjust the HTTPS origin in step 5 while retaining all connection profile prefixes and private keys.
 
-## 5. Configure and start the backend
+## 5. Check the backend and private configuration
 
-On a fresh installation with no runtime environment, install the provided production example:
+The installer already starts the backend for a normal installation. Check it:
 
 ```bash
-if ! sudo test -e /var/lib/duka-agent/runtime.env; then
-  sudo install -o duka -g duka -m 600 deploy/hana-native.env.example /var/lib/duka-agent/runtime.env
-fi
-sudoedit /var/lib/duka-agent/runtime.env
+sudo systemctl status duka-agent --no-pager
+curl --fail http://127.0.0.1:8080/api/health
 ```
 
-Make sure these settings match, retaining any existing database profiles:
+Fresh production settings are preconfigured for your domain:
 
 ```dotenv
 APP_ENV=production
@@ -198,19 +198,18 @@ ALLOWED_ORIGINS=https://hana.dukagroup.local
 SECURE_COOKIES=true
 ```
 
-Start the backend:
+Existing runtime.env settings are preserved. For restored workspaces, ensure the allowed origin matches this domain while retaining source profiles and keys. Only if you need to edit configuration, run:
 
 ```bash
-sudo bash deploy/install-service.sh
-sudo systemctl status duka-agent --no-pager
-curl --fail http://127.0.0.1:8080/api/health
+sudoedit /var/lib/duka-agent/runtime.env
+sudo systemctl restart duka-agent
 ```
 
-The health endpoint permits this loopback check. Sign-in and application traffic require the configured HTTPS address. The backend is not exposed directly to LAN/VPN clients.
+Do not put private values in a tracked file. Configure data sources through Hana after sign-in, or retain the restored runtime.env database profiles. The health endpoint permits a loopback check; sign-in and application traffic require the HTTPS address.
 
-## 6. Validate and activate your certificates
+## 6. Certificate setup, repair or renewal
 
-Verify the root fingerprint with IT before proceeding:
+The main installer already calls this certificate setup. Use this section only to inspect files, repair a failed TLS activation, renew certificates, or use different filenames. Verify the root fingerprint with IT:
 
 ```bash
 openssl x509 -in ~/hana-tls/company-root.crt -noout -subject -fingerprint -sha256
@@ -307,45 +306,35 @@ sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka
 
 `requires_dba` flags visible write/admin/execute permissions; `unverified` is not a successful result. The command does not grant or revoke access.
 
-## 9. Update the frontend or backend
+## 9. Update directly from GitHub — on the server
 
-Before an update, create the encrypted backup in section 11 and record the version being deployed. Upload source with the same laptop `rsync` command. `~/hana-source/` is only a staging directory: changes there do not update the live application until copied into `/var/www/duka-agent/app/`.
-
-For a full/backend source update, wait for active chats/reports to finish, then on the server:
-
-```bash
-sudo systemctl stop duka-agent
-rsync -av ~/hana-source/ /var/www/duka-agent/app/
-```
-
-Do not use `--delete` on the live application directory: it contains the server's `.venv`. If using Git instead, deploy a reviewed commit already available in the remote repository, and keep runtime.env and data outside the checkout. Changes that exist only on your laptop must be uploaded or committed/pushed before the server can receive them. Reverting source code alone is not a database-schema rollback; keep the pre-update data backup as well.
-
-For a **frontend-only update**, copy only the frontend source (no backend stop required):
-
-```bash
-rsync -av --exclude='node_modules/' --exclude='dist/' ~/hana-source/frontend/ /var/www/duka-agent/app/frontend/
-```
-
-Build the frontend:
+Wait for active chats/reports to finish. Then, from your SSH session:
 
 ```bash
 cd /var/www/duka-agent/app
+sudo bash deploy/backup.sh
+sudo systemctl stop duka-agent
+git pull --ff-only origin main
+sudo bash deploy/install-native.sh --tls-dir "$HOME/hana-tls"
+```
+
+Run each command only after the previous one succeeds. If the pull fails, stop and resolve it before installing. To bring the previous version back while investigating a failed pull that did not update the checkout, run `sudo systemctl start duka-agent`. If a build fails after the checkout changed, correct the error before starting the updated backend.
+
+This downloads code from GitHub, reinstalls pinned dependencies, builds the frontend and restarts the backend/HTTPS. It preserves runtime.env, database records, uploads, reports and successful TLS releases. Certificates are read from the private server directory, not fetched from GitHub. Use `git log -1 --oneline` to see the installed revision.
+
+`--ff-only` refuses divergent history instead of making a deployment merge. Review local source changes; do not discard them using `git reset --hard` or `git clean`. The installer also refuses dirty source checkouts or a commit not present on the local `origin/main` history. Certificate/backup/database files belong outside the checkout.
+
+If only frontend files changed and you want to avoid restarting the backend, first verify the incoming commit does not alter backend/service files. Then pull that reviewed frontend-only update and run:
+
+```bash
+cd /var/www/duka-agent/app
+git pull --ff-only origin main
 npm --prefix frontend ci
 npm --prefix frontend run build
 chmod -R a+rX frontend/dist
 ```
 
-After copying backend/full source with the service stopped above, install dependencies and start it again:
-
-```bash
-cd /var/www/duka-agent/app
-.venv/bin/pip install -r backend/requirements.txt
-sudo systemctl start duka-agent
-sudo systemctl status duka-agent --no-pager
-curl --fail http://127.0.0.1:8080/api/health
-```
-
-For a combined update, build the frontend before starting the backend. The frontend build writes to the live static directory, so schedule it during a maintenance window.
+The frontend build writes to the live static directory; schedule a maintenance window. Reverting code alone is not a schema rollback: retain the pre-update encrypted backup and restore alongside the live workspace if recovery is needed. HTTPS renewal alone uses section 6 and does not require rebuilding the application.
 
 ## 10. Renew HTTPS certificates
 
@@ -525,6 +514,7 @@ Before handing the site to users, confirm:
 
 | Retained deployment file | Responsibility |
 | --- | --- |
+| `deploy/install-native.sh` | Main native installer: prerequisites, dependencies, build, backend and optional HTTPS |
 | `deploy/hana-native.env.example` | Fresh-server production settings for this domain |
 | `deploy/duka-agent.service` | Backend process, loopback listener and service restrictions |
 | `deploy/install-service.sh` | Validate/install/start the backend systemd service |
@@ -538,6 +528,6 @@ Before handing the site to users, confirm:
 | `deploy/check_database_permissions.py` | Read-only reporting-account privilege inventory |
 | `deploy/check-tracked-secrets.py` | Prevent private configuration/credentials entering Git |
 
-The deployment files are executable configuration/helpers used by this guide, not alternate deployment methods. Security reviews in `docs/` are historical audit records; they are not current deployment instructions.
+All listed code and templates come from the GitHub checkout. The main installer calls the smaller helpers; they are not alternate deployment methods. Certificates, runtime.env, business data and backup keys stay outside GitHub. Security reviews in `docs/` are historical audit records; they are not current deployment instructions.
 
-References: [Nginx HTTPS and chains](https://nginx.org/en/docs/http/configuring_https_servers.html), [OpenSSL PKCS#7](https://docs.openssl.org/3.5/man1/openssl-pkcs7/), [OpenSSL verification](https://docs.openssl.org/3.5/man1/openssl-verify/), [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm), [.local DNS behavior](https://www.rfc-editor.org/rfc/rfc6762.html).
+References: [Git clone](https://git-scm.com/docs/git-clone), [Git pull](https://git-scm.com/docs/git-pull), [Nginx HTTPS and chains](https://nginx.org/en/docs/http/configuring_https_servers.html), [OpenSSL PKCS#7](https://docs.openssl.org/3.5/man1/openssl-pkcs7/), [OpenSSL verification](https://docs.openssl.org/3.5/man1/openssl-verify/), [FreeTDS configuration](https://www.freetds.org/userguide/freetdsconf.htm), [.local DNS behavior](https://www.rfc-editor.org/rfc/rfc6762.html).
