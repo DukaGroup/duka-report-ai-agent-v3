@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS message_attachments (
     PRIMARY KEY(message_id,attachment_id)
 );
 CREATE INDEX IF NOT EXISTS attachments_conversation ON attachments(conversation_id);
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL, level TEXT NOT NULL, component TEXT NOT NULL,
+    event TEXT NOT NULL, message TEXT NOT NULL, source_id TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS system_logs_component ON system_logs(component,id);
 CREATE TABLE IF NOT EXISTS data_sources (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'not_configured',

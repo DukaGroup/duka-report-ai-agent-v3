@@ -4357,3 +4357,18 @@ textarea {
     max-width: 90px;
   }
 }
+
+.system-log-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.system-log-panel td {
+  vertical-align: top;
+}
+.system-log-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 48rem;
+}

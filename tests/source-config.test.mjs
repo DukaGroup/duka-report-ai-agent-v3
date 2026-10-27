@@ -13,6 +13,13 @@ async function moduleUrl(file,imports={}){
  return `data:text/javascript;base64,${Buffer.from(js).toString('base64')}`;
 }
 const {SourceConnectionForm}=await import(await moduleUrl('SourceConnectionForm.tsx',{'./Select':await moduleUrl('Select.tsx')}));
+const {errorMessage}=await import(await moduleUrl('locale.ts'));
+test('production HANA policy errors explain the saved TLS settings that must be enabled',()=>{
+ const message=errorMessage('Production HANA connections require encryption and certificate validation.');
+ assert.match(message,/Kriptimin TLS/);
+ assert.match(message,/Verifikimin e certifikatës/);
+ assert.doesNotMatch(message,/Production HANA/);
+});
 const noop=()=>{};
 function source(kind,origin='saved'){
  const prefix=kind==='saphana'?'HANA':'SQLSERVER';

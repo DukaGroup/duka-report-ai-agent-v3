@@ -57,6 +57,14 @@ const labels: Record<string, string> = {
 };
 export const label = (value: string) => labels[value] || value;
 const errors: Record<string, string> = {
+  "Production HANA connections require encryption and certificate validation.":
+    "Në prodhim, aktivizoni Kriptimin TLS dhe Verifikimin e certifikatës te kjo lidhje SAP HANA. Nëse CA nuk njihet, vendosni certifikatat CA të besuara të databazës.",
+  "Backend started.": "Backend-i u nis.",
+  "Backend stopped.": "Backend-i u ndal.",
+  "Checking the saved database connection.": "Po kontrollohet lidhja e ruajtur me databazën.",
+  "Database connection check succeeded.": "Kontrolli i lidhjes me databazën përfundoi me sukses.",
+  "An operation failed. Check its status code and the relevant connection settings.":
+    "Një veprim dështoi. Kontrolloni kodin e gabimit dhe konfigurimin e lidhjes.",
   "The current password is incorrect.": "Fjalëkalimi aktual është i pasaktë.",
   "The recovery code is invalid or expired.":
     "Kodi i rikuperimit është i pavlefshëm ose ka skaduar.",

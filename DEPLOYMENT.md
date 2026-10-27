@@ -282,6 +282,25 @@ The GoTech check on 27 October 2026 reached `192.168.7.10:1433`, but SQL Server 
 
 Your three website files are not automatically the SQL Server's CA configuration. The DBA must confirm whether the same issuing CA is used. No extra SQL certificate file is required by the website installer. Installing CA trust does not fix an expired certificate or hostname mismatch.
 
+### The reported GoTech timeout and HANA production-policy error
+
+These errors require different fixes:
+
+- **GoTech timeout:** test connectivity **from the backend server**, not the laptop. The laptop's company VPN does not automatically route the server to `192.168.7.10:1433`. Ask IT to permit the backend server's source IP to the database listener and verify the server's LAN/VPN route. Once TCP works, retest TLS/login; the earlier self-signed SQL certificate may still need correction.
+- **`Production HANA connections require encryption and certificate validation.`:** open **Cilësimet → Burimet e të dhënave → SAP HANA → Konfiguro lidhjen → Siguria e lidhjes**. Set **Kriptimi TLS → I aktivizuar** and **Verifikimi i certifikatës → Verifiko certifikatën**, save, then test again. Update this exact saved source; changing generic HANA variables may not override its managed `DUKA_CONNECTION_<ID>_` profile.
+
+The HANA policy error is raised before a connection attempt. A development installation can allow disabled TLS options; production explicitly rejects them. A missing local certificate file is not what triggers that particular error. The database server sends its own TLS certificate. If its issuer is private, configure the database's trusted **public** CA chain in **Certifikata CA e besuar (PEM)** and the correct DNS identity if required. The website's `hana.cer`/`hana.key`/`chain.p7b` secure browser traffic and are separate from database TLS. Do not give the database your website private key or disable validation to bypass the check.
+
+Run the new source-scoped diagnostic on the server:
+
+```bash
+cd /var/www/duka-agent/app
+sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka-agent \
+  .venv/bin/python deploy/diagnose-connections.py
+```
+
+It reads registered source profiles without migrating or changing them, checks required fields and production TLS policy, resolves the database hostname, probes TCP, then tests TLS/login using the configured connector. It prints safe stage/error summaries rather than credentials or raw driver exceptions. It does not query business records or modify grants; normal TLS trust-cache files may be refreshed. Use `--source-id ID` to check one source. No result or a failed stage is not a successful database connection.
+
 ### SAP HANA
 
 Choose **SAP HANA**, confirm its actual tenant SQL port with the DBA, and keep encryption and certificate validation enabled. `HANA_DATABASE` is an optional tenant name; a SAP Business One company schema is not a tenant name. For private CA trust, configure that source’s **Certifikata CA e besuar** / `HANA_TLS_CA_CERTIFICATE`. If connecting by IP, configure `HANA_TLS_SERVER_NAME` to the verified DNS identity on the server certificate when necessary. Never disable verification as a connectivity fix.
@@ -307,12 +326,12 @@ cd /var/www/duka-agent/app
 sudo bash deploy/backup.sh
 sudo systemctl stop duka-agent
 git pull --ff-only origin main
-sudo bash deploy/install-native.sh --tls-dir "$HOME/hana-tls"
+sudo bash deploy/install-native.sh
 ```
 
 Run each command only after the previous one succeeds. If the pull fails, stop and resolve it before installing. To bring the previous version back while investigating a failed pull that did not update the checkout, run `sudo systemctl start duka-agent`. If a build fails after the checkout changed, correct the error before starting the updated backend.
 
-This downloads code from GitHub, reinstalls pinned dependencies, builds the frontend and restarts the backend/HTTPS. It preserves runtime.env, database records, uploads, reports and successful TLS releases. Certificates are read from the private server directory, not fetched from GitHub. Use `git log -1 --oneline` to see the installed revision.
+This downloads code from GitHub, reinstalls pinned dependencies, builds the frontend and starts the updated backend. The existing Nginx HTTPS site and certificate release remain active; certificate renewal is a separate step in section 6. It preserves runtime.env, database records, uploads, reports and successful TLS releases. Certificates remain in the existing private Nginx release and are not fetched from GitHub. If HTTPS has never been configured, use the `--tls-dir` installation command in section 4 with any independently confirmed root fingerprint required by section 6. Use `git log -1 --oneline` to see the installed revision.
 
 `--ff-only` refuses divergent history instead of making a deployment merge. Review local source changes; do not discard them using `git reset --hard` or `git clean`. The installer also refuses dirty source checkouts or a commit not present on the local `origin/main` history. Certificate/backup/database files belong outside the checkout.
 
@@ -361,6 +380,20 @@ For installation into an empty destination, use the complete restore/cutover ins
 The private data directory, runtime.env and generated files are not application-encrypted at rest. The backup archive is encrypted. Use appropriate disk encryption and filesystem permissions for the live server, and keep the backup key separately from the archives. No automatic backup schedule or certificate-renewal schedule is installed.
 
 ## 12. Troubleshoot in this order
+
+### View application logs inside Hana
+
+After deploying this revision and rebuilding the frontend, Devs can open **Cilësimet → Regjistrat e sistemit**. It shows up to 2,000 retained operational events: backend start/stop, saved connection checks, database failures, provider errors and report-tool failures. Filter by level/component, refresh or pause updates, browse older events, or download the displayed page as redacted JSON. Managers and President cannot access the panel or its API.
+
+To capture a database failure, run **Test connection** for that source, then filter the log viewer to **Databazat**. Connection-check entries include the source name, safe error message, category and available driver code. Passwords, tokens, raw driver exceptions and SQL result rows are not copied into these operational logs. This is an application log, not unrestricted access to systemd/Nginx journals. Logging begins after the upgraded backend initializes; earlier startup failures still require the server terminal:
+
+```bash
+sudo journalctl -u duka-agent -n 100 --no-pager
+sudo journalctl -u duka-agent -f
+```
+
+For Nginx failures use `sudo nginx -t` and `sudo tail -n 80 /var/log/nginx/error.log`. Do not add the backend service user to the system journal or administrator groups to expose host logs through the app.
+
 
 ### SSH, GitHub or provider DNS fails
 
@@ -517,6 +550,7 @@ Before handing the site to users, confirm:
 | `deploy/nginx-https.conf` | Native frontend and API proxy template; the installer fills its tokens |
 | `deploy/freetds.conf` | SQL Server TLS trust and hostname policy |
 | `deploy/backup.sh`, `deploy/backup.py` | Encrypted, verified workspace backup and recovery |
+| `deploy/diagnose-connections.py` | Check saved configuration, TLS policy, DNS/TCP and database login safely |
 | `deploy/check_database_permissions.py` | Read-only reporting-account privilege inventory |
 | `deploy/check-tracked-secrets.py` | Prevent private configuration/credentials entering Git |
 

@@ -618,21 +618,33 @@ class ConnectorRegistry:
         }
 
     async def check(self, source_id):
-        connector = self.resolve_connector(source_id)
-        if not connector or not hasattr(connector, "check"):
-            source = (
-                self.db.one("SELECT kind,last_error FROM data_sources WHERE id=?", (source_id,)) if self.db else None
-            )
-            if source and source["kind"] in ("sqlserver", "saphana") and source["last_error"]:
-                raise SourceNotConfigured(source["last_error"])
-            raise SourceNotConfigured("No connector is implemented for this source type. Choose SQL Server or SAP HANA.")
+        log = getattr(getattr(self, 'traffic', None), 'system_logs', None)
+        if log:
+            log.record('info', 'database', 'connection.check.started', 'Checking the saved database connection.', source_id=source_id)
+        connector = None
         try:
+            connector = self.resolve_connector(source_id)
+            if not connector or not hasattr(connector, "check"):
+                source = (
+                    self.db.one("SELECT kind,last_error FROM data_sources WHERE id=?", (source_id,)) if self.db else None
+                )
+                if source and source["kind"] in ("sqlserver", "saphana") and source["last_error"]:
+                    raise SourceNotConfigured(source["last_error"])
+                raise SourceNotConfigured("No connector is implemented for this source type. Choose SQL Server or SAP HANA.")
             await connector.check()
             if self.connectors.get(source_id) is connector:
                 self.status(source_id, "connected")
-        except SourceNotConfigured as exc:
-            if self.connectors.get(source_id) is connector:
-                self.status(source_id, "not_configured" if connector.missing() else "error", str(exc))
+            if log:
+                log.record('info', 'database', 'connection.check.ok', 'Database connection check succeeded.', source_id=source_id)
+        except (SourceNotConfigured, SecretsUnavailable) as exc:
+            if connector and self.connectors.get(source_id) is connector:
+                self.status(source_id, "not_configured" if hasattr(connector, 'missing') and connector.missing() else "error", str(exc))
+            if log:
+                log.record('error', 'database', 'connection.check.failed', str(exc), source_id=source_id,
+                           details={'category': getattr(exc, 'category', 'configuration'),
+                                    'database_error_code': getattr(exc, 'code', None)})
+            if connector is None or not hasattr(connector, 'check'):
+                raise SourceNotConfigured(str(exc)) from None
 
     async def fetch(self, dataset, parameters, *, complete=False, user_id=None):
         connector = self.resolve_connector(dataset["source_id"])

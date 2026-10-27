@@ -6,6 +6,7 @@ export type SettingsTab =
   | "members"
   | "overview"
   | "traffic"
+  | "logs"
   | "activity";
 
 export function settingsSections(
@@ -30,6 +31,7 @@ export function settingsSections(
     sections.push(
       { id: "overview", label: "Përmbledhje", group: "Administrimi" },
       { id: "traffic", label: "Trafiku", group: "Administrimi" },
+      { id: "logs", label: "Regjistrat e sistemit", group: "Administrimi" },
       {
         id: "activity",
         label: "Regjistri i aktivitetit",

@@ -49,6 +49,7 @@ import { ReplyCompletions } from "./replyNotifications";
 import { playNotificationSound, ReplySound } from "./replySound";
 import type { ReplyNotification } from "./replyNotifications";
 import { TrafficPanel } from "./TrafficPanel";
+import { SystemLogsPanel } from "./SystemLogsPanel";
 import { DatabaseAccessPicker, emptyDataAccess } from "./DatabaseAccessPicker";
 import type { MemberDataAccess } from "./DatabaseAccessPicker";
 import { api, streamChat } from "./api";
@@ -3667,7 +3668,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </section>
                 )}
                 {isDev &&
-                  ["overview", "traffic", "activity"].includes(settingsTab) && (
+                  ["overview", "traffic", "logs", "activity"].includes(settingsTab) && (
                     <section className="settings-section">
                       <div className="settings-section-heading">
                         <h2>
@@ -3849,6 +3850,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         </>
                       )}
                       {settingsTab === "traffic" && <TrafficPanel />}
+                      {settingsTab === "logs" && <SystemLogsPanel />}
                       {settingsTab === "activity" && (
                         <section className="panel">
                           <div className="panel-heading">

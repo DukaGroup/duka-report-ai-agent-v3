@@ -90,6 +90,16 @@ class TrafficLog:
         return encoded, cut[0]
 
     def record(self, direction, action, status, *, correlation_id=None, user_id=None, size=0, duration_ms=None, detail=None, payload=None, truncated=False):
+        system = getattr(self, 'system_logs', None)
+        if system and status == 'error' and (direction != 'backend-frontend' or (detail or {}).get('status_code', 0) >= 500):
+            component = ('database' if direction in ('backend-database', 'database-backend') else
+                         'model' if direction in ('backend-model', 'model-backend') else
+                         'reports' if direction in ('backend-excel', 'excel-backend') else 'application')
+            message = (payload.get('error') if component == 'database' and isinstance(payload, dict) else None)
+            if not isinstance(message, str):
+                message = 'An operation failed. Check its status code and the relevant connection settings.'
+            system.record('error', component, action, message, details={
+                **(detail or {}), 'correlation_id': correlation_id})
         body,cut = self.payload(payload,truncated) if payload is not None else (None,False)
         metadata,_ = self.payload(detail or {})
         self.pending.append((now(), direction, self.redact_text(action)[:160], status, self.redact_text(correlation_id) if correlation_id else None, user_id,
@@ -169,7 +179,7 @@ class TrafficMiddleware:
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "")
-        if scope["type"] != "http" or not path.startswith("/api/") or (path == "/api/health" or path.startswith("/api/admin/traffic")):
+        if scope["type"] != "http" or not path.startswith("/api/") or (path == "/api/health" or path.startswith(("/api/admin/traffic", "/api/admin/system-logs"))):
             return await self.app(scope, receive, send)
         log = getattr(scope["app"].state, "traffic", None)
         if log is None:

@@ -59,6 +59,7 @@ from .source_secrets import SecretsUnavailable
 from .workbooks import current_workbook, ReportDataError
 from .attachments import AttachmentStore
 from .traffic import TrafficLog, TrafficMiddleware, DIRECTIONS
+from .system_logs import SystemLog, register_system_logs
 from .workbook_runner import rebuild_excel
 from .workbook_preview import PreviewSheetNotFound, workbook_preview
 from .reasoning import saved_effort, validate_effort
@@ -83,6 +84,9 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         prepare_bootstrap(settings, app.state.db)
         app.state.traffic = TrafficLog(app.state.db)
         app.state.traffic.start()
+        app.state.system_logs = SystemLog(app.state.db, app.state.traffic)
+        app.state.system_logs.start()
+        app.state.traffic.system_logs = app.state.system_logs
         app.state.connectors = ConnectorRegistry(settings, app.state.db)
         app.state.connectors.traffic = app.state.traffic
         for connector in app.state.connectors.connectors.values():
@@ -114,6 +118,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             launch_report(report['id'], report['user_id'], json.loads(report['analyses_json']))
         for job in app.state.db.all("SELECT id FROM chat_runs WHERE status IN ('queued','running','paused')"):
             app.state.chat_jobs.start(job['id'])
+        app.state.system_logs.record('info', 'application', 'application.started', 'Backend started.')
         yield
         app.state.manager.shutting_down = True
         await app.state.chat_jobs.close()
@@ -123,6 +128,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         await asyncio.gather(*app.state.jobs, return_exceptions=True)
         await app.state.manager.close()
         await app.state.traffic.close()
+        app.state.system_logs.record('info', 'application', 'application.stopped', 'Backend stopped.')
+        await app.state.system_logs.close()
 
     app = FastAPI(
         title="Duka Report Agent", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
@@ -130,6 +137,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     app.add_middleware(TrafficMiddleware)
     app.add_middleware(AuthBodyLimitMiddleware)
     register_accounts(app, settings)
+    register_system_logs(app)
     register_branches(app)
     register_subscriptions(app)
     register_notifications(app)
