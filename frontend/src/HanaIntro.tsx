@@ -13,11 +13,16 @@ import {
   type MouthHandle,
   type MouthShape,
 } from "./HanaMouth";
-import { mouthAt, PACE, planSpeech, type IntroMode } from "./hanaSpeech";
+import {
+  mouthAt,
+  PACE,
+  planSpeech,
+  transitionTiming,
+  type IntroMode,
+} from "./hanaSpeech";
 import { HANA_AVATAR } from "./hanaAvatar";
 
 export type { IntroMode };
-export const HANA_TRANSITION_MS = 1850;
 type Phase = "sky" | "moon" | "transform" | "alive" | "setting" | "leaving";
 
 const reducedMotion = () =>
@@ -48,7 +53,7 @@ function seeded(count: number, seed: number) {
   return Array.from({ length: count }, () => [next(), next(), next(), next()]);
 }
 
-/** Every login and logout transition advances automatically within two seconds. */
+/** One-second transformations, with a separate greeting under two seconds. */
 export default function HanaIntro({
   name,
   mode,
@@ -90,6 +95,7 @@ export default function HanaIntro({
     let completed = false;
     let frame = 0;
     const timers: number[] = [];
+    const timing = transitionTiming(mode, still);
     const finish = () => {
       if (completed) return;
       completed = true;
@@ -98,7 +104,7 @@ export default function HanaIntro({
       done.current();
     };
     // This deadline is independent of speech length, frame rate and renders.
-    timers.push(window.setTimeout(finish, HANA_TRANSITION_MS));
+    timers.push(window.setTimeout(finish, timing.total));
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") finish();
     };
@@ -107,23 +113,27 @@ export default function HanaIntro({
       if (!farewell) {
         for (const [time, next] of [
           [0, "moon"],
-          [90, "transform"],
-          [230, "alive"],
+          [200, "transform"],
+          [timing.transformation, "alive"],
         ] as const)
           timers.push(window.setTimeout(() => setPhase(next), time));
       }
-      timers.push(window.setTimeout(() => setBlink(true), 900));
-      timers.push(window.setTimeout(() => setBlink(false), 1030));
+      timers.push(
+        window.setTimeout(() => setBlink(true), timing.speechStart + 900),
+      );
+      timers.push(
+        window.setTimeout(() => setBlink(false), timing.speechStart + 1030),
+      );
       timers.push(
         window.setTimeout(
           () => setPhase(farewell ? "setting" : "leaving"),
-          1500,
+          timing.speechEnd,
         ),
       );
       const plan = planSpeech(lines[0], PACE[mode]);
       const start = performance.now();
-      const speechStart = farewell ? 100 : 260;
-      const speechLength = Math.min(plan.total, 1120);
+      const speechStart = timing.speechStart + 80;
+      const speechLength = Math.min(plan.total, 1450);
       const tick = (now: number) => {
         const elapsed = now - start - speechStart;
         const active = elapsed >= 0 && elapsed < speechLength;
@@ -131,7 +141,7 @@ export default function HanaIntro({
         mouthTarget.current = active
           ? mouthAt(plan, (elapsed * plan.total) / speechLength)
           : { open: 0, round: 0 };
-        if (!completed && now - start < 1500)
+        if (!completed && now - start < timing.speechEnd)
           frame = requestAnimationFrame(tick);
       };
       frame = requestAnimationFrame(tick);
@@ -141,7 +151,7 @@ export default function HanaIntro({
           { transform: "translateY(0.25%) rotate(-0.35deg)" },
           { transform: "none" },
         ],
-        { duration: 1150, easing: "ease-in-out" },
+        { duration: 1150, delay: timing.speechStart, easing: "ease-in-out" },
       );
     }
     return () => {

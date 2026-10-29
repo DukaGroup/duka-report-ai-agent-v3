@@ -5,9 +5,20 @@ import ts from '../frontend/node_modules/typescript/lib/typescript.js';
 
 const source = await readFile(new URL('../frontend/src/hanaSpeech.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
-const { syllables, planSpeech, mouthAt, PACE, stepSpring } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+const { syllables, planSpeech, mouthAt, PACE, stepSpring, transitionTiming } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
 const split = (word) => syllables(word).map(([a, b]) => word.slice(a, b)).join('-');
+
+test('transformations last one second with a separate greeting under two seconds', () => {
+  for (const mode of ['presentation','greeting','farewell']) {
+    const timing=transitionTiming(mode);
+    assert.equal(timing.transformation,1000);
+    assert.equal(timing.speechEnd-timing.speechStart,1700);
+    assert.equal(timing.speechStart,mode==='farewell'?0:1000);
+    assert.equal(timing.total,mode==='farewell'?2700:2950);
+    assert.deepEqual(transitionTiming(mode,true),{transformation:0,speechStart:0,speechEnd:1700,total:1700});
+  }
+});
 
 test('Albanian words split into natural syllables', () => {
   assert.equal(split('Përshëndetje'), 'Për-shën-det-je');

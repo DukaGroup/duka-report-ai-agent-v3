@@ -16,7 +16,7 @@
   font-family: inherit;
 }
 .hana-intro.phase-leaving {
-  animation: intro-fade-out 0.35s ease-in forwards;
+  animation: intro-fade-out 0.25s ease-in forwards;
 }
 @keyframes intro-fade-in {
   from {
@@ -360,7 +360,7 @@
   clip-path: circle(100% at 50% 50%);
 }
 .phase-leaving .intro-hana {
-  animation: intro-hana-leave 0.35s ease-in forwards;
+  animation: intro-hana-leave 0.25s ease-in forwards;
 }
 @keyframes intro-reveal {
   0% {
@@ -822,43 +822,21 @@
   }
 }
 
-/* The complete greeting/farewell, including its fade, fits inside 1.85 s. */
+/* One second for the transformation, then a separate 1.7-second greeting. */
 .hana-intro .intro-scene {
   transition-duration: 0.2s;
 }
 .hana-intro.phase-moon .intro-moon {
-  animation-duration: 0.1s;
+  animation-duration: 0.2s;
 }
 .hana-intro.phase-transform .intro-moon,
 .hana-intro.phase-transform .intro-hana {
-  animation-duration: 0.16s;
+  animation-duration: 0.8s;
   animation-delay: 0s;
 }
 .hana-intro .hana-sway,
 .hana-intro .hana-breathe {
   animation: none;
-}
-.mode-greeting.phase-moon .intro-moon {
-  animation-duration: 0.38s;
-}
-.mode-greeting.phase-moon .moon-shadow {
-  animation-duration: 0.34s;
-  animation-delay: 0s;
-}
-.mode-greeting.phase-transform .intro-moon {
-  animation-duration: 0.38s;
-}
-.mode-greeting.phase-transform .intro-flash {
-  animation-duration: 0.4s;
-  animation-delay: 0.06s;
-}
-.mode-greeting.phase-transform .intro-burst span {
-  animation-duration: 0.35s;
-  animation-delay: calc(0.06s + var(--delay) * 0.3);
-}
-.mode-greeting.phase-transform .intro-hana {
-  animation-duration: 0.4s;
-  animation-delay: 0.06s;
 }
 .mode-greeting .intro-speech {
   min-height: 0;
@@ -879,7 +857,7 @@
 }
 .phase-setting .intro-hana {
   opacity: 1;
-  animation: intro-hana-set 0.2s ease-in forwards;
+  animation: intro-hana-set 0.6s ease-in forwards;
 }
 @keyframes intro-hana-set {
   0% {
@@ -898,7 +876,10 @@
   }
 }
 .phase-setting .intro-moon {
-  animation: intro-moon-set 0.3s ease-in 0.04s both;
+  animation: intro-moon-set 0.65s ease-in 0.35s both;
+}
+.hana-intro.phase-setting {
+  animation: intro-fade-out 0.2s ease-in 0.8s forwards;
 }
 @keyframes intro-moon-set {
   0% {

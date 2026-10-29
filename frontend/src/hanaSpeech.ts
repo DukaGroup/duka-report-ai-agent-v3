@@ -2,6 +2,19 @@ import type { MouthShape } from "./HanaMouth";
 
 export type IntroMode = "presentation" | "greeting" | "farewell";
 
+/** Transformation and greeting have separate time budgets. */
+export function transitionTiming(mode: IntroMode, still = false) {
+  const transformation = still ? 0 : 1000;
+  const speechStart = mode === "farewell" ? 0 : transformation;
+  const speechEnd = speechStart + 1700;
+  return {
+    transformation,
+    speechStart,
+    speechEnd,
+    total: speechEnd + (still ? 0 : mode === "farewell" ? transformation : 250),
+  };
+}
+
 /** Exact critically damped spring step; stable even when frames are delayed. */
 export function stepSpring(
   position: number,
