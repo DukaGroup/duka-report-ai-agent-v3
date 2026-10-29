@@ -60,6 +60,9 @@ def safe_database_error(exc):
     return "SQL Server could not complete the request. Check connectivity, database permissions, and the approved query script."
 
 
+SELECTED_DATABASE_TTL = 120
+
+
 class QueryCatalog:
     def __init__(self, directory):
         self.directory = directory
@@ -121,6 +124,20 @@ class SQLServerConnector:
     def __init__(self, settings, catalog, driver=None):
         self.settings, self.catalog, self.driver = settings, catalog, driver
 
+    # Each business-data tool call selects a database. Reuse a recent catalog
+    # check instead of opening extra TLS connections on every call. Grants are
+    # still checked per call; this only caches that the database is reachable.
+    def _cached_database(self, database):
+        entry = self.__dict__.setdefault("_selected_databases", {}).get(database)
+        if entry and entry[0] > time.monotonic():
+            return entry[1]
+        self._selected_databases.pop(database, None)
+        return None
+
+    def _remember_database(self, database, connector):
+        self.__dict__.setdefault("_selected_databases", {})[database] = (time.monotonic() + SELECTED_DATABASE_TTL, connector)
+        return connector
+
     def missing(self):
         return [
             f"SQLSERVER_{key.upper()}"
@@ -164,7 +181,7 @@ class SQLServerConnector:
                 database=self.settings.sqlserver_database or "master",
                 as_dict=True,
                 login_timeout=self.settings.sqlserver_timeout,
-                timeout=self.settings.sqlserver_timeout,
+                timeout=max(self.settings.database_query_timeout, self.settings.sqlserver_timeout),
                 tds_version="7.4",
                 encryption=tls["encryption"],
                 read_only=True,
@@ -225,6 +242,13 @@ class SQLServerConnector:
         except Exception as exc:
             code = exc.args[0] if exc.args and isinstance(exc.args[0], int) else None
             failure = self.error_message(exc)
+            text = str(exc).lower()
+            if connection and ("timeout" in text or "timed out" in text):
+                # Connected, so this is a slow query rather than a network fault.
+                # Tell the model how to recover instead of ending the answer.
+                failure = (f"The query ran longer than the {self.settings.database_query_timeout}-second database limit. "
+                           "Aggregate in the query (group by month, customer or item), add date/company filters, "
+                           "or split the period into smaller ranges, then retry.")
             raise DatabaseUnavailable(failure, "query" if connection else "connection", code) from None
         finally:
             if connection:
@@ -284,6 +308,9 @@ class SQLServerConnector:
             raise ValueError("Choose a database name returned by list_databases.")
         if database == self.settings.sqlserver_database:
             return self
+        cached = self._cached_database(database)
+        if cached is not None:
+            return cached
         allowed = await asyncio.to_thread(
             self._catalog_run,
             """SELECT name FROM sys.databases WHERE name=%(database)s
@@ -294,7 +321,7 @@ class SQLServerConnector:
             raise SourceNotConfigured("Database is unavailable or the reporting login cannot access it.")
         connector = SQLServerConnector(replace(self.settings, sqlserver_database=allowed[0]["name"]), self.catalog, self.driver)
         connector.traffic = getattr(self, "traffic", None)
-        return connector
+        return self._remember_database(database, connector)
 
     async def fetch(self, query_key, parameters):
         if not self.settings.sqlserver_database:

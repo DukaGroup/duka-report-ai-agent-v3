@@ -26,6 +26,9 @@ class Database:
         connection = sqlite3.connect(self.path, timeout=15)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
+        # WAL + NORMAL stays crash-safe but skips an fsync on every commit.
+        # Streaming saves each reply chunk, so this cuts disk waits a lot.
+        connection.execute("PRAGMA synchronous=NORMAL")
         try:
             yield connection
             connection.commit()
@@ -63,6 +66,17 @@ class Database:
         with self.connect() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript((Path(__file__).parent / "schema.sql").read_text())
+            if not c.execute("SELECT 1 FROM schema_migrations WHERE version=17").fetchone():
+                # Compute once on upgrade; live totals are maintained by triggers
+                # so refreshing unlimited history never scans every old payload.
+                c.execute("INSERT OR REPLACE INTO traffic_totals SELECT direction,count(*),sum(bytes),sum(status='error') FROM traffic_events GROUP BY direction")
+                # Retiring the conversation bin must not hide or purge old data.
+                restored = c.execute("DELETE FROM conversation_trash").rowcount
+                if restored:
+                    c.execute("INSERT INTO audit_events VALUES(?,?,?,?,?,?)", (
+                        uid(), None, "conversation.trash_retired", None,
+                        json.dumps({"restored_count": restored}), now()))
+                c.execute("INSERT INTO schema_migrations VALUES(17,?)", (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(16,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(15,?)', (now(),))
             c.execute('INSERT OR IGNORE INTO schema_migrations VALUES(14,?)', (now(),))
@@ -222,8 +236,8 @@ class Database:
                 c.execute("INSERT INTO audit_events VALUES(?,?,?,?,?,?)", (uid(), user_id, "conversation.restored", identifier, "{}", now()))
         return len(identifiers)
 
-    def delete_conversations(self, user_id, identifiers):
-        """Purge the complete owned trash selection atomically, retaining saved reports."""
+    def delete_conversations(self, user_id, identifiers, *, deleted=True):
+        """Purge an exact owned selection atomically, retaining saved reports."""
         identifiers = list(dict.fromkeys(identifiers))
         if not identifiers:
             raise ValueError("Select at least one conversation.")
@@ -231,7 +245,7 @@ class Database:
             c.execute("BEGIN IMMEDIATE")
             # Validate before changing any history, including a concurrent delete.
             for identifier in identifiers:
-                self.validate_conversation_selection(c, user_id, identifier, deleted=True)
+                self.validate_conversation_selection(c, user_id, identifier, deleted=deleted)
                 self.require_stopped_conversation(c, identifier)
             for identifier in identifiers:
                 c.execute("UPDATE reports SET conversation_id=NULL WHERE conversation_id=?", (identifier,))

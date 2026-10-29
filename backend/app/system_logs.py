@@ -1,25 +1,23 @@
-"""Bounded operational events for Devs; never expose OS journals or raw exceptions."""
+"""Retained operational events for Devs; no OS journals or raw exceptions."""
 
-import asyncio
-from collections import deque
-import contextlib
 import json
 
 from fastapi import Depends, HTTPException, Request
 
 from .db import now
+from .log_writer import PersistentLog
 from .security import admin_user
 
 LEVELS = ("info", "warning", "error")
 COMPONENTS = ("application", "database", "model", "reports")
 
 
-class SystemLog:
-    def __init__(self, db, redactor, capacity=2000):
-        self.db, self.redactor, self.capacity = db, redactor, capacity
-        self.pending = deque(maxlen=capacity)
-        self.lock = asyncio.Lock()
-        self.task = None
+class SystemLog(PersistentLog):
+    interval = 0.5
+
+    def __init__(self, db, redactor):
+        super().__init__(db)
+        self.redactor = redactor
 
     def record(self, level, component, event, message, *, source_id=None, details=None):
         if level not in LEVELS or component not in COMPONENTS:
@@ -37,48 +35,13 @@ class SystemLog:
             )
         )
 
-    def start(self):
-        self.task = asyncio.create_task(self.writer())
-
-    async def writer(self):
-        while True:
-            await asyncio.sleep(0.5)
-            try:
-                await self.flush()
-            except Exception:
-                continue
-
-    async def flush(self):
-        async with self.lock:
-            batch = [self.pending.popleft() for _ in range(len(self.pending))]
-            if not batch:
-                return
-
-            def write():
-                with self.db.connect() as connection:
-                    connection.executemany(
-                        "INSERT INTO system_logs(created_at,level,component,event,message,source_id,details_json) "
-                        "VALUES(?,?,?,?,?,?,?)",
-                        batch,
-                    )
-                    connection.execute(
-                        "DELETE FROM system_logs WHERE id < COALESCE("
-                        "(SELECT id FROM system_logs ORDER BY id DESC LIMIT 1 OFFSET ?),0)",
-                        (self.capacity - 1,),
-                    )
-
-            try:
-                await asyncio.to_thread(write)
-            except Exception:
-                self.pending.extendleft(reversed(batch))
-                raise
-
-    async def close(self):
-        if self.task:
-            self.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.task
-        await self.flush()
+    def write_batch(self, batch):
+        with self.db.connect() as connection:
+            connection.executemany(
+                "INSERT INTO system_logs(created_at,level,component,event,message,source_id,details_json) "
+                "VALUES(?,?,?,?,?,?,?)",
+                batch,
+            )
 
 
 def register_system_logs(app):

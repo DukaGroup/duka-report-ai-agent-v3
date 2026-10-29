@@ -222,11 +222,15 @@ def excel_report(report, snapshot, layout=None, checks=None):
             raise ReportDataError("Workbook column translations are incomplete. Retry report generation.")
         if language != "en" and (not translated.get("scope") or not translated.get("query_explanation")):
             raise ReportDataError("Workbook scope and filter translations are incomplete. Retry report generation.")
+        # Connection, database and table names are private infrastructure.
+        # Uploaded files keep their own name; database data gets a business label.
         source_name = dataset.get("source", labels["provided_data"])
         if source_name in ("User-provided data", "Provided data"):
             source_name = labels["provided_data"]
-        if dataset.get("database"):
-            source_name += " / " + dataset["database"]
+        elif source_name == "Model calculation":
+            source_name = labels["calculated_results"]
+        elif any(dataset.get(key) for key in ("source_id", "database", "query", "query_key")):
+            source_name = labels["system_data"]
         source = labels["source"] + ": " + source_name
         sheet.merge_range(0, 0, 1, max(2, min(len(fields) - 1, 7)), display_name, title)
         sheet.set_row(0, 28)
@@ -494,8 +498,7 @@ def excel_report(report, snapshot, layout=None, checks=None):
             labels["query_filters"]
             + ": "
             + (
-                translated.get("query_explanation")
-                or json.dumps(dataset.get("query", dataset.get("parameters", {})), ensure_ascii=False)
+                translated.get("query_explanation") or labels["not_available"]
             ),
             labels["scope"] + ": " + (translated.get("scope") or labels["provided_rows"]),
         ]

@@ -87,7 +87,7 @@ class HanaConnector(SQLServerConnector):
                    "password": self.settings.hana_password, "autocommit": False,
                    "encrypt": tls["encrypt"], "sslValidateCertificate": tls["validate_certificate"],
                    "connectTimeout": self.settings.sqlserver_timeout * 1000,
-                   "communicationTimeout": self.settings.sqlserver_timeout * 1000}
+                   "communicationTimeout": max(self.settings.database_query_timeout, self.settings.sqlserver_timeout) * 1000}
         if tls["encrypt"]:
             options["sslCryptoProvider"] = "openssl"
             if tls["validate_certificate"]:
@@ -155,6 +155,9 @@ class HanaConnector(SQLServerConnector):
     async def in_database(self, database):
         if not isinstance(database, str) or not 1 <= len(database) <= 128 or "\x00" in database:
             raise ValueError("Choose a database name returned by discover_databases.")
+        cached = self._cached_database(database)
+        if cached is not None:
+            return cached
         current, names, _ = await self._catalog()
         if database == "SYSTEMDB" or database not in names:
             raise SourceNotConfigured("Database is unavailable or the reporting login cannot access it.")
@@ -167,7 +170,7 @@ class HanaConnector(SQLServerConnector):
         if database == current:
             # Avoid databaseName when using a direct tenant/Cloud endpoint.
             selected._connect = self._connect
-        return selected
+        return self._remember_database(database, selected)
 
     async def schemas(self, offset=0, limit=100):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:

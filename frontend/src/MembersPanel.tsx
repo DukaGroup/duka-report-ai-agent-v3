@@ -107,7 +107,7 @@ export function MembersPanel({
                           <ShieldCheck size={18} />
                         </IconButton>
                         <IconButton
-                          label={`Rikupero llogarinë: ${member.name}`}
+                          label={`Rivendos fjalëkalimin: ${member.name}`}
                           disabled={!member.active}
                           onClick={() => onRecover(member)}
                         >

@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from pydantic import Field, SecretStr
 
 from .schemas import InputModel, Credentials
-from .security import admin_user, current_user, create_session, hash_password, password_work, token_hash, verify_password
+from .security import COOKIE, admin_user, create_session, hash_password, password_work, token_hash, verify_password
 
 
 class PasswordChange(InputModel):
@@ -19,6 +19,20 @@ class PasswordRecovery(Credentials):
     token: SecretStr = Field(min_length=1, max_length=256)
 
 
+class AdminPassword(InputModel):
+    password: SecretStr = Field(min_length=12, max_length=256)
+
+
+def check_admin_transaction(connection, request, user):
+    # Hashing runs off-thread: role/session revocation during that work must win.
+    if not connection.execute(
+        "SELECT 1 FROM users u JOIN sessions s ON s.user_id=u.id WHERE u.id=? AND u.active=1 "
+        "AND u.role='devs' AND s.token_hash=? AND s.expires_at>?",
+        (user["id"], token_hash(request.cookies.get(COOKIE, "")), time.time()),
+    ).fetchone():
+        raise HTTPException(403, "Administrator access is required.")
+
+
 async def revoke_work(state, user_id):
     for chat in state.db.all("SELECT id FROM conversations WHERE user_id=?", (user_id,)):
         await state.chat_jobs.stop(chat["id"])
@@ -28,7 +42,7 @@ async def revoke_work(state, user_id):
 
 def register_accounts(app, settings):
     @app.post("/api/auth/password")
-    async def change_password(body: PasswordChange, request: Request, response: Response, user=Depends(current_user)):
+    async def change_password(body: PasswordChange, request: Request, response: Response, user=Depends(admin_user)):
         state, db = app.state, app.state.db
         state.limiter.check("password:" + user["id"])
         if not await password_work(state, verify_password, body.current_password.get_secret_value(), user["password_hash"]):
@@ -38,6 +52,7 @@ def register_accounts(app, settings):
             # Compare the current hash within the write transaction: concurrent resets
             # must not be overwritten using a password that has just been revoked.
             c.execute("BEGIN IMMEDIATE")
+            check_admin_transaction(c, request, user)
             row = c.execute("SELECT password_hash FROM users WHERE id=? AND active=1", (user["id"],)).fetchone()
             if not row or row["password_hash"] != user["password_hash"]:
                 raise HTTPException(422, "The current password is incorrect.")
@@ -47,6 +62,25 @@ def register_accounts(app, settings):
         await revoke_work(state, user["id"])
         create_session(db, settings, response, user["id"], expected_hash=encoded)
         db.audit(user["id"], "user.password_changed", user["id"])
+        return {"ok": True}
+
+    @app.post("/api/admin/users/{identifier}/password")
+    async def set_member_password(identifier: str, body: AdminPassword, request: Request, user=Depends(admin_user)):
+        state, db = app.state, app.state.db
+        state.limiter.check("admin-password:" + user["id"] + ":" + identifier)
+        if not db.one("SELECT id FROM users WHERE id=? AND active=1", (identifier,)):
+            raise HTTPException(404, "Active member not found.")
+        encoded = await password_work(state, hash_password, body.password.get_secret_value())
+        with db.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            check_admin_transaction(c, request, user)
+            if not c.execute("SELECT id FROM users WHERE id=? AND active=1", (identifier,)).fetchone():
+                raise HTTPException(404, "Active member not found.")
+            c.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, identifier))
+            c.execute("DELETE FROM sessions WHERE user_id=?", (identifier,))
+            c.execute("DELETE FROM password_resets WHERE user_id=?", (identifier,))
+        await revoke_work(state, identifier)
+        db.audit(user["id"], "user.password_reset", identifier)
         return {"ok": True}
 
     @app.post("/api/admin/users/{identifier}/password-reset")
@@ -64,7 +98,7 @@ def register_accounts(app, settings):
         return {"token": token, "expires_at": expiry}
 
     @app.post("/api/auth/password-reset")
-    async def reset_password(body: PasswordRecovery, request: Request):
+    async def reset_password(body: PasswordRecovery, request: Request, user=Depends(admin_user)):
         state, db = app.state, app.state.db
         state.limiter.check("recovery:ip:" + request.client.host, "recovery:account:" + body.email)
         if len(body.password) < 12:
@@ -72,6 +106,7 @@ def register_accounts(app, settings):
         encoded = await password_work(state, hash_password, body.password)
         with db.connect() as c:
             c.execute("BEGIN IMMEDIATE")
+            check_admin_transaction(c, request, user)
             row = c.execute(
                 "SELECT u.id FROM users u JOIN password_resets p ON p.user_id=u.id WHERE u.email=? AND u.active=1 AND p.token_hash=? AND p.expires_at>?",
                 (body.email, token_hash(body.token.get_secret_value()), time.time()),
@@ -83,5 +118,5 @@ def register_accounts(app, settings):
             c.execute("DELETE FROM password_resets WHERE user_id=?", (identifier,))
             c.execute("DELETE FROM sessions WHERE user_id=?", (identifier,))
         await revoke_work(state, identifier)
-        db.audit(identifier, "user.password_reset", identifier)
+        db.audit(user["id"], "user.password_reset", identifier)
         return {"ok": True}

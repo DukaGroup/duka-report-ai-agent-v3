@@ -5,6 +5,7 @@ export interface User {
   role: "devs" | "president" | "manager";
   active: number;
   created_at: string;
+  intro_pending?: boolean;
 }
 export type Provider = "chatgpt" | "claude";
 export interface Login {
@@ -45,7 +46,13 @@ export interface Conversation {
   message_count?: number;
   preview?: string | null;
 }
+export interface ProgressStep {
+  id: string;
+  label: string;
+  kind: string;
+}
 export interface Message {
+  steps?: ProgressStep[];
   notification_ready?: boolean;
   notification_pending?: boolean;
   report_count?: number;

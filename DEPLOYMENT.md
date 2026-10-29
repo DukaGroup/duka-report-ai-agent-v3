@@ -20,18 +20,18 @@ Browser -- HTTPS :443 --> Nginx
                                            `-- /var/lib/duka-agent/ (persistent data)
 ```
 
-| Item | Value |
-| --- | --- |
-| SSH target | `hana@10.0.200.22` |
-| Website | `https://hana.dukagroup.local` |
-| Application source | `/var/www/duka-agent/app` |
-| Python virtual environment | `/var/www/duka-agent/app/.venv` |
-| Codex executable | `/var/www/duka-agent/codex/node_modules/.bin/codex` |
-| Backend service | `duka-agent.service`, running as `duka` |
-| Frontend | `/var/www/duka-agent/app/frontend/dist`, served by Nginx |
-| Private data and configuration | `/var/lib/duka-agent`, `runtime.env` inside it |
-| Installed Nginx site | `/etc/nginx/sites-available/duka-agent` |
-| TLS certificate releases | `/etc/nginx/tls/hana.dukagroup.local/` |
+| Item                           | Value                                                      |
+| ------------------------------ | ---------------------------------------------------------- |
+| SSH target                     | `hana@10.0.200.22`                                       |
+| Website                        | `https://hana.dukagroup.local`                           |
+| Application source             | `/var/www/duka-agent/app`                                |
+| Python virtual environment     | `/var/www/duka-agent/app/.venv`                          |
+| Codex executable               | `/var/www/duka-agent/codex/node_modules/.bin/codex`      |
+| Backend service                | `duka-agent.service`, running as `duka`                |
+| Frontend                       | `/var/www/duka-agent/app/frontend/dist`, served by Nginx |
+| Private data and configuration | `/var/lib/duka-agent`, `runtime.env` inside it         |
+| Installed Nginx site           | `/etc/nginx/sites-available/duka-agent`                  |
+| TLS certificate releases       | `/etc/nginx/tls/hana.dukagroup.local/`                   |
 
 Keep SSH access restricted to your administration network. Allow HTTPS from the intended LAN/VPN clients. The backend listens on loopback only. No separate database server is required for application storage: the backend uses SQLite; SQL Server and HANA are external business-data sources.
 
@@ -66,11 +66,11 @@ The website certificate must contain `hana.dukagroup.local` (or a matching `*.du
 
 Get these files from the certificate administrator:
 
-| Example filename | Contents |
-| --- | --- |
-| `hana.cer` | One website certificate, PEM or DER |
-| `hana.key` | Matching unencrypted PEM private key, for unattended Nginx startup |
-| `chain.p7b` | CA chain, PEM/DER PKCS#7; it may include the root and intermediates |
+| Example filename | Contents                                                            |
+| ---------------- | ------------------------------------------------------------------- |
+| `hana.cer`     | One website certificate, PEM or DER                                 |
+| `hana.key`     | Matching unencrypted PEM private key, for unattended Nginx startup  |
+| `chain.p7b`    | CA chain, PEM/DER PKCS#7; it may include the root and intermediates |
 
 These are the only three input files. No separate root certificate file is required. The installer uses the server’s existing CA trust store by default. If the root is included in `chain.p7b` but is not already trusted, confirm its SHA256 fingerprint independently with IT and use `--trust-root-sha256` as shown in section 6. Finding a root in the bundle does not automatically make it trusted. No CA private key is needed.
 
@@ -282,13 +282,13 @@ Use the SQL Server endpoint, actual SQL port, dedicated reporting username/passw
 
 For **both SQL Server and SAP HANA**, open **Konfiguro lidhjen → Siguria e lidhjes**:
 
-| Setting | Behavior |
-| --- | --- |
-| TLS enabled, verification off | Encrypted connection without checking the database server's identity. No uploaded CA is needed. This is the default for new sources. |
-| Verification enabled, no uploaded CA | Require TLS and verify the database certificate using the backend's system CA trust. |
-| Trusted CA/public certificate supplied (PEM) | Always require TLS and certificate verification, even if the other controls request otherwise. Invalid, expired or mismatched certificates fail; there is no automatic bypass. |
-| TLS disabled | Attempt the database's non-TLS mode. Credentials/data may be exposed on the network. A server requiring TLS can reject it. |
-| SQL Server: TLS when offered | `SQLSERVER_ENCRYPTION=request` negotiates TLS when available and can permit an unencrypted connection. Supplying a CA or enabling verification changes the effective mode to required TLS. |
+| Setting                                      | Behavior                                                                                                                                                                                     |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TLS enabled, verification off                | Encrypted connection without checking the database server's identity. No uploaded CA is needed. This is the default for new sources.                                                         |
+| Verification enabled, no uploaded CA         | Require TLS and verify the database certificate using the backend's system CA trust.                                                                                                         |
+| Trusted CA/public certificate supplied (PEM) | Always require TLS and certificate verification, even if the other controls request otherwise. Invalid, expired or mismatched certificates fail; there is no automatic bypass.               |
+| TLS disabled                                 | Attempt the database's non-TLS mode. Credentials/data may be exposed on the network. A server requiring TLS can reject it.                                                                   |
+| SQL Server: TLS when offered                 | `SQLSERVER_ENCRYPTION=request` negotiates TLS when available and can permit an unencrypted connection. Supplying a CA or enabling verification changes the effective mode to required TLS. |
 
 **For your current HANA connection:** after deploying this update, edit the existing source, keep **Kriptimi TLS → I aktivizuar**, select **Verifikimi i certifikatës → Pa verifikim**, leave the CA empty, save, and test. This reproduces your working local connection. Existing explicit verification choices and uploaded certificates are preserved on upgrade; the app does not silently clear them. New sources default to encryption enabled and verification off. Saved source profiles override generic HANA/SQLSERVER variables; edit the exact source in Settings.
 
@@ -326,7 +326,9 @@ sudo -u duka env ENV_FILE=/var/lib/duka-agent/runtime.env DATA_DIR=/var/lib/duka
 
 ## 9. Update directly from GitHub — on the server
 
-Wait for active chats/reports to finish. Then, from your SSH session:
+Wait for active chats/reports to finish. This revision removes the conversation trash view: new confirmed deletions are permanent and preserve saved reports. On first startup, existing trashed conversations return to their owners’ history (migration 17); no history is automatically purged or restarted. Then, from your SSH session:
+
+The same update adds a searchable public-work timeline in chat, global search, search within Reports and Traffic, and a manual **Te mesazhi i fundit** action when a user has scrolled up. It removes Account settings. Only Devs administrators can set member passwords through **Anëtarët dhe qasja**; password changes revoke the member's sessions and stop active work. Search results use the caller's permissions. Deploy both the backend and rebuilt frontend together so these endpoints and controls match.
 
 ```bash
 cd /var/www/duka-agent/app
@@ -390,7 +392,9 @@ The private data directory, runtime.env and generated files are not application-
 
 ### View application logs inside Hana
 
-After deploying this revision and rebuilding the frontend, Devs can open **Cilësimet → Regjistrat e sistemit**. It shows up to 2,000 retained operational events: backend start/stop, saved connection checks, database failures, provider errors and report-tool failures. Filter by level/component, refresh or pause updates, browse older events, or download the displayed page as redacted JSON. Managers and President cannot access the panel or its API.
+After deploying this revision and rebuilding the frontend, Devs can open **Cilësimet → Regjistrat e sistemit**. It retains all recorded operational events without an event-count cap: backend start/stop, saved connection checks, database failures, provider errors and report-tool failures. Filter by level/component, refresh or pause updates, browse older events, or download the displayed page as redacted JSON. Managers and President cannot access the panel or its API.
+
+Traffic history also retains every recorded event instead of only the last 10,000. Both viewers paginate; their JSON download contains the displayed page. Redaction, authentication/binary exclusions and payload preview bounds remain. SQLite storage grows with activity, so monitor free disk space and retain encrypted backups. Previously pruned entries cannot be recovered by this upgrade.
 
 To capture a database failure, run **Test connection** for that source, then filter the log viewer to **Databazat**. Connection-check entries include the source name, safe error message, category and available driver code. Passwords, tokens, raw driver exceptions and SQL result rows are not copied into these operational logs. This is an application log, not unrestricted access to systemd/Nginx journals. Logging begins after the upgraded backend initializes; earlier startup failures still require the server terminal:
 
@@ -400,7 +404,6 @@ sudo journalctl -u duka-agent -f
 ```
 
 For Nginx failures use `sudo nginx -t` and `sudo tail -n 80 /var/log/nginx/error.log`. Do not add the backend service user to the system journal or administrator groups to expose host logs through the app.
-
 
 ### SSH, GitHub or provider DNS fails
 
@@ -546,22 +549,22 @@ Before handing the site to users, confirm:
 5. Each configured database passes its own connection test; Managers see only assigned databases/companies.
 6. You have a verified encrypted backup and its separately protected key.
 
-| Retained deployment file | Responsibility |
-| --- | --- |
-| `deploy/install-native.sh` | Main native installer: prerequisites, dependencies, build, backend and optional HTTPS |
-| `deploy/hana-native.env.example` | Fresh-server production settings for this domain |
-| `deploy/duka-agent.service` | Backend process, loopback listener and service restrictions |
-| `deploy/install-service.sh` | Validate/install/start the backend systemd service |
-| `deploy/prepare-env.sh`, `deploy/prepare_env.py` | Preserve or prepare private configuration |
-| `deploy/preflight.py` | Check origins, file permissions and database TLS policy |
-| `deploy/setup-provided-https.sh` | Activate your supplied certificates and Nginx site with rollback |
-| `deploy/provided_tls.py` | Parse `.p7b`, verify certificate/key/chain/domain and stage the bundle |
-| `deploy/nginx-https.conf` | Native frontend and API proxy template; the installer fills its tokens |
-| `deploy/freetds.conf` | Bootstrap defaults; backend creates private per-source TLS aliases |
-| `deploy/backup.sh`, `deploy/backup.py` | Encrypted, verified workspace backup and recovery |
-| `deploy/diagnose-connections.py` | Check saved configuration, TLS policy, DNS/TCP and database login safely |
-| `deploy/check_database_permissions.py` | Read-only reporting-account privilege inventory |
-| `deploy/check-tracked-secrets.py` | Prevent private configuration/credentials entering Git |
+| Retained deployment file                             | Responsibility                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `deploy/install-native.sh`                         | Main native installer: prerequisites, dependencies, build, backend and optional HTTPS |
+| `deploy/hana-native.env.example`                   | Fresh-server production settings for this domain                                      |
+| `deploy/duka-agent.service`                        | Backend process, loopback listener and service restrictions                           |
+| `deploy/install-service.sh`                        | Validate/install/start the backend systemd service                                    |
+| `deploy/prepare-env.sh`, `deploy/prepare_env.py` | Preserve or prepare private configuration                                             |
+| `deploy/preflight.py`                              | Check origins, file permissions and database TLS policy                               |
+| `deploy/setup-provided-https.sh`                   | Activate your supplied certificates and Nginx site with rollback                      |
+| `deploy/provided_tls.py`                           | Parse `.p7b`, verify certificate/key/chain/domain and stage the bundle              |
+| `deploy/nginx-https.conf`                          | Native frontend and API proxy template; the installer fills its tokens                |
+| `deploy/freetds.conf`                              | Bootstrap defaults; backend creates private per-source TLS aliases                    |
+| `deploy/backup.sh`, `deploy/backup.py`           | Encrypted, verified workspace backup and recovery                                     |
+| `deploy/diagnose-connections.py`                   | Check saved configuration, TLS policy, DNS/TCP and database login safely              |
+| `deploy/check_database_permissions.py`             | Read-only reporting-account privilege inventory                                       |
+| `deploy/check-tracked-secrets.py`                  | Prevent private configuration/credentials entering Git                                |
 
 All listed code and templates come from the GitHub checkout. The main installer calls the smaller helpers; they are not alternate deployment methods. Certificates, runtime.env, business data and backup keys stay outside GitHub. Security reviews in `docs/` are historical audit records; they are not current deployment instructions.
 

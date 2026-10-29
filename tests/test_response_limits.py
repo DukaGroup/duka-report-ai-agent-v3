@@ -159,3 +159,48 @@ def test_frontend_api_completes_one_slow_request_without_continuation(client, ad
     detail = client.get(f'/api/conversations/{chat}').json()
     assert len(detail['messages']) == 2 and detail['messages'][-1]['status'] == 'completed'
     assert not client.app.state.manager.worker_leases
+
+
+def test_database_query_limit_is_separate_from_the_short_login_limit(tmp_path):
+    # A large company query must not be cut off by the 15-second login limit.
+    settings = Settings(data_dir=tmp_path, env_file=None)
+    assert settings.sqlserver_timeout == 15
+    assert settings.database_query_timeout == 600
+    assert settings.blocking_threads >= 32
+    settings.database_query_timeout = 0
+    with pytest.raises(ValueError, match='DATABASE_QUERY_TIMEOUT_SECONDS'):
+        settings.prepare()
+    settings.database_query_timeout = 600
+    settings.blocking_threads = 1
+    with pytest.raises(ValueError, match='BLOCKING_THREADS'):
+        settings.prepare()
+
+
+def test_slow_codex_control_calls_get_longer_limits_than_quick_ones():
+    from app.provider import SLOW_RPC_TIMEOUTS
+    # Resuming a long conversation reloads its full history.
+    assert SLOW_RPC_TIMEOUTS["thread/resume"] >= 300
+    assert SLOW_RPC_TIMEOUTS["turn/start"] > 45
+
+
+async def test_claude_login_status_is_reused_briefly_and_cleared_on_auth_failure(tmp_path):
+    runtime = ClaudeRuntime(Settings(data_dir=tmp_path, env_file=None), "member", None)
+    calls = []
+
+    async def status(*args):
+        calls.append(args)
+        return 0, b'{"loggedIn": true, "authMethod": "claude.ai", "email": "a@example.com"}'
+    runtime.auth_command = status
+    assert (await runtime.account())["connected"]
+    assert (await runtime.account())["connected"]
+    assert len(calls) == 1
+
+    async def failing(*args, **kwargs):
+        raise ProviderError("expired", category="auth")
+        yield
+    runtime._stream = failing
+    with pytest.raises(ProviderError):
+        async for _ in runtime.stream("claude:x", "hi"):
+            pass
+    await runtime.account()
+    assert len(calls) == 2

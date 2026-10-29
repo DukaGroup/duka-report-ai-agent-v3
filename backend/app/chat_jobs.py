@@ -3,7 +3,8 @@
 import asyncio
 import json
 
-from .db import now
+from .db import now, uid
+from .progress import public_step
 from .provider import ProviderError
 from .completion import report_completion
 
@@ -17,6 +18,14 @@ class ChatJobs:
         self.tasks = {}
         self.pending_resources = {}
         self.closing = False
+        # Wakes open streams as soon as an event is saved, so text reaches the
+        # browser immediately instead of on the next database poll.
+        self.signals = {}
+
+    def notify(self, identifier):
+        signal = self.signals.pop(identifier, None)
+        if signal:
+            signal.set()
 
     def enqueue(self, connection, identifier, conversation, user, payload):
         connection.execute(
@@ -35,6 +44,9 @@ class ChatJobs:
     def record(self, identifier, event, text=None, status=None):
         # The message checkpoint and reconnect event must describe the same state.
         timestamp = now()
+        step = public_step(event)
+        if step:
+            event = {**event, "step_id": uid(), "step_label": step["label"], "step_kind": step["kind"]}
         if event["type"] == "done":
             reports = report_completion(self.db, identifier)
             event = {**event, "completed_at": timestamp,
@@ -58,6 +70,17 @@ class ChatJobs:
                 c.execute("UPDATE chat_runs SET status=?,updated_at=? WHERE id=?", (terminal, timestamp, identifier))
             else:
                 c.execute("UPDATE chat_runs SET updated_at=? WHERE id=?", (now(), identifier))
+        self.notify(identifier)
+
+    def redactor(self, user, conversation):
+        from .source_privacy import Redactor
+
+        terms = getattr(getattr(self.state, "manager", None), "source_terms", None)
+        if terms is None:
+            return Redactor(set())
+        private, keep = terms.scope(user, conversation)
+        typed = self.db.all("SELECT content FROM messages WHERE conversation_id=? AND role='user'", (conversation,))
+        return Redactor(private, keep, "\n".join(row["content"] or "" for row in typed))
 
     async def run(self, identifier, runtime=None, lock=None):
         self.pending_resources.pop(identifier, None)
@@ -68,6 +91,7 @@ class ChatJobs:
         payload = json.loads(row["payload_json"])
         text = self.db.one("SELECT content FROM messages WHERE id=?", (identifier,))["content"]
         status = "interrupted"
+        redactor = None
         acquired = runtime is not None
         if lock is None:
             lock = self.state.locks.setdefault(cid, asyncio.Lock())
@@ -130,19 +154,27 @@ class ChatJobs:
                 text = ""
                 self.record(identifier, {"type": "snapshot", "text": "", "activity": "recovering"}, text)
             self.record(identifier, {"type": "message", "id": identifier, "user_message_id": payload.get('user_message_id')})
+            redactor = self.redactor(user, cid)
             async for event in runtime.stream(
                 payload["thread"],
                 payload["content"],
                 payload["model"],
                 **({"reasoning_effort": payload["effort"]} if payload.get("effort") is not None else {}),
             ):
+                # Data-source identifiers never reach the saved answer or the browser.
                 if event["type"] == "delta":
-                    text += event["text"]
+                    shown = redactor.feed(event["text"])
+                    if not shown:
+                        continue
+                    event = {**event, "text": shown}
+                    text += shown
                 elif event["type"] == "snapshot":
-                    text = event.get("text", "")
+                    text = redactor.reset(event.get("text", ""))
+                    event = {**event, "text": text}
                 elif event["type"] == "done":
                     status = "completed" if event["status"] == "completed" else "interrupted"
-                    text = event.get("text") or text
+                    text = redactor.reset(event["text"]) if event.get("text") else text + redactor.flush()
+                    event = {**event, "text": text}
                 self.record(identifier, event, text, status if event["type"] == "done" else "streaming")
             if status != "completed":
                 status = "interrupted"
@@ -154,6 +186,8 @@ class ChatJobs:
                 )
                 return
             status = "interrupted"
+            if redactor is not None:
+                text += redactor.flush()
             self.record(identifier, {"type": "done", "status": status, "text": text}, text, status)
         except Exception as exc:
             status = "failed"
@@ -182,6 +216,9 @@ class ChatJobs:
     async def events(self, identifier, after=0):
         quiet = 0
         while True:
+            # Take the wake-up signal before reading, so an event saved between
+            # the read and the wait is never missed.
+            signal = self.signals.setdefault(identifier, asyncio.Event())
             rows = self.db.all(
                 "SELECT seq,event_json FROM chat_run_events WHERE run_id=? AND seq>? ORDER BY seq LIMIT 256",
                 (identifier, after),
@@ -191,15 +228,21 @@ class ChatJobs:
                 yield json.dumps({**json.loads(row["event_json"]), "seq": after}) + "\n"
             job = self.db.one("SELECT status FROM chat_runs WHERE id=?", (identifier,))
             if not job or (job["status"] not in ACTIVE and not rows):
+                self.signals.pop(identifier, None)
                 return
             if rows:
                 quiet = 0
                 continue
+            try:
+                # Status changes outside record() are still caught by this poll.
+                await asyncio.wait_for(signal.wait(), 0.25)
+                continue
+            except TimeoutError:
+                pass
             quiet += 1
             if quiet >= 60:
                 yield json.dumps({"type": "heartbeat"}) + "\n"
                 quiet = 0
-            await asyncio.sleep(0.25)
 
     async def stop(self, conversation):
         row = self.db.one(

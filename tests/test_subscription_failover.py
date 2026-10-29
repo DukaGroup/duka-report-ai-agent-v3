@@ -521,3 +521,46 @@ def test_repeated_report_tool_after_account_switch_reuses_same_run_result(client
         await manager.release_worker(admin["id"], "chat", cid)
 
     client.portal.call(exercise)
+
+
+async def test_conversation_keeps_its_native_runtime_between_messages_but_not_after_stop():
+    # Rebuilding the native runtime per message restarted the provider and
+    # reloaded the whole thread; it is now kept for the same account.
+    import asyncio
+    from types import SimpleNamespace
+    from app.subscription_pool import PooledRuntime
+
+    account = {"id": "acct-1", "provider": "chatgpt"}
+    created = []
+
+    class Native:
+        def __init__(self):
+            self.closed = self.stopped = False
+        async def close(self):
+            self.closed = True
+        def request_stop(self):
+            self.stopped = True
+
+    class Control:
+        async def account(self):
+            return {"connected": True}
+
+    def runtime(*args, **kwargs):
+        created.append(Native())
+        return created[-1]
+
+    pool = SimpleNamespace(candidates=lambda provider, preferred=None: [account],
+                           eligible=lambda *a, **k: True, control=lambda a: Control())
+    manager = SimpleNamespace(pool=pool, db=None, worker_lock=asyncio.Lock(), runtime=runtime,
+                              model_provider=lambda model: "chatgpt")
+    worker = PooledRuntime(manager, "member", "chat", "conversation", None)
+
+    assert await worker.select()
+    worker.tried = set()
+    assert await worker.select()
+    assert len(created) == 1 and not created[0].closed
+
+    worker.request_stop()
+    worker.tried = set()
+    assert await worker.select()
+    assert len(created) == 2 and created[0].closed

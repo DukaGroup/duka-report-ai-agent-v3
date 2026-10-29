@@ -6,11 +6,6 @@ export function ThinkingStatus({ description }: { description: string }) {
       aria-label={description}
       aria-atomic="true"
     >
-      <span className="thinking-dots" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </span>
       <span className="thinking-label">{description}</span>
     </div>
   );

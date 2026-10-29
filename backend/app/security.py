@@ -54,6 +54,11 @@ def public_user(user):
     return {key: user[key] for key in ("id", "email", "name", "role", "active", "created_at")}
 
 
+def with_introduction(db, user):
+    seen = db.one("SELECT 1 FROM user_introductions WHERE user_id=?", (user["id"],))
+    return {**user, "intro_pending": not seen}
+
+
 def create_session(db, settings, response: Response, user_id, expected_hash=None):
     token = secrets.token_urlsafe(32)
     with db.connect() as c:

@@ -1,3 +1,4 @@
+import { Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -30,7 +31,7 @@ type Event = {
 type Traffic = {
   events: Event[];
   next_before: number | null;
-  capacity: number;
+  capacity: number | null;
   summary: {
     direction: string;
     events: number;
@@ -63,9 +64,24 @@ const bytes = (value: number) =>
       ? `${(value / 1024).toFixed(1)} KB`
       : `${(value / 1024 / 1024).toFixed(1)} MB`;
 
-export function TrafficPanel() {
+export function TrafficPanel({ eventId }: { eventId?: number }) {
+  useEffect(() => {
+    if (eventId)
+      void api<Event>(`/admin/traffic/${eventId}`)
+        .then((item) => {
+          setSelected(item);
+          setLive(false);
+        })
+        .catch(() => setDetailError("Ngjarja nuk u ngarkua."));
+  }, [eventId]);
   const [data, setData] = useState<Traffic | null>(null);
   const [direction, setDirection] = useState("");
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
   const [before, setBefore] = useState(0);
   const [live, setLive] = useState(true);
   const [selected, setSelected] = useState<Event | null>(null);
@@ -91,7 +107,7 @@ export function TrafficPanel() {
     } catch {
       if (request === detailSerial.current)
         setDetailError(
-          "Përmbajtja nuk u ngarkua. Ngjarja mund të ketë dalë nga historia e ruajtur.",
+          "Përmbajtja nuk u ngarkua. Kontrolloni lidhjen dhe provoni përsëri.",
         );
     } finally {
       if (request === detailSerial.current) setDetailLoading(false);
@@ -103,6 +119,7 @@ export function TrafficPanel() {
     try {
       const query = new URLSearchParams({
         direction,
+        q: search,
         before: String(before),
         limit: "100",
       });
@@ -117,7 +134,7 @@ export function TrafficPanel() {
     } finally {
       if (id === serial.current) setLoading(false);
     }
-  }, [direction, before]);
+  }, [direction, before, search]);
   useEffect(() => {
     let pending = false;
     const refresh = async () => {
@@ -161,11 +178,24 @@ export function TrafficPanel() {
           <div>
             <h3>Trafiku i aplikacionit</h3>
             <p>
-              Ruhet historia e{" "}
-              {data?.capacity.toLocaleString("sq-AL") || "10.000"} mesazheve të
-              fundit.
+              Ruhet e gjithë historia e trafikut, pa kufi prej 10.000 mesazhesh.
+              Shfletoni faqet për mesazhet më të vjetra.
             </p>
           </div>
+          <label className="traffic-search">
+            <Search size={16} />
+            <input
+              type="search"
+              aria-label="Kërko në trafik"
+              placeholder="Kërko veprime, gabime, mesazhe…"
+              value={query}
+              maxLength={200}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setBefore(0);
+              }}
+            />
+          </label>
           <div className="traffic-actions">
             <Select
               aria-label="Rruga e trafikut"

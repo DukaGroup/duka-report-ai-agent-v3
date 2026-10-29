@@ -16,30 +16,18 @@ def test_change_password_revokes_old_sessions_and_preserves_grants(client, admin
     db.execute("INSERT INTO source_grants VALUES(?,?)", (source["id"], member["id"]))
     sign_in_member(client)
     previous_cookie = client.cookies.get("duka_session")
-    assert (
-        client.post(
-            "/api/auth/password",
-            headers=HEADERS,
-            json={"current_password": "wrong", "new_password": "new-secure-password"},
-        ).status_code
-        == 422
-    )
-    assert (
-        client.post(
-            "/api/auth/password",
-            headers=HEADERS,
-            json={"current_password": "member-long-password", "new_password": "short"},
-        ).status_code
-        == 422
-    )
-    response = client.post(
-        "/api/auth/password",
-        headers=HEADERS,
-        json={"current_password": "member-long-password", "new_password": "new-secure-password"},
-    )
+    assert client.post("/api/auth/password", headers=HEADERS,
+        json={"current_password":"member-long-password","new_password":"new-secure-password"}).status_code == 403
+    assert client.post(f"/api/admin/users/{member['id']}/password", headers=HEADERS,
+        json={"password":"new-secure-password"}).status_code == 403
+    assert client.post("/api/auth/login",headers=HEADERS,
+        json={"email":admin["email"],"password":"a-long-test-password"}).status_code == 200
+    assert client.post(f"/api/admin/users/{member['id']}/password",headers=HEADERS,
+        json={"password":"short"}).status_code == 422
+    response = client.post(f"/api/admin/users/{member['id']}/password",headers=HEADERS,
+        json={"password":"new-secure-password"})
     assert response.status_code == 200
-    assert client.get("/api/auth/status").json()["user"]["id"] == member["id"]
-    assert client.cookies.get("duka_session") != previous_cookie
+    assert client.get("/api/auth/status").json()["user"]["id"] == admin["id"]
     assert not db.one("SELECT * FROM sessions WHERE token_hash=?", (token_hash(previous_cookie),))
     assert db.one("SELECT * FROM source_grants WHERE user_id=?", (member["id"],))
     assert verify_password(
@@ -87,6 +75,8 @@ def test_recovery_codes_are_owner_bound_single_use_expire_and_never_widen_access
     assert client.post(f"/api/admin/users/{admin['id']}/password-reset", headers=HEADERS).status_code == 403
     member_cookie = client.cookies.get("duka_session")
     body = {"email": member["email"], "token": first["token"], "password": "recovered-long-password"}
+    assert client.post("/api/auth/password-reset",headers=HEADERS,json=body).status_code == 403
+    assert client.post("/api/auth/login",headers=HEADERS,json={"email":admin["email"],"password":"a-long-test-password"}).status_code == 200
     assert client.post("/api/auth/password-reset", headers=HEADERS, json=body).status_code == 422
     body.update(token=second["token"], email=admin["email"])
     assert client.post("/api/auth/password-reset", headers=HEADERS, json=body).status_code == 422
@@ -95,7 +85,7 @@ def test_recovery_codes_are_owner_bound_single_use_expire_and_never_widen_access
     assert client.post("/api/auth/password-reset", headers=HEADERS, json=body).status_code == 422
     db.execute("UPDATE password_resets SET expires_at=? WHERE user_id=?", (time.time() + 100, member["id"]))
     assert client.post("/api/auth/password-reset", headers=HEADERS, json=body).status_code == 200
-    assert client.get("/api/auth/status").json()["user"] is None
+    assert client.get("/api/auth/status").json()["user"]["id"] == admin["id"]
     assert not db.one("SELECT * FROM sessions WHERE token_hash=?", (token_hash(member_cookie),))
     assert db.one("SELECT * FROM sessions WHERE token_hash=?", (token_hash(admin_cookie),))
     assert client.post("/api/auth/password-reset", headers=HEADERS, json=body).status_code == 422
@@ -166,3 +156,30 @@ def test_password_change_retains_both_provider_connections_and_their_chats(clien
             == 200
         )
         assert len(client.get(f"/api/conversations/{cid}").json()["messages"]) == 4
+
+
+def test_president_cannot_set_password_and_revoked_admin_session_cannot_finish_hash(client, admin, monkeypatch):
+    from app import accounts
+
+    member = create_member(client)
+    db = client.app.state.db
+    original_hash = db.one("SELECT password_hash FROM users WHERE id=?", (member["id"],))["password_hash"]
+    client.patch(f"/api/admin/users/{member['id']}", headers=HEADERS, json={"role": "president"})
+    sign_in_member(client)
+    assert client.post(f"/api/admin/users/{admin['id']}/password", headers=HEADERS,
+        json={"password": "president-cannot-reset"}).status_code == 403
+    assert client.post("/api/auth/login", headers=HEADERS,
+        json={"email": admin["email"], "password": "a-long-test-password"}).status_code == 200
+    current_cookie = client.cookies.get("duka_session")
+    original_password_work = accounts.password_work
+
+    async def revoke_during_hash(state, function, *args):
+        result = await original_password_work(state, function, *args)
+        db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(current_cookie),))
+        return result
+
+    monkeypatch.setattr(accounts, "password_work", revoke_during_hash)
+    response = client.post(f"/api/admin/users/{member['id']}/password", headers=HEADERS,
+        json={"password": "new-secure-password"})
+    assert response.status_code == 403
+    assert db.one("SELECT password_hash FROM users WHERE id=?", (member["id"],))["password_hash"] == original_hash

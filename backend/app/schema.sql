@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL CHECK(role IN ('devs','president','manager')), active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
+-- The animated introduction of Hana is shown once per member, on any device.
+CREATE TABLE IF NOT EXISTS user_introductions (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, seen_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at REAL NOT NULL
@@ -163,6 +167,20 @@ CREATE TABLE IF NOT EXISTS traffic_events (
     payload_truncated INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS traffic_direction ON traffic_events(direction,id);
+CREATE TABLE IF NOT EXISTS traffic_totals (
+    direction TEXT PRIMARY KEY, events INTEGER NOT NULL DEFAULT 0,
+    bytes INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0
+);
+CREATE TRIGGER IF NOT EXISTS traffic_totals_insert AFTER INSERT ON traffic_events BEGIN
+    INSERT INTO traffic_totals(direction,events,bytes,errors)
+    VALUES(NEW.direction,1,NEW.bytes,NEW.status='error')
+    ON CONFLICT(direction) DO UPDATE SET events=events+1,bytes=bytes+NEW.bytes,
+        errors=errors+(NEW.status='error');
+END;
+CREATE TRIGGER IF NOT EXISTS traffic_totals_delete AFTER DELETE ON traffic_events BEGIN
+    UPDATE traffic_totals SET events=events-1,bytes=bytes-OLD.bytes,
+        errors=errors-(OLD.status='error') WHERE direction=OLD.direction;
+END;
 CREATE TABLE IF NOT EXISTS calculation_runs (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,

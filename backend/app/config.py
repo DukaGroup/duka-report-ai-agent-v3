@@ -36,7 +36,13 @@ class Settings:
     sqlserver_validate_certificate: bool = False
     sqlserver_tls_ca_certificate: str = field(default="", repr=False)
     sqlserver_tls_server_name: str = field(default="", repr=False)
+    # Login/connect limit. Running queries use database_query_timeout, so a
+    # large but healthy company query is not cut off by the short login limit.
     sqlserver_timeout: int = int(os.getenv("SQLSERVER_TIMEOUT_SECONDS", "15"))
+    database_query_timeout: int = int(os.getenv("DATABASE_QUERY_TIMEOUT_SECONDS", "600"))
+    # Blocking database, file and JSON work runs in this thread pool. The Python
+    # default (CPU count + 4) lets a few long queries stall every other user.
+    blocking_threads: int = int(os.getenv("BLOCKING_THREADS", "64"))
     hana_host: str = field(default_factory=lambda: os.getenv("HANA_HOST", ""), repr=False)
     hana_port: str = field(default_factory=lambda: os.getenv("HANA_PORT", "30015"), repr=False)
     hana_user: str = field(default_factory=lambda: os.getenv("HANA_USER", ""), repr=False)
@@ -113,6 +119,10 @@ class Settings:
             raise ValueError("SESSION_HOURS must be between 1 and 168.")
         if self.turn_timeout < 0:
             raise ValueError("TURN_TIMEOUT_SECONDS must be nonnegative; 0 disables the response time limit.")
+        if not 1 <= self.database_query_timeout <= 7200:
+            raise ValueError("DATABASE_QUERY_TIMEOUT_SECONDS must be between 1 and 7200.")
+        if not 8 <= self.blocking_threads <= 512:
+            raise ValueError("BLOCKING_THREADS must be between 8 and 512.")
         if not 1 <= self.workbook_timeout <= 300 or not 256 <= self.workbook_memory_mb <= 4096:
             raise ValueError("Workbook worker limits must be 1–300 seconds and 256–4096 MB.")
         if not 1 <= self.report_max_rows <= 1000000 or self.report_max_bytes < 1:

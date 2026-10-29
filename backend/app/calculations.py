@@ -140,56 +140,76 @@ class CalculationService:
         validate_script(plan.script)
         if len({s.name for s in plan.inputs}) != len(plan.inputs):
             raise ValueError("Calculation input names must be unique.")
+        async def capture(item):
+            captured = now()
+            if item.kind == "database":
+                result = await self.connectors.database_call(user, item.source_id, "report_query", database=item.database,
+                                                              query=item.query.model_dump(by_alias=True))
+            else:
+                result = await asyncio.to_thread(self.attachments.query, user, item.attachment_id, conversation,
+                                                item.table_id, item.query.model_dump(), complete=True)
+            return captured, result
+
+        # Inputs are independent queries: fetch them together instead of one
+        # after another. The shared capacity limit covers only the CPU/memory
+        # heavy script run, so one user's slow query does not block others.
+        try:
+            async with asyncio.TaskGroup() as group:
+                tasks = [group.create_task(capture(item)) for item in plan.inputs]
+        except BaseExceptionGroup as failure:
+            # Callers map specific errors (access, limits, connection) to messages.
+            raise failure.exceptions[0] from None
+        tables, audit, size, count = {}, [], 0, 0
+        for item, task in zip(plan.inputs, tasks):
+            captured, result = task.result()
+            if result.get("truncated") is not False:
+                raise ValueError("A calculation input is incomplete; no partial calculation was performed.")
+            serialized = await asyncio.to_thread(json.dumps, result["rows"], allow_nan=False, separators=(",", ":"))
+            size += len(serialized.encode())
+            count += len(result["rows"])
+            if size > self.settings.report_max_bytes or count > self.settings.report_max_rows:
+                raise ValueError("Complete calculation inputs exceed configured limits; narrow or aggregate the queries.")
+            tables[item.name] = result["rows"]
+            audit.append({"name": item.name, "row_count": len(result["rows"]), "columns": result["columns"],
+                          "sha256": hashlib.sha256(serialized.encode()).hexdigest(), "captured_at": captured,
+                          **({"access_stamp": result['access_stamp'], "database":result.get('database')} if item.kind == 'database' and result.get('access_stamp') else {})})
         async with self.capacity:
-            tables, audit, size, count = {}, [], 0, 0
-            for item in plan.inputs:
-                captured = now()
-                if item.kind == "database":
-                    result = await self.connectors.database_call(user, item.source_id, "report_query", database=item.database,
-                                                                  query=item.query.model_dump(by_alias=True))
-                else:
-                    result = await asyncio.to_thread(self.attachments.query, user, item.attachment_id, conversation,
-                                                    item.table_id, item.query.model_dump(), complete=True)
-                if result.get("truncated") is not False:
-                    raise ValueError("A calculation input is incomplete; no partial calculation was performed.")
-                serialized = await asyncio.to_thread(json.dumps, result["rows"], allow_nan=False, separators=(",", ":"))
-                size += len(serialized.encode())
-                count += len(result["rows"])
-                if size > self.settings.report_max_bytes or count > self.settings.report_max_rows:
-                    raise ValueError("Complete calculation inputs exceed configured limits; narrow or aggregate the queries.")
-                tables[item.name] = result["rows"]
-                audit.append({"name": item.name, "row_count": len(result["rows"]), "columns": result["columns"],
-                              "sha256": hashlib.sha256(serialized.encode()).hexdigest(), "captured_at": captured,
-                              **({"access_stamp": result['access_stamp'], "database":result.get('database')} if item.kind == 'database' and result.get('access_stamp') else {})})
             result = await self.run(plan.script, tables)
-            result = await asyncio.to_thread(validate_output, result, self.settings.report_max_rows, self.settings.report_max_bytes)
-            # A grant revoked during execution also prevents capture/publication.
-            for item, captured_input in zip(plan.inputs,audit):
-                if item.kind == "database":
-                    self.connectors.authorized_source(user, item.source_id)
-                    self.check_access_stamp(user,item.source_id,captured_input.get('database',item.database),captured_input.get('access_stamp'))
-                else:
-                    self.attachments.owned(user, item.attachment_id, conversation)
-            self.conversation(user, conversation)
-            identifier = uid()
-            provenance = {"plan": plan.model_dump(by_alias=True), "inputs": audit,
-                          "scope": "All matching input rows; independently captured queries, not a cross-database atomic snapshot.",
-                          "validation": "Isolated script execution with exact decimal helpers; business rules chosen by the model."}
+        result = await asyncio.to_thread(validate_output, result, self.settings.report_max_rows, self.settings.report_max_bytes)
+        # A grant revoked during execution also prevents capture/publication.
+        for item, captured_input in zip(plan.inputs,audit):
+            if item.kind == "database":
+                self.connectors.authorized_source(user, item.source_id)
+                self.check_access_stamp(user,item.source_id,captured_input.get('database',item.database),captured_input.get('access_stamp'))
+            else:
+                self.attachments.owned(user, item.attachment_id, conversation)
+        self.conversation(user, conversation)
+        identifier = uid()
+        provenance = {"plan": plan.model_dump(by_alias=True), "inputs": audit,
+                      "scope": "All matching input rows; independently captured queries, not a cross-database atomic snapshot.",
+                      "validation": "Isolated script execution with exact decimal helpers; business rules chosen by the model."}
+
+        def save():
+            # Large tables are serialized off the event loop so other users'
+            # streams keep flowing while a big calculation is stored.
             self.db.execute("INSERT INTO calculation_runs VALUES(?,?,?,?,?,?,?,?)", (
                 identifier, user, conversation, json.dumps(provenance), json.dumps(tables, allow_nan=False),
                 json.dumps(result, allow_nan=False), now(), "complete"))
-            self.db.audit(user, "calculation.completed", identifier, {"input_rows": count, "datasets": len(result["datasets"])})
-            if reuse is not None:
-                self.db.audit(user, "calculation.script_reused", identifier, {
-                    "source_id": reuse.source_id, "source_sha256": reuse.sha256, "edit_count": len(reuse.edits),
-                    "script_sha256": hashlib.sha256(plan.script.encode()).hexdigest(),
-                })
-            return self.preview(identifier, result, provenance)
+        await asyncio.to_thread(save)
+        self.db.audit(user, "calculation.completed", identifier, {"input_rows": count, "datasets": len(result["datasets"])})
+        if reuse is not None:
+            self.db.audit(user, "calculation.script_reused", identifier, {
+                "source_id": reuse.source_id, "source_sha256": reuse.sha256, "edit_count": len(reuse.edits),
+                "script_sha256": hashlib.sha256(plan.script.encode()).hexdigest(),
+            })
+        return self.preview(identifier, result, provenance)
 
     async def run(self, script, tables):
         root = self.settings.data_dir / "calculation-jobs"
         root.mkdir(exist_ok=True, mode=0o700)
-        seconds = min(60, self.settings.workbook_timeout)
+        # Same limit as workbook scripts (default 300s). The old 60s cap failed
+        # calculations over large companies or long periods.
+        seconds = self.settings.workbook_timeout
         with tempfile.TemporaryDirectory(prefix="job-", dir=root) as temporary:
             directory = Path(temporary)
             def prepare():

@@ -70,7 +70,8 @@ def test_invalid_selection_is_rejected(client, admin, ids):
 
 
 @pytest.mark.parametrize('provider', ['chatgpt', 'claude'])
-def test_bulk_delete_stops_only_selected_running_chats_for_both_providers(client, admin, claude, monkeypatch, provider):
+@pytest.mark.parametrize('deletion_endpoint', ['/api/conversations/bulk-delete', '/api/conversations/bulk-purge'])
+def test_bulk_delete_stops_only_selected_running_chats_for_both_providers(client, admin, claude, monkeypatch, provider, deletion_endpoint):
     state = client.app.state
     selected = [prepare(client, provider), new_chat(client)]
     kept = new_chat(client)
@@ -84,7 +85,7 @@ def test_bulk_delete_stops_only_selected_running_chats_for_both_providers(client
             cancelled.append(content)
     monkeypatch.setattr(CodexRuntime if provider == 'chatgpt' else ClaudeRuntime, 'stream', held)
     send = endpoint(client, '/api/conversations/{conversation_id}/messages', 'POST')
-    bulk = endpoint(client, '/api/conversations/bulk-delete', 'POST')
+    bulk = endpoint(client, deletion_endpoint, 'POST')
     request = SimpleNamespace(app=client.app)
     async def run():
         for cid in [*selected, kept]:
@@ -104,6 +105,8 @@ def test_bulk_delete_stops_only_selected_running_chats_for_both_providers(client
             assert not state.locks[cid].locked()
             assert not state.db.one("SELECT id FROM chat_runs WHERE conversation_id=? AND status IN ('queued','running','paused')", (cid,))
             assert (admin['id'], 'chat', cid) not in state.manager.worker_leases
+            if deletion_endpoint.endswith('bulk-purge'):
+                assert not state.db.one('SELECT id FROM conversations WHERE id=?', (cid,))
         # Reverse overlapping selections must release locks and fail cleanly.
         with pytest.raises(Exception) as error:
             await bulk(ConversationSelection(conversation_ids=list(reversed(selected))), request, admin)

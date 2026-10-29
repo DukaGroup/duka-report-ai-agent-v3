@@ -81,6 +81,33 @@ export class ConversationRuns {
       i === lastUser ? { ...m, id: messageId } : m,
     );
   }
+  step(id: string, event: Record<string, string>, token?: symbol) {
+    const run = this.runs.get(id);
+    if (
+      !run ||
+      (token && run.token !== token) ||
+      !event.step_id ||
+      !event.step_label
+    )
+      return;
+    run.messages = run.messages.map((message) =>
+      message.id === "streaming"
+        ? {
+            ...message,
+            steps: [
+              ...(message.steps || []).filter(
+                (step) => step.id !== event.step_id,
+              ),
+              {
+                id: event.step_id,
+                label: event.step_label,
+                kind: event.step_kind || "activity",
+              },
+            ],
+          }
+        : message,
+    );
+  }
   update(
     id: string,
     content: string,

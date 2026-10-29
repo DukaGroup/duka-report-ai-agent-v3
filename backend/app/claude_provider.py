@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -15,6 +16,9 @@ from .provider import BASE_INSTRUCTIONS, REPORT_TOOLS, ProviderError
 def login_url(value):
     parsed = urlparse(value)
     return parsed.scheme == "https" and parsed.hostname in ("claude.com", "claude.ai", "platform.claude.com") and "oauth" in parsed.path
+
+
+ACCOUNT_STATUS_TTL = 60
 
 
 class ClaudeRuntime:
@@ -29,6 +33,9 @@ class ClaudeRuntime:
         self.login, self.login_process, self.login_task = None, None, None
         self.login_lock = asyncio.Lock()
         self.model_catalog = None
+        # (expires_at, status). Only a connected status is cached; an auth
+        # failure during a turn clears it so failover still sees the change.
+        self.account_cache = None
 
     def prepare(self):
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -73,6 +80,8 @@ class ClaudeRuntime:
         return process.returncode, output
 
     async def account(self):
+        if self.account_cache and self.account_cache[0] > time.monotonic():
+            return {**self.account_cache[1], "login": self.login}
         _, output = await self.auth_command("status")
         try:
             status = json.loads(output)
@@ -81,9 +90,13 @@ class ClaudeRuntime:
         connected = bool(status.get("loggedIn"))
         if connected and status.get("authMethod") not in ("claude.ai", "oauth_token"):
             raise ProviderError("Use a Claude subscription login. API-key and Console billing are not enabled.")
-        return {"connected": connected, "account": {
+        result = {"connected": connected, "account": {
             "email": status.get("email"), "planType": status.get("subscriptionType") or "Claude",
         } if connected else None, "login": self.login}
+        # Starting the CLI just to read login status costs about a second, and a
+        # message used to do it several times. Reuse a recent connected status.
+        self.account_cache = (time.monotonic() + ACCOUNT_STATUS_TTL, result) if connected else None
+        return result
 
     async def require_account(self):
         if not (await self.account())["connected"]:
@@ -93,6 +106,7 @@ class ClaudeRuntime:
         async with self.login_lock:
             await self.cancel_login()
             self.model_catalog = None
+            self.account_cache = None
             self.login = {"loginId": str(uuid4()), "status": "pending", "provider": "claude", "requiresCode": True}
             try:
                 self.login_process = await asyncio.create_subprocess_exec(
@@ -125,6 +139,7 @@ class ClaudeRuntime:
                             self.login["verificationUrl"] = value
                             ready.set()
                 code = await process.wait()
+                self.account_cache = None
                 self.login.update(status="completed" if code == 0 else "failed")
                 if code:
                     self.login["error"] = "Claude login did not complete. Start a new connection and try again."
@@ -163,6 +178,7 @@ class ClaudeRuntime:
         self.login = None
         self.sessions.clear()
         self.model_catalog = None
+        self.account_cache = None
 
     def options(self, model=None, **kwargs):
         from claude_agent_sdk import ClaudeAgentOptions
@@ -243,6 +259,10 @@ class ClaudeRuntime:
                                                    timeout=self.settings.turn_timeout or None)) as events:
                 async for event in events:
                     yield event
+        except ProviderError as exc:
+            if exc.category in ("auth", "quota"):
+                self.account_cache = None
+            raise
         except TimeoutError as exc:
             raise ProviderError("Claude reached the configured response time limit. Try again.") from exc
 

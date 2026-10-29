@@ -205,6 +205,7 @@ class PooledRuntime:
         self.pending_handoff = False
         self.context_refreshed = False
         self.context_error = None
+        self.native_stopped = False
 
     def __getattr__(self, name):
         native = self.__dict__.get("native")
@@ -222,6 +223,14 @@ class PooledRuntime:
                 if account["id"] in self.tried or not self.pool.eligible(account, probe_unknown=True):
                     continue
                 self.tried.add(account["id"])
+                # Keep this conversation's native runtime between messages when
+                # the same account is chosen again. Rebuilding it restarted the
+                # provider process, reloaded the whole thread and the model list
+                # on every message. Credential changes close the whole worker.
+                if (self.native is not None and not self.native_stopped and self.account_record
+                        and self.account_record["id"] == account["id"]):
+                    self.account_record = account
+                    return True
                 # Reserve before awaiting native status so Devs cannot replace
                 # credentials in the gap between selection and worker startup.
                 self.account_record = account
@@ -239,6 +248,7 @@ class PooledRuntime:
                 await self.native.close()
             self.account_record = account
             self.provider = account["provider"]
+            self.native_stopped = False
             self.native = self.manager.runtime(
                 self.user_id, self.provider, f"{self.kind}/{self.identifier}", account=account
             )
@@ -645,6 +655,8 @@ class PooledRuntime:
 
     def request_stop(self):
         if self.native:
+            # The stopped process is being killed; the next message must not reuse it.
+            self.native_stopped = True
             self.native.request_stop()
 
     async def close(self):

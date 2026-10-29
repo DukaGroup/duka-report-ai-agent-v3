@@ -87,6 +87,6 @@ test('Settings keeps system configuration Devs-only and member management Presid
   const {settingsSections}=await compile('settings');
   assert.deepEqual(settingsSections('manager').map(s=>s.id),['appearance']);
   assert.deepEqual(settingsSections('president').map(s=>s.id),['appearance','members']);
-  assert.deepEqual(settingsSections('devs').map(s=>s.id),['appearance','account','models','sources','members','overview','traffic','logs','activity']);
+  assert.deepEqual(settingsSections('devs').map(s=>s.id),['appearance','models','sources','members','overview','traffic','logs','activity']);
   assert.deepEqual(settingsSections('unknown').map(s=>s.id),['appearance']);
 });

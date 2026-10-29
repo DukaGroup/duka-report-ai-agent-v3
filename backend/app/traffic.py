@@ -1,13 +1,11 @@
-"""Bounded admin traffic with redacted payload previews and no auth material."""
+"""Persisted admin traffic with bounded redacted previews and no auth material."""
 
-import asyncio
-import contextlib
 import json
 import re
 import time
-from collections import deque
 
 from .db import now, uid
+from .log_writer import PersistentLog
 
 DIRECTIONS = (
     "frontend-backend", "backend-frontend", "backend-model", "model-backend",
@@ -15,12 +13,9 @@ DIRECTIONS = (
 )
 
 
-class TrafficLog:
-    def __init__(self, db, capacity=10000):
-        self.db, self.capacity = db, capacity
-        self.pending = deque(maxlen=capacity)
-        self.lock = asyncio.Lock()
-        self.task = None
+class TrafficLog(PersistentLog):
+    def __init__(self, db):
+        super().__init__(db)
         self.secrets = set()
         self.requests = {}
 
@@ -130,46 +125,12 @@ class TrafficLog:
         self.record(direction, method, "error" if "error" in message else "sent" if direction == "backend-model" else "received",
                     correlation_id=f"{user_id}:{scope or 'subscription'}:{message.get('id', params.get('threadId', ''))}", user_id=user_id, size=size, detail=detail,payload=body)
 
-    def start(self):
-        self.task = asyncio.create_task(self._writer())
-
-    async def _writer(self):
-        while True:
-            await asyncio.sleep(0.25)
-            try:
-                await self.flush()
-            except Exception:
-                # Observability must not interrupt chats or expose driver exceptions.
-                continue
-
-    async def flush(self):
-        async with self.lock:
-            batch = [self.pending.popleft() for _ in range(len(self.pending))]
-            if not batch:
-                return
-
-            def write():
-                with self.db.connect() as connection:
-                    connection.executemany(
-                        "INSERT INTO traffic_events(created_at,direction,action,status,correlation_id,user_id,bytes,duration_ms,detail_json,payload_json,payload_truncated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        batch,
-                    )
-                    connection.execute(
-                        "DELETE FROM traffic_events WHERE id < COALESCE((SELECT id FROM traffic_events ORDER BY id DESC LIMIT 1 OFFSET ?),0)",
-                        (self.capacity - 1,),
-                    )
-            try:
-                await asyncio.to_thread(write)
-            except Exception:
-                self.pending.extendleft(reversed(batch))
-                raise
-
-    async def close(self):
-        if self.task:
-            self.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.task
-        await self.flush()
+    def write_batch(self, batch):
+        with self.db.connect() as connection:
+            connection.executemany(
+                "INSERT INTO traffic_events(created_at,direction,action,status,correlation_id,user_id,bytes,duration_ms,detail_json,payload_json,payload_truncated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                batch,
+            )
 
 
 class TrafficMiddleware:

@@ -11,7 +11,19 @@ const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.Scri
 const { ConversationRuns, runningReports, pendingAssistantMessages } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 const { streamActivity, reportActivity } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 const question = content => [{ id:'user', role:'user', content, status:'completed' }, {id:'streaming', role:'assistant',content:'',status:'streaming'}];
-test('pending activity has visible text beside decorative dots, not only a tooltip',async()=>{
+test('public work steps persist in the stream, deduplicate replay and reject stale runs',()=>{
+  const runs=new ConversationRuns();
+  const first=runs.start('chat',question('First'));
+  runs.step('chat',{type:'tool',step_id:'one',step_label:'Kërkim në internet',step_kind:'tool'},first);
+  runs.step('chat',{type:'tool',step_id:'one',step_label:'Kërkim në internet',step_kind:'tool'},first);
+  assert.deepEqual(runs.snapshot('chat')[1].steps,[{id:'one',label:'Kërkim në internet',kind:'tool'}]);
+  const second=runs.start('chat',question('Next'),true);
+  runs.step('chat',{type:'tool',step_id:'late',step_label:'Late',step_kind:'tool'},first);
+  assert.equal(runs.snapshot('chat')[1].steps,undefined);
+  runs.step('chat',{type:'activity',step_id:'two',step_label:'Arsyetim',step_kind:'activity'},second);
+  assert.equal(runs.snapshot('chat')[1].steps[0].label,'Arsyetim');
+});
+test('pending activity shows visible text without repeating the avatar thought dots',async()=>{
   const require=createRequire(new URL('../frontend/package.json',import.meta.url));
   const source=await readFile(new URL('../frontend/src/ThinkingStatus.tsx',import.meta.url),'utf8');
   const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}}).outputText
@@ -20,7 +32,8 @@ test('pending activity has visible text beside decorative dots, not only a toolt
   const html=renderToStaticMarkup(React.createElement(ThinkingStatus,{description:'Po arsyetoj…'}));
   assert.match(html,/role="status"/);
   assert.match(html,/<span class="thinking-label">Po arsyetoj…<\/span>/);
-  assert.match(html,/<span class="thinking-dots" aria-hidden="true">/);
+  // Hana's avatar already shows animated thought dots; they appear only once.
+  assert.doesNotMatch(html,/thinking-dots/);
 });
 test('visible activity follows each chat phase and ignores quiet or private events',()=>{
   const runs=new ConversationRuns();

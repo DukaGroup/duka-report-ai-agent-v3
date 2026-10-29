@@ -104,9 +104,9 @@ test('conversation selection shares report controls with conversation-specific l
   }
 });
 
-test('conversation trash selection clearly labels irreversible deletion',()=>{
+test('conversation selection clearly labels irreversible deletion without a trash view',()=>{
   const html=renderToStaticMarkup(React.createElement(SelectionToolbar,{kind:'conversations',permanent:true,available:2,selected:1,busy:false,onToggleAll:noop,onClear:noop,onDelete:noop}));
-  assert.match(html,/Përzgjedhja e bisedave në kosh/);
+  assert.match(html,/Përzgjedhja e bisedave/);assert.doesNotMatch(html,/bisedave në kosh/);
   assert.match(html,/Fshi përgjithmonë bisedat e zgjedhura/);
 });
 

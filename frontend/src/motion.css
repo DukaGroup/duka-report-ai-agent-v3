@@ -1,0 +1,675 @@
+/*
+ * Workspace motion. Entrance animations use "backwards" fill only, so nothing
+ * keeps a transform after it finishes (no layout or stacking side effects).
+ */
+:root {
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes motion-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+@keyframes motion-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes motion-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+@keyframes motion-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+@keyframes motion-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes motion-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes motion-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(66, 118, 196, 0.32);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(66, 118, 196, 0);
+  }
+}
+@keyframes motion-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+@keyframes motion-gradient {
+  0%,
+  100% {
+    background-position: 0% 40%;
+  }
+  50% {
+    background-position: 100% 60%;
+  }
+}
+@keyframes motion-moon {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-8deg);
+  }
+  50% {
+    transform: translateY(-12px) rotate(4deg);
+  }
+}
+
+/* Sign-in */
+.auth-page {
+  position: relative;
+  overflow: hidden;
+  background-size: 180% 180%;
+  animation: motion-gradient 18s ease-in-out infinite;
+}
+.auth-page::before,
+.auth-page::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(60px);
+  opacity: 0.45;
+  animation: motion-float 9s ease-in-out infinite;
+}
+.auth-page::before {
+  width: 340px;
+  height: 340px;
+  top: -80px;
+  right: 8%;
+  background: var(--surface-tint);
+}
+.auth-page::after {
+  width: 260px;
+  height: 260px;
+  bottom: -60px;
+  left: 6%;
+  background: var(--surface-tint);
+  animation-delay: -4s;
+}
+.auth-page > * {
+  position: relative;
+  z-index: 1;
+}
+.auth-brand {
+  animation: motion-from-left 0.7s var(--ease-out) backwards;
+}
+.auth-card > * {
+  animation: motion-rise 0.6s var(--ease-out) backwards;
+}
+.auth-card > *:nth-child(2) {
+  animation-delay: 0.08s;
+}
+.auth-card > *:nth-child(3) {
+  animation-delay: 0.16s;
+}
+.auth-card > *:nth-child(4) {
+  animation-delay: 0.24s;
+}
+.auth-card > *:nth-child(5) {
+  animation-delay: 0.32s;
+}
+.auth-card > *:nth-child(6) {
+  animation-delay: 0.4s;
+}
+.auth-card label {
+  animation: motion-rise 0.5s var(--ease-out) backwards;
+}
+.auth-card label:nth-of-type(2) {
+  animation-delay: 0.36s;
+}
+.auth-card label:nth-of-type(3) {
+  animation-delay: 0.44s;
+}
+.auth-footer {
+  animation: motion-fade 1.2s ease-out 0.5s backwards;
+}
+.auth-moon {
+  position: absolute;
+  top: 9%;
+  right: 12%;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  box-shadow: inset -14px 6px 0 0 #f3d98b;
+  filter: drop-shadow(0 0 14px rgba(243, 217, 139, 0.65));
+  animation: motion-moon 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.loading-screen > * {
+  animation: motion-rise 0.5s var(--ease-out) backwards;
+}
+.loading-screen > *:nth-child(2) {
+  animation-delay: 0.1s;
+}
+.loading-screen > *:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+/* Sidebar and navigation */
+.sidebar {
+  animation: motion-from-left 0.5s var(--ease-out) backwards;
+}
+.nav-item,
+.recent-item {
+  transition:
+    background-color 0.18s,
+    color 0.18s,
+    transform 0.18s var(--ease-out);
+}
+.nav-item:hover,
+.recent-item:hover {
+  transform: translateX(3px);
+}
+.nav-item:active,
+.recent-item:active {
+  transform: translateX(1px) scale(0.98);
+}
+.recent-item {
+  animation: motion-from-left 0.4s var(--ease-out) backwards;
+}
+.recent-item:nth-child(2) {
+  animation-delay: 0.03s;
+}
+.recent-item:nth-child(3) {
+  animation-delay: 0.06s;
+}
+.recent-item:nth-child(4) {
+  animation-delay: 0.09s;
+}
+.recent-item:nth-child(5) {
+  animation-delay: 0.12s;
+}
+.recent-item:nth-child(6) {
+  animation-delay: 0.15s;
+}
+.recent-item:nth-child(7) {
+  animation-delay: 0.18s;
+}
+.recent-item:nth-child(8) {
+  animation-delay: 0.21s;
+}
+.recent-item:nth-child(n + 9) {
+  animation-delay: 0.24s;
+}
+.topbar {
+  animation: motion-fade 0.5s ease-out backwards;
+}
+
+/* Pages */
+.page-content {
+  animation: motion-rise 0.45s var(--ease-out) backwards;
+}
+.conversation-card,
+.report-card,
+.stat-card,
+.source-card,
+.connection-card,
+.info-card,
+.panel,
+.settings-section {
+  animation: motion-pop 0.45s var(--ease-out) backwards;
+  transition:
+    transform 0.2s var(--ease-out),
+    box-shadow 0.2s,
+    border-color 0.2s;
+}
+.conversation-card:hover,
+.report-card:hover,
+.source-card:hover,
+.stat-card:hover {
+  transform: translateY(-3px);
+}
+:is(.conversation-card, .report-card, .stat-card, .source-card):nth-child(2) {
+  animation-delay: 0.04s;
+}
+:is(.conversation-card, .report-card, .stat-card, .source-card):nth-child(3) {
+  animation-delay: 0.08s;
+}
+:is(.conversation-card, .report-card, .stat-card, .source-card):nth-child(4) {
+  animation-delay: 0.12s;
+}
+:is(.conversation-card, .report-card, .stat-card, .source-card):nth-child(5) {
+  animation-delay: 0.16s;
+}
+:is(.conversation-card, .report-card, .stat-card, .source-card):nth-child(6) {
+  animation-delay: 0.2s;
+}
+:is(.conversation-card, .report-card, .stat-card, .source-card):nth-child(
+  n + 7
+) {
+  animation-delay: 0.24s;
+}
+.settings-nav > * {
+  animation: motion-from-left 0.4s var(--ease-out) backwards;
+}
+
+/* Buttons */
+.button,
+.icon-button,
+.send-button,
+.text-button {
+  transition:
+    background-color 0.18s,
+    border-color 0.18s,
+    color 0.18s,
+    box-shadow 0.18s,
+    transform 0.16s var(--ease-out);
+}
+.button:not(:disabled):hover,
+.send-button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+.icon-button:not(:disabled):hover {
+  transform: scale(1.08);
+}
+.button:not(:disabled):active,
+.icon-button:not(:disabled):active,
+.send-button:not(:disabled):active {
+  transform: scale(0.95);
+}
+.button.primary,
+.button.primary:not(:disabled):hover {
+  background-image: linear-gradient(
+    110deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.18) 50%,
+    transparent 65%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  background-position: -200% 0;
+}
+.button.primary:not(:disabled):hover {
+  animation: motion-shimmer 1.1s ease-out;
+  background-position: 200% 0;
+}
+
+/* Chat welcome */
+.chat-welcome > * {
+  animation: motion-rise 0.6s var(--ease-out) backwards;
+}
+.chat-welcome > *:nth-child(2) {
+  animation-delay: 0.08s;
+}
+.chat-welcome > *:nth-child(3) {
+  animation-delay: 0.16s;
+}
+.chat-welcome > *:nth-child(4) {
+  animation-delay: 0.24s;
+}
+.chat-welcome > *:nth-child(5) {
+  animation-delay: 0.32s;
+}
+.welcome-symbol {
+  animation:
+    motion-pop 0.7s var(--ease-spring) backwards,
+    motion-float 5s ease-in-out 0.8s infinite,
+    motion-glow 3.2s ease-in-out 1s infinite;
+  transition: border-color 0.2s;
+}
+.suggestions button {
+  animation: motion-pop 0.5s var(--ease-out) backwards;
+  transition:
+    transform 0.2s var(--ease-out),
+    box-shadow 0.2s,
+    border-color 0.2s,
+    background-color 0.2s;
+}
+.suggestions button:nth-child(1) {
+  animation-delay: 0.36s;
+}
+.suggestions button:nth-child(2) {
+  animation-delay: 0.44s;
+}
+.suggestions button:nth-child(3) {
+  animation-delay: 0.52s;
+}
+.suggestions button:nth-child(4) {
+  animation-delay: 0.6s;
+}
+.suggestions button:hover {
+  transform: translateY(-3px);
+}
+.suggestions button > svg:last-child {
+  transition: transform 0.2s var(--ease-out);
+}
+.suggestions button:hover > svg:last-child {
+  transform: translateX(4px);
+}
+
+/* Messages */
+.message.user {
+  animation: motion-from-right 0.4s var(--ease-out) backwards;
+}
+.message.assistant {
+  animation: motion-from-left 0.45s var(--ease-out) backwards;
+}
+.message-avatar.assistant {
+  animation: motion-pop 0.5s var(--ease-spring) backwards;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.2s var(--ease-out);
+}
+.message-avatar.assistant:hover {
+  transform: scale(1.08) rotate(-3deg);
+}
+.message.assistant:last-child .message-avatar.assistant {
+  animation:
+    motion-pop 0.5s var(--ease-spring) backwards,
+    motion-float 4s ease-in-out 0.6s infinite;
+}
+.message-actions {
+  transition: opacity 0.2s;
+}
+.chat-report {
+  animation: motion-pop 0.5s var(--ease-out) backwards;
+}
+.thinking {
+  animation: motion-fade 0.3s ease-out backwards;
+}
+.activity-timeline li {
+  animation: motion-from-left 0.35s var(--ease-out) backwards;
+}
+.attachment-chip {
+  animation: motion-pop 0.3s var(--ease-spring) backwards;
+}
+.markdown table {
+  animation: motion-fade 0.5s ease-out backwards;
+}
+
+.jump-latest button {
+  animation:
+    motion-pop 0.35s var(--ease-spring) backwards,
+    motion-glow 2.4s ease-in-out 0.4s infinite;
+}
+
+/* Composer */
+.composer {
+  transition:
+    box-shadow 0.25s,
+    border-color 0.25s;
+}
+/* Shadow only: a transform here would misplace the composer's popovers. */
+.composer:focus-within {
+  box-shadow: 0 10px 34px var(--shadow);
+}
+.composer-wrap {
+  animation: motion-rise 0.5s var(--ease-out) 0.1s backwards;
+}
+.recording {
+  animation: motion-glow 1.4s ease-in-out infinite;
+}
+
+/* Overlays */
+.modal-scrim {
+  animation: motion-fade 0.25s ease-out backwards;
+}
+.modal {
+  animation: motion-pop 0.35s var(--ease-spring) backwards;
+}
+.hana-profile-portrait {
+  animation:
+    motion-pop 0.6s var(--ease-spring) 0.1s backwards,
+    motion-float 5s ease-in-out 0.8s infinite;
+}
+.reply-notification {
+  animation: motion-from-right 0.45s var(--ease-spring) backwards;
+}
+.global-search-results {
+  animation: motion-pop 0.2s var(--ease-out) backwards;
+}
+.error-box,
+.notice,
+.retry-banner,
+.connect-prompt {
+  animation: motion-rise 0.35s var(--ease-out) backwards;
+}
+.badge,
+.status-dot {
+  transition:
+    background-color 0.3s,
+    color 0.3s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Hana at work: her avatar glows and tilts while she thinks. */
+.message {
+  position: relative;
+}
+.message .thought-bubble {
+  display: none;
+}
+.message.working .thought-bubble {
+  position: absolute;
+  top: -15px;
+  left: 20px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 3px 10px var(--shadow);
+  pointer-events: none;
+  animation: motion-pop 0.35s var(--ease-spring) backwards;
+}
+/* The small circle that joins the bubble to Hana's head. */
+.message.working .thought-bubble::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  bottom: -5px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+}
+.message.working .thought-bubble i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--brand-blue);
+  animation: motion-wave 1.1s ease-in-out infinite;
+}
+.message.working .thought-bubble i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.message.working .thought-bubble i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes motion-wave {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+.message.working .message-avatar.assistant,
+.message.assistant.working:last-child .message-avatar.assistant {
+  animation:
+    motion-think 3.6s ease-in-out infinite,
+    motion-think-glow 1.8s ease-in-out infinite;
+}
+/* Looking up and to the side, then back: a person thinking. */
+@keyframes motion-think {
+  0%,
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+  20% {
+    transform: rotate(-7deg) translateY(-1px);
+  }
+  45% {
+    transform: rotate(-7deg) translateY(-1px);
+  }
+  60% {
+    transform: rotate(5deg) translateY(0);
+  }
+  80% {
+    transform: rotate(0deg) translateY(0);
+  }
+}
+@keyframes motion-think-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(66, 118, 196, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(66, 118, 196, 0);
+  }
+}
+.message.working .thinking-dots > i {
+  animation: motion-wave 1.1s ease-in-out infinite;
+}
+.message.working .thinking-dots > i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.message.working .thinking-dots > i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+/* A light sweeps across the status text while Hana works. */
+.message.working .thinking-label {
+  background: linear-gradient(
+    100deg,
+    var(--muted) 40%,
+    var(--brand-blue) 50%,
+    var(--muted) 60%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: motion-text-sweep 2.2s linear infinite;
+}
+@keyframes motion-text-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* A report that just finished: the card glows, confetti bursts, Excel pulses. */
+.chat-report {
+  position: relative;
+}
+.chat-report.just-ready,
+.report-card.just-ready {
+  animation:
+    motion-ready-pop 0.6s var(--ease-spring),
+    motion-ready-glow 1.4s ease-out 2;
+}
+@keyframes motion-ready-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.025);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes motion-ready-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(46, 160, 98, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(46, 160, 98, 0);
+  }
+}
+.just-ready .badge {
+  animation: motion-pop 0.5s var(--ease-spring) 0.2s backwards;
+}
+.just-ready a.button {
+  animation: motion-excel 1.2s ease-in-out 0.4s 3;
+}
+@keyframes motion-excel {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(46, 160, 98, 0.45);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow: 0 0 0 8px rgba(46, 160, 98, 0);
+  }
+}
+.report-confetti {
+  position: absolute;
+  top: 18px;
+  right: 40px;
+  pointer-events: none;
+}
+.report-confetti i {
+  position: absolute;
+  width: 6px;
+  height: 10px;
+  border-radius: 2px;
+  background: hsl(calc(var(--i) * 47deg) 75% 58%);
+  opacity: 0;
+  animation: motion-confetti 1.3s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+  animation-delay: calc(var(--i) * 0.02s);
+}
+@keyframes motion-confetti {
+  0% {
+    opacity: 1;
+    transform: rotate(calc(var(--i) * 25.7deg)) translateY(0) rotate(0deg);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(calc(var(--i) * 25.7deg)) translateY(-70px)
+      rotate(calc(var(--i) * 90deg));
+  }
+}

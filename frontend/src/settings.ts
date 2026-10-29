@@ -1,6 +1,5 @@
 export type SettingsTab =
   | "appearance"
-  | "account"
   | "models"
   | "sources"
   | "members"
@@ -17,7 +16,6 @@ export function settingsSections(
   ];
   if (role === "devs")
     sections.push(
-      { id: "account", label: "Llogaria", group: "Preferencat" },
       { id: "models", label: "Modeli", group: "Hapësira" },
       { id: "sources", label: "Burimet e të dhënave", group: "Hapësira" },
     );

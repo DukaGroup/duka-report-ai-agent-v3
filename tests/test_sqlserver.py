@@ -65,7 +65,9 @@ async def test_sqlserver_bound_parameters_read_intent_and_exact_decimal_results(
     assert driver.executed[1] == {"schema_name": value}
     assert driver.options["read_only"] is True
     assert driver.options["encryption"] == "require"
-    assert driver.options["timeout"] == 15
+    # Login stays short; a running query gets the separate, longer limit.
+    assert driver.options["login_timeout"] == 15
+    assert driver.options["timeout"] == 600
     assert driver.closed and driver.rolled_back
     assert rows == [{"revenue": "1234567890123.45", "day": "2026-10-01"}]
 

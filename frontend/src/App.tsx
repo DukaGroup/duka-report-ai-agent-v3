@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import {
   ArrowDownToLine,
   ArrowRight,
@@ -33,6 +33,12 @@ import {
   GitBranch,
   X,
 } from "lucide-react";
+import { GlobalSearch } from "./GlobalSearch";
+import { ChatScrollFollower } from "./chatScroll";
+import HanaIntro, { type IntroMode } from "./HanaIntro";
+import { useJustCompleted } from "./useJustCompleted";
+import { ActivityTimeline } from "./ActivityTimeline";
+import { CopyMessageButton } from "./CopyMessageButton";
 import { MarkdownContent } from "./MarkdownContent";
 import { ReportWorkbookPreview } from "./ReportWorkbookPreview";
 import { Brand } from "./Brand";
@@ -59,11 +65,7 @@ import {
   shouldSubmitComposerOnEnter,
 } from "./composerKeyboard";
 import { loadDrafts, saveDrafts } from "./drafts";
-import {
-  PasswordChangeForm,
-  RecoveryForm,
-  MemberRecovery,
-} from "./AccountRecovery";
+import { RecoveryForm, MemberRecovery } from "./AccountRecovery";
 import { ChatVersions } from "./ChatVersions";
 import {
   ConversationRuns,
@@ -74,7 +76,7 @@ import {
   streamActivity,
   reportActivity,
 } from "./conversationRuns";
-import { label, errorMessage, auditLabel } from "./locale";
+import { label, errorMessage, auditLabel, userError } from "./locale";
 import { recoverSubscription } from "./subscriptionRecovery";
 import { buildChatTimeline } from "./chatTimeline";
 import type {
@@ -203,6 +205,7 @@ function Auth({
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const card = useRef<HTMLDivElement>(null);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (busy) return;
@@ -218,6 +221,14 @@ function Auth({
       );
     } catch (e) {
       setError(errorMessage((e as Error).message));
+      // A gentle "no" shake, like shaking one's head.
+      if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
+        card.current?.animate(
+          [0, -10, 9, -7, 5, -3, 0].map((x) => ({
+            transform: `translateX(${x}px)`,
+          })),
+          { duration: 480, easing: "ease-out" },
+        );
     } finally {
       setBusy(false);
     }
@@ -225,10 +236,11 @@ function Auth({
   if (recovering) return <RecoveryForm onBack={() => setRecovering(false)} />;
   return (
     <div className="auth-page">
+      <span className="auth-moon" aria-hidden="true" />
       <div className="auth-brand">
         <Brand />
       </div>
-      <div className="auth-card">
+      <div className="auth-card" ref={card}>
         <span className="eyebrow"> Një pamje më e qartë e biznesit tuaj </span>
         <h1>
           {setup ? "Mirë se vini në hapësirën tuaj." : "Mirë se u kthyet."}
@@ -337,10 +349,17 @@ export default function App() {
     [setup, setSetup] = useState(false),
     [setupTokenRequired, setSetupTokenRequired] = useState(false),
     [user, setUser] = useState<User | null>(null);
+  // After login: the full presentation the first time, a short greeting after.
+  const [intro, setIntro] = useState<IntroMode | null>(null);
   const [error, setError] = useState("");
+  // While Hana says goodbye the server session is already closed, so requests
+  // fail as "signed out". The goodbye still plays to the end before we leave.
+  const sayingGoodbye = useRef(false);
+  const logoutRequest = useRef<Promise<boolean> | null>(null);
   useEffect(() => {
     if (!user) return;
     return onSessionEnded(user.id, () => {
+      if (sayingGoodbye.current) return;
       setUser(null);
       setError("");
     });
@@ -359,6 +378,9 @@ export default function App() {
             setSetup(r.needs_setup);
             setSetupTokenRequired(Boolean(r.setup_token_required));
             setUser(r.user);
+            // A refresh shows no greeting; an unfinished first presentation resumes.
+            if (r.user?.intro_pending)
+              setIntro((current) => current ?? "presentation");
             setError("");
           }
           return true;
@@ -407,18 +429,74 @@ export default function App() {
         onDone={(u) => {
           setUser(u);
           setSetup(false);
+          setIntro(u.intro_pending ? "presentation" : "greeting");
         }}
       />
     );
   return (
     <>
       <TooltipLayer />
-      <Workspace key={user.id} user={user} onLogout={() => endSession(user.id)} />
+      <Workspace
+        key={user.id}
+        user={user}
+        onLogout={() => endSession(user.id)}
+        onGoodbye={() => {
+          sayingGoodbye.current = true;
+          setIntro("farewell");
+          logoutRequest.current = api("/auth/logout", { method: "POST" })
+            .then(() => true)
+            .catch(() => false);
+        }}
+        onShowIntro={() => setIntro("presentation")}
+      />
+      {intro && (
+        <HanaIntro
+          name={user.name}
+          mode={intro}
+          onDone={() => {
+            setIntro(null);
+            // Hana has finished; make sure the server session is closed, then leave.
+            if (intro === "farewell") {
+              void (logoutRequest.current ?? Promise.resolve(false))
+                .then(
+                  (closed) =>
+                    closed ||
+                    api("/auth/logout", { method: "POST" }).catch(
+                      () => undefined,
+                    ),
+                )
+                .finally(() => {
+                  sayingGoodbye.current = false;
+                  logoutRequest.current = null;
+                  endSession(user.id);
+                });
+              return;
+            }
+            if (intro === "presentation" && user.intro_pending) {
+              setUser({ ...user, intro_pending: false });
+              // Seen once per member; a failed save only means it shows again.
+              void api("/auth/introduction", { method: "POST" }).catch(
+                () => undefined,
+              );
+            }
+          }}
+        />
+      )}
     </>
   );
 }
 
-function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
+function Workspace({
+  user,
+  onLogout,
+  onGoodbye,
+  onShowIntro,
+}: {
+  user: User;
+  onLogout: () => void;
+  onGoodbye: () => void;
+  onShowIntro: () => void;
+}) {
   const isDev = user.role === "devs";
   const canManageMembers = isDev || user.role === "president";
   const [hanaProfileOpen, setHanaProfileOpen] = useState(false);
@@ -453,7 +531,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
   const selectedModel = models.find((m) => m.model === model);
   const supportedEfforts = selectedModel?.supported_reasoning_efforts || [];
-  const effort = supportedEfforts.includes(reasoningEffort)
+  // Only Devs choose the reasoning level; everyone else gets the default.
+  const effort = isDev && supportedEfforts.includes(reasoningEffort)
     ? reasoningEffort
     : "";
   const effortLabels: Record<string, string> = {
@@ -521,8 +600,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const sendSequence = useRef(0);
   const reportFetchVersion = useRef(0);
   const stoppingReports = !!stoppingIds[currentId || ""];
-  const [reports, setReports] = useState<Report[]>([]),
-    [report, setReport] = useState<Report | null>(null),
+  const [reports, setReports] = useState<Report[]>([]);
+  // Reports that just finished while visible get a short celebration.
+  const justReady = useJustCompleted(reports);
+  const [report, setReport] = useState<Report | null>(null),
     [templates, setTemplates] = useState<Template[]>([]),
     [datasets, setDatasets] = useState<Dataset[]>([]),
     [reportForm, setReportForm] = useState(false);
@@ -535,7 +616,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
   const pendingDescription = reportBusy
     ? reportActivity(activeReports.find((r) => r.status === "running")?.stage)
-    : activity || "Po mendoj…";
+    : (!isDev &&
+      ["Po kaloj te abonimi tjetër…", "Po arsyetoj…"].includes(activity || "")
+        ? "Po mendoj…"
+        : activity) || "Po mendoj…";
   const chatLocked =
     busy || reportBusy || !reportsLoaded || stoppingReports || uploading;
   const reasoningControl = (
@@ -613,30 +697,51 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     ids: string[];
     permanent: boolean;
   } | null>(null);
-  const [conversationTrash, setConversationTrash] = useState(false);
-  const [deletedConversations, setDeletedConversations] = useState<
-    Conversation[]
-  >([]);
-  const [restoringConversation, setRestoringConversation] = useState<
-    string | null
-  >(null);
-  const conversationTrashFetch = useRef(0);
   useEffect(() => {
-    const available = new Set(
-      (conversationTrash ? deletedConversations : conversations).map(
-        (c) => c.id,
-      ),
-    );
+    const available = new Set(conversations.map((c) => c.id));
     setSelectedConversationIds((ids) => {
       const next = ids.filter((id) => available.has(id));
       return next.length === ids.length ? ids : next;
     });
-  }, [conversations, deletedConversations, conversationTrash]);
+  }, [conversations]);
   const [openingConversation, setOpeningConversation] = useState(false);
   const [connectionLost, setConnectionLost] = useState(false);
   const [deleteReport, setDeleteReport] = useState<Report | null>(null);
   const [deletingReport, setDeletingReport] = useState(false);
   const [reportTrash, setReportTrash] = useState(false);
+  const [reportQuery, setReportQuery] = useState("");
+  const [reportMatches, setReportMatches] = useState<Set<string> | null>(null);
+  const [reportSearchBusy, setReportSearchBusy] = useState(false);
+  const searchMessage = useRef<string | null>(null);
+  useEffect(() => {
+    if (!reportQuery.trim()) {
+      setReportMatches(null);
+      setReportSearchBusy(false);
+      return;
+    }
+    const controller = new AbortController();
+    setReportSearchBusy(true);
+    const timer = setTimeout(() => {
+      void api<Report[]>(
+        `/reports?deleted=${reportTrash}&q=${encodeURIComponent(reportQuery.trim())}`,
+        { signal: controller.signal },
+      )
+        .then((items) => {
+          if (!controller.signal.aborted)
+            setReportMatches(new Set(items.map((item) => item.id)));
+        })
+        .catch((e) => {
+          if (!controller.signal.aborted) fail(e);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setReportSearchBusy(false);
+        });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [reportQuery, reportTrash, reports]);
   const [deletedReports, setDeletedReports] = useState<Report[]>([]);
   const [selectedReportIds, setSelectedReportIds] = useState<string[]>([]);
   const [reportDeleteRequest, setReportDeleteRequest] = useState<{
@@ -663,7 +768,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [deleteChat, setDeleteChat] = useState<Conversation | null>(null);
   const [chatHistory, setChatHistory] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [searchEvent, setSearchEvent] = useState<{
+    kind: string;
+    id: number;
+  } | null>(null);
   const [checkingSource, setCheckingSource] = useState<string | null>(null);
+  const scrollFollower = useRef(new ChatScrollFollower());
+  const [showJump, setShowJump] = useState(false);
   const messageScroll = useRef<HTMLDivElement>(null),
     scrolledConversation = useRef<string | null>(null),
     mounted = useRef(true),
@@ -680,7 +791,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       field.style.height = "auto";
       const maxHeight = parseFloat(getComputedStyle(field).maxHeight) || 220;
       field.style.height = `${Math.min(field.scrollHeight, maxHeight)}px`;
-      if (followBottom) scroll.scrollTop = scroll.scrollHeight;
+      if (followBottom && scrollFollower.current.following)
+        scroll.scrollTop = scroll.scrollHeight;
     };
     resize();
     window.addEventListener("resize", resize);
@@ -688,7 +800,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   }, [draft, page, currentId]);
 
   const fail = (e: unknown) =>
-    setError(errorMessage((e as Error).message || "Ndodhi një gabim."));
+    setError(
+      userError((e as Error).message || "Ndodhi një gabim.", isDev),
+    );
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -898,10 +1012,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     const switched = scrolledConversation.current !== currentId;
     scrolledConversation.current = currentId;
     const scroll = messageScroll.current;
-    scroll?.scrollTo({
-      top: scroll.scrollHeight,
-      behavior: switched || busy ? "instant" : "smooth",
-    });
+    if (scroll) scrollFollower.current.update(scroll, switched);
+    setShowJump(scrollFollower.current.showsJump(scroll));
+    if (searchMessage.current) {
+      const target = document.getElementById(
+        `message-${searchMessage.current}`,
+      );
+      if (target) {
+        scrollFollower.current.pause();
+        target.scrollIntoView({ block: "center", behavior: "instant" });
+        setShowJump(scrollFollower.current.showsJump(scroll));
+        searchMessage.current = null;
+      }
+    }
   }, [messages, busy, reportBusy, currentId, page]);
   async function loadSubscription() {
     if (subscriptionRequest.current) return subscriptionRequest.current;
@@ -984,53 +1107,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     setReportsLoaded(true);
     if (reportTrash)
       setDeletedReports(await api<Report[]>("/reports?deleted=true"));
-  }
-  async function loadConversationTrash() {
-    const version = ++conversationTrashFetch.current;
-    const items = await api<Conversation[]>("/conversations?deleted=true");
-    if (version === conversationTrashFetch.current)
-      setDeletedConversations(items);
-  }
-  useEffect(() => {
-    if (!conversationTrash || page !== "conversations") return;
-    void loadConversationTrash().catch(fail);
-    const timer = setInterval(
-      () => void loadConversationTrash().catch(() => undefined),
-      5000,
-    );
-    return () => {
-      clearInterval(timer);
-      conversationTrashFetch.current++;
-    };
-  }, [conversationTrash, page]);
-  async function restoreConversation(ids: string[], bulk = false) {
-    if (!ids.length || deleting || restoringConversation) return;
-    const selected = new Set(ids);
-    setRestoringConversation(bulk ? "__selected__" : ids[0]);
-    setError("");
-    try {
-      if (bulk) {
-        await api("/conversations/bulk-restore", {
-          method: "POST",
-          body: JSON.stringify({ conversation_ids: ids }),
-        });
-      } else {
-        await api(`/conversations/${ids[0]}/restore`, { method: "POST" });
-      }
-      conversationTrashFetch.current++;
-      setDeletedConversations((items) =>
-        items.filter((c) => !selected.has(c.id)),
-      );
-      setSelectedConversationIds((items) =>
-        items.filter((id) => !selected.has(id)),
-      );
-      setConversations(await api<Conversation[]>("/conversations"));
-      await loadConversationTrash();
-    } catch (e) {
-      fail(e);
-    } finally {
-      setRestoringConversation(null);
-    }
   }
   async function loadAdmin() {
     if (!isDev) {
@@ -1501,6 +1577,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     )
       return;
     text = text.trim() ? text : "Analizo skedarët e bashkëngjitur.";
+    scrollFollower.current.resume(messageScroll.current);
+    setShowJump(false);
     ++sendSequence.current;
     const outgoing = [...(retryFiles ?? pendingAttachments)];
     submitting.current.add(currentId || "__new__");
@@ -1614,6 +1692,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               event.notification_kind === "report" ? "report" : "reply",
             );
           }
+          runs.current.step(streamId, event, token);
           const next = runs.current.update(
             streamId,
             full,
@@ -2162,12 +2241,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       setLoadingDatabases(false);
     }
   }
-  async function removeConversation(
-    ids = deleteChat ? [deleteChat.id] : [],
-    bulk = false,
-    permanent = false,
-  ) {
-    if (uploading || !ids.length || deleting || restoringConversation) return;
+  async function removeConversation(ids = deleteChat ? [deleteChat.id] : []) {
+    if (uploading || !ids.length || deleting) return;
     setDeleting(true);
     const selected = new Set(ids);
     // Retire listeners before cancellation emits final events.
@@ -2180,14 +2255,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
     refreshRuns((n) => n + 1);
     try {
-      if (bulk) {
-        await api("/conversations/bulk-delete", {
-          method: "POST",
-          body: JSON.stringify({ conversation_ids: ids, permanent }),
-        });
-      } else {
-        await api(`/conversations/${ids[0]}`, { method: "DELETE" });
-      }
+      await api("/conversations/bulk-purge", {
+        method: "POST",
+        body: JSON.stringify({ conversation_ids: ids }),
+      });
       for (const id of ids) replyCompletions.current.forget(id);
       setReplyNotifications((items) =>
         items.filter((item) => !selected.has(item.conversationId)),
@@ -2202,15 +2273,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         setPage("conversations");
       }
       setConversations((items) => items.filter((c) => !selected.has(c.id)));
-      if (permanent)
-        setReports((items) =>
-          items.map((r) =>
-            r.conversation_id && selected.has(r.conversation_id)
-              ? { ...r, conversation_id: null }
-              : r,
-          ),
-        );
-      if (permanent) for (const id of ids) drafts.current.delete(id);
+      setReports((items) =>
+        items.map((r) =>
+          r.conversation_id && selected.has(r.conversation_id)
+            ? { ...r, conversation_id: null }
+            : r,
+        ),
+      );
+      for (const id of ids) drafts.current.delete(id);
       saveDrafts(user.id, drafts.current);
       try {
         if (
@@ -2227,11 +2297,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       );
       setDeleteChat(null);
       setConversationDeleteRequest(null);
-      conversationTrashFetch.current++;
-      setDeletedConversations((items) =>
-        items.filter((c) => !selected.has(c.id)),
-      );
-      await loadConversationTrash();
     } catch (e) {
       fail(e);
     } finally {
@@ -2323,10 +2388,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     />
   );
 
-  const nav = [
-    { id: "conversations" as Page, label: "Bisedat", icon: MessageSquare },
-    { id: "reports" as Page, label: "Raportet", icon: FileText },
-  ];
   const current = conversations.find((c) => c.id === currentId);
   const caption = {
     conversations: "Bisedat",
@@ -2339,11 +2400,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
     : [];
   const chatTimeline = buildChatTimeline(messages, conversationReports);
   const empty = messages.length === 0 && conversationReports.length === 0;
-  const libraryConversations = conversationTrash
-    ? deletedConversations
-    : conversations;
-  const conversationActionBusy =
-    deleting || uploading || openingConversation || !!restoringConversation;
+  const libraryConversations = conversations;
+  const conversationActionBusy = deleting || uploading || openingConversation;
   const visibleConversations = libraryConversations.filter((c) =>
     `${c.title} ${c.preview || ""}`
       .toLocaleLowerCase("sq")
@@ -2352,7 +2410,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const selectedVisibleConversations = visibleConversations.filter((c) =>
     selectedConversationIds.includes(c.id),
   );
-  const libraryReports = reportTrash ? deletedReports : reports;
+  const allLibraryReports = reportTrash ? deletedReports : reports;
+  const libraryReports = reportQuery.trim()
+    ? allLibraryReports.filter((item) => reportMatches?.has(item.id))
+    : allLibraryReports;
   const selectableReports = libraryReports.filter(
     (r) => !["queued", "running"].includes(r.status),
   );
@@ -2404,25 +2465,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
         >
           <Plus size={18} /> Bisedë e re <span>↗</span>
         </button>
-        <span className="sidebar-label"> HAPËSIRA </span>
-        <nav>
-          {nav.map((n) => (
-            <button
-              key={n.id}
-              className={
-                page === n.id || (page === "chat" && n.id === "conversations")
-                  ? "nav-item selected"
-                  : "nav-item"
-              }
-              onClick={() => navigate(n.id)}
-            >
-              <n.icon size={19} />
-              {n.label}
-              {n.id === "reports" && (
-                <span className="nav-count">{reports.length}</span>
-              )}
-            </button>
-          ))}
+        <nav aria-label="Navigimi kryesor">
+          <button
+            className={page === "reports" ? "nav-item selected" : "nav-item"}
+            onClick={() => navigate("reports")}
+          >
+            <FileText size={19} /> Raportet
+            <span className="nav-count">{reports.length}</span>
+          </button>
         </nav>
         <div className="recent">
           <span className="sidebar-label"> BISEDAT E FUNDIT </span>
@@ -2490,11 +2540,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               aria-label="Dil nga llogaria"
               data-tooltip="Dil nga llogaria"
               disabled={chatLocked}
-              onClick={() => {
-                void api("/auth/logout", { method: "POST" })
-                  .then(onLogout)
-                  .catch(fail);
-              }}
+              onClick={onGoodbye}
             >
               <LogOut size={16} />
             </button>
@@ -2503,6 +2549,59 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       </aside>
       <div className="main-shell">
         <header className={`topbar${page === "chat" ? " chat-header" : ""}`}>
+          <GlobalSearch
+            navigation={[
+              { kind: "navigation", id: "reports", title: "Raportet" },
+              { kind: "navigation", id: "conversations", title: "Bisedat" },
+              ...availableSettings.map((section) => ({
+                kind: "navigation",
+                id: section.id,
+                title: section.label,
+              })),
+            ]}
+            onSelect={(result) => {
+              if (result.kind === "conversation") {
+                searchMessage.current = result.message_id || null;
+                if (result.id === currentId && result.message_id) {
+                  const target = document.getElementById(
+                    `message-${result.message_id}`,
+                  );
+                  if (target) {
+                    scrollFollower.current.pause();
+                    target.scrollIntoView({ block: "center" });
+                    searchMessage.current = null;
+                  }
+                }
+                void selectConversation(
+                  conversations.find((item) => item.id === result.id) || {
+                    id: result.id,
+                    title: result.title,
+                    model: null,
+                    updated_at: "",
+                  },
+                );
+              } else if (result.kind === "report") {
+                void openReport({
+                  id: result.id,
+                  title: result.title,
+                  template_id: "",
+                  status: "",
+                  error: null,
+                  created_at: "",
+                });
+              } else if (result.kind === "source") openSettings("sources");
+              else if (result.kind === "member") openSettings("members");
+              else if (result.kind === "traffic" || result.kind === "log") {
+                setSearchEvent({ kind: result.kind, id: Number(result.id) });
+                openSettings(result.kind === "traffic" ? "traffic" : "logs");
+              } else if (
+                result.id === "reports" ||
+                result.id === "conversations"
+              )
+                navigate(result.id);
+              else openSettings(result.id as SettingsTab);
+            }}
+          />
           <div className="header-title">
             {page === "chat" ? (
               <button
@@ -2526,11 +2625,13 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
           <div className="topbar-right">
             {page === "chat" && (
               <>
-                <Badge good={subscription.connected}>
-                  {subscription.connected
-                    ? "Abonimi është lidhur"
-                    : "Asnjë abonim i përdorshëm"}
-                </Badge>
+                {isDev && (
+                  <Badge good={subscription.connected}>
+                    {subscription.connected
+                      ? "Abonimi është lidhur"
+                      : "Asnjë abonim i përdorshëm"}
+                  </Badge>
+                )}
                 {currentId && (
                   <IconButton
                     label="Versionet e bisedës"
@@ -2601,32 +2702,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </button>
               }
             />
-            <div className="library-tabs" aria-label="Pamjet e bisedave">
-              <button
-                className={!conversationTrash ? "active" : ""}
-                aria-pressed={!conversationTrash}
-                disabled={conversationActionBusy}
-                onClick={() => {
-                  setConversationTrash(false);
-                  setSelectedConversationIds([]);
-                  setConversationSearch("");
-                }}
-              >
-                <MessageSquare size={16} /> Bisedat ({conversations.length})
-              </button>
-              <button
-                className={conversationTrash ? "active" : ""}
-                aria-pressed={conversationTrash}
-                disabled={conversationActionBusy}
-                onClick={() => {
-                  setConversationTrash(true);
-                  setSelectedConversationIds([]);
-                  setConversationSearch("");
-                }}
-              >
-                <Trash2 size={16} /> Të fshira
-              </button>
-            </div>
             {libraryConversations.length > 0 && (
               <label className="library-search">
                 <Search size={17} />
@@ -2647,17 +2722,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 available={visibleConversations.length}
                 selected={selectedVisibleConversations.length}
                 busy={conversationActionBusy}
-                permanent={conversationTrash}
-                restoring={!!restoringConversation}
-                onRestore={
-                  conversationTrash
-                    ? () =>
-                        void restoreConversation(
-                          selectedVisibleConversations.map((c) => c.id),
-                          true,
-                        )
-                    : undefined
-                }
+                permanent
                 onToggleAll={(checked) =>
                   setSelectedConversationIds(
                     checked ? visibleConversations.map((c) => c.id) : [],
@@ -2668,7 +2733,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   setError("");
                   setConversationDeleteRequest({
                     ids: selectedVisibleConversations.map((c) => c.id),
-                    permanent: conversationTrash,
+                    permanent: true,
                   });
                 }}
               />
@@ -2677,7 +2742,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <div className="conversation-grid">
                 {visibleConversations.map((c) => (
                   <article
-                    className={`conversation-card${conversationTrash ? " trashed" : ""}${selectedConversationIds.includes(c.id) ? " selected" : ""}`}
+                    className={`conversation-card${selectedConversationIds.includes(c.id) ? " selected" : ""}`}
                     key={c.id}
                   >
                     <label
@@ -2700,8 +2765,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     </label>
                     <button
                       className="conversation-card-main"
-                      aria-label={`${conversationTrash ? "Bisedë e fshirë" : "Hap bisedën"}: ${c.title}`}
-                      disabled={conversationTrash || conversationActionBusy}
+                      aria-label={`Hap bisedën: ${c.title}`}
+                      disabled={conversationActionBusy}
                       onClick={() => void selectConversation(c)}
                     >
                       <span className="report-icon">
@@ -2724,44 +2789,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       </p>
                       <span className="conversation-card-meta">
                         <span>{c.message_count || 0} mesazhe</span>
-                        <span>
-                          {conversationTrash
-                            ? `Fshirë ${date(c.deleted_at || c.updated_at)}`
-                            : date(c.updated_at)}
-                        </span>
-                        {!conversationTrash && <ArrowRight size={17} />}
+                        <span>{date(c.updated_at)}</span>
+                        <ArrowRight size={17} />
                       </span>
                     </button>
-                    {conversationTrash && (
-                      <button
-                        className="icon-button conversation-card-restore"
-                        data-tooltip="Rikthe bisedën"
-                        aria-label={`Rikthe bisedën: ${c.title}`}
-                        disabled={conversationActionBusy}
-                        onClick={() => void restoreConversation([c.id])}
-                      >
-                        {restoringConversation === c.id ? (
-                          <LoaderCircle size={17} className="spin" />
-                        ) : (
-                          <RotateCcw size={17} />
-                        )}
-                      </button>
-                    )}
                     <button
                       className="icon-button conversation-card-delete"
-                      data-tooltip={
-                        conversationTrash ? "Fshi përgjithmonë" : "Kalo në kosh"
-                      }
-                      aria-label={`${conversationTrash ? "Fshi përgjithmonë bisedën" : "Fshi bisedën"}: ${c.title}`}
+                      data-tooltip="Fshi përgjithmonë"
+                      aria-label={`Fshi bisedën: ${c.title}`}
                       disabled={conversationActionBusy}
                       onClick={() => {
                         setError("");
-                        if (conversationTrash)
-                          setConversationDeleteRequest({
-                            ids: [c.id],
-                            permanent: true,
-                          });
-                        else setDeleteChat(c);
+                        setDeleteChat(c);
                       }}
                     >
                       <Trash2 size={16} />
@@ -2775,16 +2814,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 title={
                   conversationSearch
                     ? "Nuk u gjet asnjë bisedë."
-                    : conversationTrash
-                      ? "Koshi i bisedave është bosh."
-                      : "Biseda juaj e parë fillon këtu."
+                    : "Biseda juaj e parë fillon këtu."
                 }
                 text={
                   conversationSearch
                     ? "Provoni një fjalë tjetër për kërkimin."
-                    : conversationTrash
-                      ? "Bisedat e fshira do të shfaqen këtu. Mund t’i riktheni ose t’i fshini përgjithmonë."
-                      : "Shtypni “Bisedë e re” për të biseduar me asistentin dhe për të krijuar raporte."
+                    : "Shtypni “Bisedë e re” për të biseduar me asistentin dhe për të krijuar raporte."
                 }
               />
             )}
@@ -2796,6 +2831,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <div
                 ref={messageScroll}
                 className={`message-scroll ${empty ? "empty-scroll" : ""}`}
+                tabIndex={0}
+                onScroll={(event) => {
+                  scrollFollower.current.observe(event.currentTarget);
+                  setShowJump(
+                    scrollFollower.current.showsJump(event.currentTarget),
+                  );
+                }}
+                onWheel={(event) => {
+                  if (event.deltaY < 0) scrollFollower.current.pause();
+                }}
+                onTouchMove={() => scrollFollower.current.pause()}
+                onKeyDown={(event) => {
+                  if (["PageUp", "Home", "ArrowUp"].includes(event.key))
+                    scrollFollower.current.pause();
+                }}
               >
                 {empty ? (
                   <section className="chat-welcome">
@@ -2855,9 +2905,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       ))}
                     </div>
                     <div className="welcome-note">
-                      <ShieldCheck size={15} /> Mundësuar nga abonimi i
-                      përbashkët
-                      {providerName}.{" "}
+                      <ShieldCheck size={15} />{" "}
+                      {isDev
+                        ? `Mundësuar nga abonimi i përbashkët ${providerName}.`
+                        : "Shihni vetëm të dhënat ku keni qasje."}
                     </div>
                   </section>
                 ) : (
@@ -2868,7 +2919,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         return (
                           <article
                             key={entry.key}
-                            className={`message ${m.role}`}
+                            className={`message ${m.role}${
+                              m.role === "assistant" &&
+                              (pendingMessages.has(m.id) ||
+                                m.status === "streaming")
+                                ? " working"
+                                : ""
+                            }`}
+                            id={`message-${m.id}`}
                           >
                             {m.role === "assistant" ? (
                               <button
@@ -2884,6 +2942,16 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                               <div className="message-avatar user">
                                 {user.name.slice(0, 1)}
                               </div>
+                            )}
+                            {m.role === "assistant" && (
+                              <span
+                                className="thought-bubble"
+                                aria-hidden="true"
+                              >
+                                <i />
+                                <i />
+                                <i />
+                              </span>
                             )}
                             <div className="message-body">
                               <div className="message-author">
@@ -2912,41 +2980,60 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                                   description={pendingDescription}
                                 />
                               )}
-                              {m.content && (
-                                <MarkdownContent>{m.content}</MarkdownContent>
+                              {m.role === "assistant" && (
+                                <ActivityTimeline
+                                  steps={m.steps || []}
+                                  active={m.status === "streaming"}
+                                />
                               )}
-                              {m.role === "user" && !chatLocked && (
+                              {m.content && (
+                                <MarkdownContent>
+                                  {m.role === "assistant" &&
+                                  m.status === "failed"
+                                    ? userError(m.content, isDev)
+                                    : m.content}
+                                </MarkdownContent>
+                              )}
+                              {m.role === "user" && (
                                 <div className="message-actions">
-                                  <button
-                                    type="button"
-                                    className="icon-button"
-                                    aria-label="Ndrysho mesazhin"
-                                    data-tooltip="Ndrysho mesazhin dhe rinis bisedën"
-                                    onClick={() => {
-                                      setRetryMessageId(m.id);
-                                      setDraft(m.content);
-                                      setPendingAttachments(
-                                        m.attachments || [],
-                                      );
-                                    }}
-                                  >
-                                    <Pencil size={16} aria-hidden="true" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="icon-button"
-                                    aria-label="Ridërgo"
-                                    data-tooltip="Ridërgo dhe rinis bisedën nga ky mesazh"
-                                    onClick={() =>
-                                      void send(
-                                        m.content,
-                                        m.id,
-                                        m.attachments || [],
-                                      )
-                                    }
-                                  >
-                                    <RotateCcw size={16} aria-hidden="true" />
-                                  </button>
+                                  <CopyMessageButton text={m.content} />
+                                  {!chatLocked && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="icon-button"
+                                        aria-label="Ndrysho mesazhin"
+                                        data-tooltip="Ndrysho mesazhin dhe rinis bisedën"
+                                        onClick={() => {
+                                          setRetryMessageId(m.id);
+                                          setDraft(m.content);
+                                          setPendingAttachments(
+                                            m.attachments || [],
+                                          );
+                                        }}
+                                      >
+                                        <Pencil size={16} aria-hidden="true" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="icon-button"
+                                        aria-label="Ridërgo"
+                                        data-tooltip="Ridërgo dhe rinis bisedën nga ky mesazh"
+                                        onClick={() =>
+                                          void send(
+                                            m.content,
+                                            m.id,
+                                            m.attachments || [],
+                                          )
+                                        }
+                                      >
+                                        <RotateCcw
+                                          size={16}
+                                          aria-hidden="true"
+                                        />
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               )}
                               {m.status === "failed" && (
@@ -2968,10 +3055,23 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       const r = entry.report;
                       return (
                         <div
-                          className="chat-report"
+                          className={`chat-report${justReady.has(r.id) ? " just-ready" : ""}`}
                           key={entry.key}
                           aria-live="polite"
                         >
+                          {justReady.has(r.id) && (
+                            <span
+                              className="report-confetti"
+                              aria-hidden="true"
+                            >
+                              {Array.from({ length: 14 }, (_, index) => (
+                                <i
+                                  key={index}
+                                  style={{ "--i": index } as CSSProperties}
+                                />
+                              ))}
+                            </span>
+                          )}
                           <div className="chat-report-heading">
                             <FileText size={20} />
                             <strong>{r.title}</strong>
@@ -2988,7 +3088,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           )}
                           {r.error && (
                             <p className="message-warning">
-                              {errorMessage(r.error)}
+                              {userError(r.error, isDev)}
                             </p>
                           )}
                           {r.status === "completed" && (
@@ -3012,7 +3112,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       );
                     })}
                     {reportBusy && pendingMessages.size === 0 && (
-                      <article className="message assistant">
+                      <article className="message assistant working">
                         <button
                           type="button"
                           className="message-avatar assistant"
@@ -3022,6 +3122,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                         >
                           <img src="/brand/hana-avatar.png" alt="" />
                         </button>
+                        <span className="thought-bubble" aria-hidden="true">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
                         <div className="message-body">
                           <div className="message-author">
                             <button
@@ -3040,15 +3145,29 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </div>
                 )}
               </div>
+              {showJump && (
+                <div className="jump-latest">
+                  <button
+                    type="button"
+                    className="button outline small"
+                    onClick={() => {
+                      scrollFollower.current.resume(messageScroll.current);
+                      setShowJump(false);
+                    }}
+                  >
+                    <ArrowDownToLine size={16} />
+                    Te mesazhi i fundit
+                  </button>
+                </div>
+              )}
               <div className="composer-wrap">
                 {!subscription.connected && (
                   <div className="connect-prompt">
                     <span>
-                      <Sparkles size={15} /> Asnjë abonim nuk mund të vazhdojë
-                      tani.{" "}
+                      <Sparkles size={15} />{" "}
                       {isDev
-                        ? "Kontrolloni abonimet te Cilësimet → Modeli."
-                        : "Kërkojini Devs të kontrollojnë abonimet."}
+                        ? "Asnjë abonim nuk mund të vazhdojë tani. Kontrolloni abonimet te Cilësimet → Modeli."
+                        : "Hana nuk është e disponueshme për momentin. Provoni sërish pas pak."}
                     </span>
                     {isDev && (
                       <button onClick={() => openSettings("models")}>
@@ -3115,9 +3234,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       if (shouldSubmitComposerOnEnter(e.nativeEvent)) {
                         e.preventDefault();
                         const form = e.currentTarget.form;
-                        const sendButton = form?.querySelector<HTMLButtonElement>(
-                          'button[type="submit"]',
-                        );
+                        const sendButton =
+                          form?.querySelector<HTMLButtonElement>(
+                            'button[type="submit"]',
+                          );
                         if (sendButton && !sendButton.disabled)
                           form?.requestSubmit(sendButton);
                       }
@@ -3125,6 +3245,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   />
                   <div className="composer-controls">
                     <div className="composer-left">
+                      {isDev && (
+                      <>
                       <span className="model-picker">
                         <Sparkles size={14} />
                         <Select
@@ -3145,6 +3267,8 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       </span>
                       {reasoningControl}
                       <span className="composer-divider" />
+                      </>
+                      )}
                       <button
                         type="button"
                         className="button outline small upload-button"
@@ -3257,12 +3381,6 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                       onChange={setSystemNotifications}
                     />
                   </>
-                )}
-                {settingsTab === "account" && isDev && (
-                  <section className="panel account-settings">
-                    <h2>Llogaria</h2>
-                    <PasswordChangeForm />
-                  </section>
                 )}
                 {settingsTab === "models" && isDev && (
                   <section className="settings-section">
@@ -3668,7 +3786,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </section>
                 )}
                 {isDev &&
-                  ["overview", "traffic", "logs", "activity"].includes(settingsTab) && (
+                  ["overview", "traffic", "logs", "activity"].includes(
+                    settingsTab,
+                  ) && (
                     <section className="settings-section">
                       <div className="settings-section-heading">
                         <h2>
@@ -3849,8 +3969,24 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                           </p>
                         </>
                       )}
-                      {settingsTab === "traffic" && <TrafficPanel />}
-                      {settingsTab === "logs" && <SystemLogsPanel />}
+                      {settingsTab === "traffic" && (
+                        <TrafficPanel
+                          eventId={
+                            searchEvent?.kind === "traffic"
+                              ? searchEvent.id
+                              : undefined
+                          }
+                        />
+                      )}
+                      {settingsTab === "logs" && (
+                        <SystemLogsPanel
+                          eventId={
+                            searchEvent?.kind === "log"
+                              ? searchEvent.id
+                              : undefined
+                          }
+                        />
+                      )}
                       {settingsTab === "activity" && (
                         <section className="panel">
                           <div className="panel-heading">
@@ -3910,6 +4046,26 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                 </button>
               }
             />
+            <label className="library-search report-search">
+              <Search size={17} />
+              <input
+                type="search"
+                aria-label="Kërko raporte"
+                placeholder="Kërko në titujt dhe përmbajtjen e raporteve…"
+                value={reportQuery}
+                maxLength={200}
+                onChange={(event) => {
+                  setReportQuery(event.target.value);
+                  setReportMatches(null);
+                  setSelectedReportIds([]);
+                }}
+              />
+            </label>
+            {reportSearchBusy && (
+              <p role="status" className="muted">
+                Duke kërkuar raporte…
+              </p>
+            )}
             <div className="library-tabs" aria-label="Pamjet e raporteve">
               <button
                 className={!reportTrash ? "active" : ""}
@@ -3962,7 +4118,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <div className="report-grid">
                 {libraryReports.map((r) => (
                   <article
-                    className={`report-card${selectedReportIds.includes(r.id) ? " selected" : ""}`}
+                    className={`report-card${selectedReportIds.includes(r.id) ? " selected" : ""}${justReady.has(r.id) ? " just-ready" : ""}`}
                     key={r.id}
                   >
                     <div className="report-card-top">
@@ -4087,14 +4243,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <EmptyState
                 icon={<FileText size={30} />}
                 title={
-                  reportTrash
-                    ? "Nuk ka raporte të fshira."
-                    : "Raporti juaj i parë fillon këtu."
+                  reportQuery.trim()
+                    ? "Nuk u gjetën raporte."
+                    : reportTrash
+                      ? "Nuk ka raporte të fshira."
+                      : "Raporti juaj i parë fillon këtu."
                 }
                 text={
-                  reportTrash
-                    ? "Raportet e fshira mund t’i riktheni nga kjo pamje."
-                    : "Kërkoni raport direkt në bisedë ose përdorni një model raporti. Raportet e përfunduara ruhen këtu."
+                  reportQuery.trim()
+                    ? "Provoni një fjalë tjetër në kërkim."
+                    : reportTrash
+                      ? "Raportet e fshira mund t’i riktheni nga kjo pamje."
+                      : "Kërkoni raport direkt në bisedë ose përdorni një model raporti. Raportet e përfunduara ruhen këtu."
                 }
               />
             )}
@@ -4126,16 +4286,32 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               <dt>Gjuha</dt>
               <dd>Shqip</dd>
             </div>
-            <div>
-              <dt>Modeli aktual</dt>
-              <dd>
-                {selectedModel?.displayName || model || "Nuk është zgjedhur"}
-              </dd>
-            </div>
+            {isDev && (
+              <div>
+                <dt>Modeli aktual</dt>
+                <dd>
+                  {selectedModel?.displayName || model || "Nuk është zgjedhur"}
+                </dd>
+              </div>
+            )}
           </dl>
-          <p className="hana-profile-note">
-            Emri dhe roli i Hanës mbeten të njëjtë kur ndryshoni modelin.
-          </p>
+          {isDev && (
+            <p className="hana-profile-note">
+              Emri dhe roli i Hanës mbeten të njëjtë kur ndryshoni modelin.
+            </p>
+          )}
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="button outline"
+              onClick={() => {
+                setHanaProfileOpen(false);
+                onShowIntro();
+              }}
+            >
+              <Sparkles size={16} /> Shiko prezantimin e Hanës
+            </button>
+          </div>
         </Modal>
       )}
 
@@ -4251,7 +4427,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       )}
       {recoveryMember && isDev && (
         <Modal
-          title={`Rikuperimi: ${recoveryMember.name}`}
+          title={`Fjalëkalimi: ${recoveryMember.name}`}
           onClose={() => setRecoveryMember(null)}
         >
           <MemberRecovery member={recoveryMember} />
@@ -4324,7 +4500,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               </IconButton>
             </div>
             {report.error && (
-              <p className="error-box">{errorMessage(report.error || "")}</p>
+              <p className="error-box">
+                {userError(report.error || "", isDev)}
+              </p>
             )}
             {report.status === "completed" && (
               <ReportWorkbookPreview key={report.id} reportId={report.id} />
@@ -4523,22 +4701,24 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       {deleteChat && (
         <Modal
           error={error}
-          title="Të fshihet biseda?"
+          title="Të fshihet përgjithmonë biseda?"
+          dismissOnBackdrop={false}
           onClose={() => {
             if (!deleting) setDeleteChat(null);
           }}
         >
           <p>
             {" "}
-            Biseda “{deleteChat.title}” do të kalojë te “Të fshira” dhe mund të
-            rikthehet. Puna në vazhdim do të ndërpritet. Raportet e ruajtura do
-            të mbeten.
+            Biseda “{deleteChat.title}” dhe mesazhet e saj do të fshihen
+            përgjithmonë. Ky veprim nuk zhbëhet. Puna në vazhdim do të
+            ndërpritet. Raportet e ruajtura do të mbeten.
           </p>
           <div className="modal-actions">
             <button
               className="button outline"
               disabled={deleting}
               onClick={() => setDeleteChat(null)}
+              data-modal-default=""
             >
               {" "}
               Anulo{" "}
@@ -4548,7 +4728,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               disabled={deleting}
               onClick={() => void removeConversation()}
             >
-              {deleting ? "Duke fshirë…" : "Fshi bisedën"}
+              {deleting ? "Duke fshirë…" : "Fshi përgjithmonë"}
             </button>
           </div>
         </Modal>
@@ -4556,27 +4736,21 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
       {conversationDeleteRequest && (
         <Modal
           error={error}
-          title={
-            conversationDeleteRequest.permanent
-              ? "Të fshihen përgjithmonë bisedat?"
-              : "Të kalojnë bisedat në kosh?"
-          }
+          title="Të fshihen përgjithmonë bisedat?"
           dismissOnBackdrop={false}
           onClose={() => {
             if (!deleting) setConversationDeleteRequest(null);
           }}
         >
           <p>
-            {conversationDeleteRequest.permanent
-              ? `Do të fshihen përgjithmonë ${conversationDeleteRequest.ids.length} biseda dhe mesazhet e tyre. Ky veprim nuk zhbëhet.`
-              : `${conversationDeleteRequest.ids.length} biseda do të kalojnë te “Të fshira” dhe mund të rikthehen. Puna në vazhdim do të ndërpritet.`}{" "}
+            {`Do të fshihen përgjithmonë ${conversationDeleteRequest.ids.length} biseda dhe mesazhet e tyre. Ky veprim nuk zhbëhet. Puna në vazhdim do të ndërpritet.`}{" "}
             Raportet e ruajtura do të mbeten.
           </p>
           <div className="modal-actions">
             <button
               className="button outline"
               disabled={deleting}
-              data-modal-default={conversationDeleteRequest.permanent ? "" : undefined}
+              data-modal-default=""
               onClick={() => setConversationDeleteRequest(null)}
             >
               Anulo
@@ -4585,18 +4759,10 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
               className="button danger"
               disabled={deleting}
               onClick={() =>
-                void removeConversation(
-                  conversationDeleteRequest.ids,
-                  true,
-                  conversationDeleteRequest.permanent,
-                )
+                void removeConversation(conversationDeleteRequest.ids)
               }
             >
-              {deleting
-                ? "Duke fshirë…"
-                : conversationDeleteRequest.permanent
-                  ? "Fshi përgjithmonë"
-                  : "Kalo në kosh"}
+              {deleting ? "Duke fshirë…" : "Fshi përgjithmonë"}
             </button>
           </div>
         </Modal>
@@ -4654,7 +4820,9 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             <button
               className="button outline"
               disabled={deletingSelectedReports}
-              data-modal-default={reportDeleteRequest.permanent ? "" : undefined}
+              data-modal-default={
+                reportDeleteRequest.permanent ? "" : undefined
+              }
               onClick={() => setReportDeleteRequest(null)}
             >
               Anulo

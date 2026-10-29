@@ -52,18 +52,21 @@ def test_sql_failure_and_tool_round_trip_are_visible_without_filter_values(clien
     assert any(e["direction"] == "backend-model" and e["action"] == "tool/query_database" and e["status"] == "error" for e in traffic["events"])
 
 
-def test_traffic_retention_is_bounded_and_survives_recorder_recreation(client, admin):
+def test_traffic_retains_every_event_and_survives_recorder_recreation(client, admin):
     from app.traffic import TrafficLog
 
     log = client.app.state.traffic
     client.portal.call(log.flush)
-    log.capacity = 3
-    for _ in range(7):
+    baseline = log.db.one("SELECT count(*) AS n FROM traffic_events")["n"]
+    for _ in range(10025):
         log.record("model-backend", "fixture", "received")
     client.portal.call(log.flush)
-    assert len(client.app.state.db.all("SELECT * FROM traffic_events")) == 3
+    assert log.db.one("SELECT count(*) AS n FROM traffic_events")["n"] == baseline + 10025
     fresh = TrafficLog(client.app.state.db)
-    assert fresh.db.one("SELECT count(*) AS n FROM traffic_events")["n"] == 3
+    assert fresh.db.one("SELECT count(*) AS n FROM traffic_events")["n"] == baseline + 10025
+    assert client.get("/api/admin/traffic").json()["capacity"] is None
+    for before in (-1, 9223372036854775808):
+        assert client.get(f"/api/admin/traffic?before={before}").status_code == 422
 
 
 def test_admin_can_open_message_payloads_but_auth_credentials_and_tokens_never_appear(client, admin):

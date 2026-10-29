@@ -355,6 +355,16 @@ export function errorMessage(value: string): string {
   }
   return value;
 }
+// Technical failure details (providers, models, credentials, servers) are only
+// useful to Devs. Everyone else sees a calm, plain explanation instead.
+const TECHNICAL =
+  /subscri|abonim|provider|ofrues|model|reasoning|token|quota|rate.?limit|credential|kredencial|çelës|enkript|server|volum|connector|HTTP|\b[45]\d\d\b|traceback|exception|error:|ChatGPT|Claude|OpenAI|Anthropic|Codex|\bAPI\b|SQL|query|script|timeout|ECONN|socket/i;
+
+export function userError(value: string, isDev: boolean): string {
+  const translated = errorMessage(value);
+  if (isDev || !TECHNICAL.test(value + " " + translated)) return translated;
+  return "Hana nuk arriti ta përfundojë këtë tani. Provoni sërish pas pak; nëse vazhdon, njoftoni ekipin teknik.";
+}
 export function auditLabel(action: string): string {
   const events: Record<string, string> = {
     "auth.setup": "Krijimi i hapësirës",

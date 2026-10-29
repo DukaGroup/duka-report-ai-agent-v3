@@ -107,7 +107,7 @@ def network_check(settings, kind):
 
 async def check_login(settings, kind):
     connector = (HanaConnector if kind == "saphana" else SQLServerConnector)(
-        replace(settings, sqlserver_timeout=5), QueryCatalog(settings.query_dir)
+        replace(settings, sqlserver_timeout=5, database_query_timeout=30), QueryCatalog(settings.query_dir)
     )
     try:
         await connector.check()

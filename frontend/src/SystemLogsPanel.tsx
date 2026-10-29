@@ -25,7 +25,7 @@ type LogEvent = {
 type LogPage = {
   events: LogEvent[];
   next_before: number | null;
-  capacity: number;
+  capacity: number | null;
 };
 const levels: Record<string, string> = {
   info: "Informacion",
@@ -39,7 +39,13 @@ const components: Record<string, string> = {
   reports: "Raportet",
 };
 
-export function SystemLogsPanel() {
+export function SystemLogsPanel({ eventId }: { eventId?: number }) {
+  useEffect(() => {
+    if (eventId) {
+      setBefore(eventId + 1);
+      setLive(false);
+    }
+  }, [eventId]);
   const [data, setData] = useState<LogPage | null>(null);
   const [level, setLevel] = useState("");
   const [component, setComponent] = useState("");
@@ -137,8 +143,8 @@ export function SystemLogsPanel() {
       </div>
       <p className="muted">
         Vetëm për Devs. Kontrolloni një lidhje te Burimet e të dhënave për të
-        regjistruar rezultatin këtu. Ruhen deri në {data?.capacity ?? 2000}{" "}
-        ngjarje; shkarkimi përmban vetëm faqen e shfaqur.
+        regjistruar rezultatin këtu. Ngjarjet ruhen pa kufi numri dhe nuk
+        fshihen automatikisht. Shkarkimi përmban vetëm faqen e shfaqur.
       </p>
       <div className="system-log-filters">
         <label>
@@ -203,7 +209,7 @@ export function SystemLogsPanel() {
                   {event.source_name && <div>{event.source_name}</div>}
                 </td>
                 <td>
-                {errorMessage(event.message)}
+                  {errorMessage(event.message)}
                   <details>
                     <summary>Hollësi</summary>
                     <pre>

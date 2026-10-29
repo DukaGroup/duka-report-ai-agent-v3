@@ -83,8 +83,8 @@ def test_logs_are_devs_only_including_president(client, admin):
 def test_log_pagination_retention_restart_redaction_and_poll_exclusion(client, admin):
     log = client.app.state.system_logs
     client.portal.call(log.flush)
-    log.capacity = 3
     log.redactor.protect_settings(Settings(env_file=None, sqlserver_password="fixture-private-password"))
+    baseline = log.db.one("SELECT count(*) AS n FROM system_logs")["n"]
     for i in range(6):
         log.record(
             "error",
@@ -95,12 +95,13 @@ def test_log_pagination_retention_restart_redaction_and_poll_exclusion(client, a
         )
     first = client.get("/api/admin/system-logs?limit=2").json()
     second = client.get(f"/api/admin/system-logs?limit=2&before={first['next_before']}").json()
-    assert len(first["events"]) == 2 and len(second["events"]) == 1
+    assert len(first["events"]) == 2 and len(second["events"]) == 2
     assert not {e["id"] for e in first["events"]} & {e["id"] for e in second["events"]}
     assert "fixture-private-password" not in json.dumps(first) and "hidden-token" not in json.dumps(first)
-    assert len(log.db.all("SELECT * FROM system_logs")) == 3
+    assert len(log.db.all("SELECT * FROM system_logs")) == baseline + 6
     fresh = SystemLog(log.db, log.redactor)
-    assert fresh.db.one("SELECT count(*) AS n FROM system_logs")["n"] == 3
+    assert fresh.db.one("SELECT count(*) AS n FROM system_logs")["n"] == baseline + 6
+    assert first["capacity"] is None
     traffic = client.get("/api/admin/traffic").json()["events"]
     assert not any("system-logs" in event["action"] for event in traffic)
     for query in ("limit=201", "level=unknown", "component=unknown", "before=-1", "before=18446744073709551616"):

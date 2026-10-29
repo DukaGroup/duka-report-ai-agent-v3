@@ -42,6 +42,7 @@ from .schemas import (
 )
 from .security import (
     COOKIE,
+    with_introduction,
     LoginLimiter,
     AuthBodyLimitMiddleware,
     admin_user,
@@ -78,6 +79,11 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @asynccontextmanager
     async def lifespan(app):
         settings.prepare()
+        # Database queries, uploads and report serialization use to_thread.
+        # A larger pool keeps one user's slow query from queueing everyone else.
+        from concurrent.futures import ThreadPoolExecutor
+        executor = ThreadPoolExecutor(max_workers=settings.blocking_threads, thread_name_prefix="duka-blocking")
+        asyncio.get_running_loop().set_default_executor(executor)
         app.state.settings = settings
         app.state.db = Database(settings.data_dir / "application.sqlite3")
         app.state.db.initialize()
@@ -138,6 +144,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     app.add_middleware(AuthBodyLimitMiddleware)
     register_accounts(app, settings)
     register_system_logs(app)
+    from .search import register_search
+    register_search(app)
     register_branches(app)
     register_subscriptions(app)
     register_notifications(app)
@@ -199,7 +207,13 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             user = public_user(current_user(request))
         except HTTPException:
             user = None
-        return {"needs_setup": needs_setup, "setup_token_required": needs_setup and bootstrap_required(settings), "user": user}
+        return {"needs_setup": needs_setup, "setup_token_required": needs_setup and bootstrap_required(settings),
+                "user": with_introduction(request.app.state.db, user) if user else None}
+
+    @app.post("/api/auth/introduction")
+    async def introduction_seen(request: Request, user=Depends(current_user)):
+        request.app.state.db.execute("INSERT OR IGNORE INTO user_introductions VALUES(?,?)", (user["id"], now()))
+        return {"intro_pending": False}
 
     @app.post("/api/auth/setup")
     async def setup(body: SetupWorkspace, request: Request, response: Response):
@@ -224,7 +238,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         if bootstrap_required(settings):
             bootstrap_path(settings).unlink(missing_ok=True)
         create_session(db, settings, response, user_id)
-        return public_user(db.one("SELECT * FROM users WHERE id=?", (user_id,)))
+        return with_introduction(db, public_user(db.one("SELECT * FROM users WHERE id=?", (user_id,))))
 
     @app.post("/api/auth/login")
     async def login(body: Credentials, request: Request, response: Response):
@@ -245,7 +259,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             encoded = upgraded
         create_session(db, settings, response, user["id"], expected_hash=encoded)
         db.audit(user["id"], "workspace.login")
-        return public_user(user)
+        return with_introduction(db, public_user(user))
 
     @app.post("/api/auth/logout")
     async def logout(request: Request, response: Response, user=Depends(current_user)):
@@ -377,7 +391,11 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             "FROM messages m LEFT JOIN chat_runs r ON r.id=m.id AND r.conversation_id=m.conversation_id "
             "WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid", (conversation_id,)
         )
+        from .progress import conversation_progress
+        progress = await asyncio.to_thread(conversation_progress, request.app.state.db, conversation_id)
         for m in messages:
+            if m["role"] == "assistant":
+                m["steps"] = progress.get(m["id"], [])
             m["notification_ready"] = bool(m["notification_ready"])
             m["notification_pending"] = bool(m["notification_pending"])
             m["attachments"] = [
@@ -445,21 +463,22 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         )
         return request.app.state.attachments.metadata(request.app.state.attachments.owned(user["id"], identifier))
 
-    async def remove_conversations(body, request, user):
+    async def remove_conversations(body, request, user, *, active=False):
         state = request.app.state
         identifiers = sorted(body.conversation_ids)
+        deleted = body.permanent and not active
         # Validate every ID and its library before interrupting any work.
         for identifier in identifiers:
-            owned_conversation(request, identifier, user["id"], deleted=body.permanent)
-        if not body.permanent:
+            owned_conversation(request, identifier, user["id"], deleted=deleted)
+        if not deleted:
             for identifier in identifiers:
                 cancel_pending_submission(identifier, user)
         async with AsyncExitStack() as stack:
             for identifier in identifiers:
                 await stack.enter_async_context(state.conversation_mutations.setdefault(identifier, asyncio.Lock()))
             for identifier in identifiers:
-                owned_conversation(request, identifier, user["id"], deleted=body.permanent)
-            if not body.permanent:
+                owned_conversation(request, identifier, user["id"], deleted=deleted)
+            if not deleted:
                 gate = asyncio.Semaphore(8)
 
                 async def stop_selected(identifier):
@@ -471,8 +490,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             for identifier in identifiers:
                 await stack.enter_async_context(state.locks.setdefault(identifier, asyncio.Lock()))
             try:
-                operation = state.db.delete_conversations if body.permanent else state.db.trash_conversations
-                count = operation(user["id"], identifiers)
+                count = (state.db.delete_conversations(user["id"], identifiers, deleted=deleted)
+                         if body.permanent else state.db.trash_conversations(user["id"], identifiers))
             except LookupError as exc:
                 raise HTTPException(404, str(exc)) from exc
             except ValueError as exc:
@@ -482,6 +501,11 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
     @app.post("/api/conversations/bulk-delete")
     async def delete_selected_conversations(body: ConversationSelection, request: Request, user=Depends(current_user)):
         return await remove_conversations(body, request, user)
+
+    @app.post("/api/conversations/bulk-purge")
+    async def purge_selected_conversations(body: ConversationSelection, request: Request, user=Depends(current_user)):
+        # An explicit endpoint keeps old clients' recoverable delete semantics.
+        return await remove_conversations(body.model_copy(update={"permanent": True}), request, user, active=True)
 
     @app.delete("/api/conversations/{conversation_id}")
     async def delete_conversation(conversation_id: str, request: Request, user=Depends(current_user)):
@@ -829,13 +853,28 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return request.app.state.db.all("SELECT * FROM report_templates")
 
     @app.get("/api/reports")
-    async def report_list(request: Request, deleted: bool = False, user=Depends(current_user)):
-        return request.app.state.db.all(
-            "SELECT id,title,conversation_id,template_id,status,stage,error,created_at,completed_at,deleted_at FROM reports WHERE user_id=? AND "
-            + ("deleted_at IS NOT NULL" if deleted else "deleted_at IS NULL")
-            + " ORDER BY created_at DESC",
-            (user["id"],),
-        )
+    async def report_list(request: Request, deleted: bool = False, q: str = "", user=Depends(current_user)):
+        if len(q) > 200:
+            raise HTTPException(422, "Search text must be at most 200 characters.")
+        sql = "SELECT id,title,conversation_id,template_id,status,stage,error,created_at,completed_at,deleted_at,snapshot_id FROM reports WHERE user_id=? AND " + ("deleted_at IS NOT NULL" if deleted else "deleted_at IS NULL")
+        parameters = [user["id"]]
+        if q.strip():
+            from .search import pattern
+            sql += " AND (title LIKE ? ESCAPE '\\' OR instructions LIKE ? ESCAPE '\\' OR content_json LIKE ? ESCAPE '\\' OR status LIKE ? ESCAPE '\\')"
+            parameters.extend([pattern(q.strip())] * 4)
+        def read():
+            rows = request.app.state.db.all(sql + " ORDER BY created_at DESC", parameters)
+            result = []
+            for report in rows:
+                if q.strip():
+                    try:
+                        authorize_saved_report(request.app.state.db, user["id"], saved_report_scope(request.app.state.db, report["snapshot_id"], user["id"]))
+                    except SourceNotConfigured:
+                        continue
+                report.pop("snapshot_id", None)
+                result.append(report)
+            return result
+        return await asyncio.to_thread(read)
 
     def owned_report(request, identifier, user_id):
         row = request.app.state.db.one(
@@ -1734,8 +1773,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         return {"ok": True}
 
     @app.get("/api/admin/traffic")
-    async def traffic(request: Request, direction: str = "", before: int = 0, limit: int = 100, user=Depends(admin_user)):
-        if direction and direction not in DIRECTIONS or before < 0 or not 1 <= limit <= 200:
+    async def traffic(request: Request, direction: str = "", q: str = "", before: int = 0, limit: int = 100, user=Depends(admin_user)):
+        if direction and direction not in DIRECTIONS or before < 0 or before > 9223372036854775807 or not 1 <= limit <= 200 or len(q) > 200:
             raise HTTPException(422, "Invalid traffic filter or page size.")
         await request.app.state.traffic.flush()
         clauses, parameters = [], []
@@ -1745,14 +1784,18 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         if before:
             clauses.append("id<?")
             parameters.append(before)
+        if q.strip():
+            from .search import pattern
+            clauses.append("(action LIKE ? ESCAPE '\\' OR status LIKE ? ESCAPE '\\' OR direction LIKE ? ESCAPE '\\' OR detail_json LIKE ? ESCAPE '\\' OR payload_json LIKE ? ESCAPE '\\')")
+            parameters.extend([pattern(q.strip())] * 5)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        rows = request.app.state.db.all("SELECT id,created_at,direction,action,status,correlation_id,user_id,bytes,duration_ms,detail_json,payload_truncated,payload_json IS NOT NULL AS has_payload FROM traffic_events" + where + " ORDER BY id DESC LIMIT ?", (*parameters, limit + 1))
+        rows = await asyncio.to_thread(request.app.state.db.all,"SELECT id,created_at,direction,action,status,correlation_id,user_id,bytes,duration_ms,detail_json,payload_truncated,payload_json IS NOT NULL AS has_payload FROM traffic_events" + where + " ORDER BY id DESC LIMIT ?", (*parameters, limit + 1))
         events = rows[:limit]
         for event in events:
             event["detail"] = json.loads(event.pop("detail_json"))
         return {"events": events, "next_before": events[-1]["id"] if len(rows) > limit else None,
                 "capacity": request.app.state.traffic.capacity,
-                "summary": request.app.state.db.all("SELECT direction,count(*) AS events,sum(bytes) AS bytes,sum(status='error') AS errors FROM traffic_events GROUP BY direction"),
+                "summary": request.app.state.db.all("SELECT direction,events,bytes,errors FROM traffic_totals WHERE events>0 ORDER BY direction"),
                 "note": "Application-level HTTP, Codex, SQL and Excel traffic. Admin-only payload previews are redacted and limited to 64 KiB, 100 list items and 20000 characters per string. Authentication, connection configuration and binary bodies are excluded. Old metadata-only events have no recorded payload."}
 
     @app.get('/api/admin/traffic/{event_id}')

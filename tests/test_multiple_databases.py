@@ -119,8 +119,10 @@ def test_one_excel_can_include_two_databases_and_another_source_with_provenance(
     assert [(a["source_id"], a["database"], a["rows"][0]["revenue"]) for a in provenance["analyses"]] == [(first["id"], "History", "20.50"), (second["id"], "Live", "10.25")]
     workbook = load_workbook(io.BytesIO(client.get(f"/api/reports/{report['id']}/export/xlsx").content), data_only=True)
     source_labels = [cell.value for sheet in workbook for row in sheet.iter_rows() for cell in row if isinstance(cell.value, str) and cell.value.startswith("Source:")]
-    assert any(" / History" in label for label in source_labels)
-    assert any(" / Live" in label for label in source_labels)
+    # Provenance stays internal; the workbook names no connection or database.
+    assert source_labels and set(source_labels) == {"Source: Company system data"}
+    text = " ".join(str(cell.value) for sheet in workbook for row in sheet.iter_rows() for cell in row if cell.value)
+    assert first["name"] not in text and second["name"] not in text and "History" not in text
 
 
 def test_ungranted_extra_source_stops_report_instead_of_omitting_requested_analysis(client, admin):

@@ -31,9 +31,7 @@ export function SelectionToolbar({
       role="group"
       aria-label={
         kind === "conversations"
-          ? permanent
-            ? "Përzgjedhja e bisedave në kosh"
-            : "Përzgjedhja e bisedave"
+          ? "Përzgjedhja e bisedave"
           : permanent
             ? "Përzgjedhja në kosh"
             : "Përzgjedhja e raporteve"
