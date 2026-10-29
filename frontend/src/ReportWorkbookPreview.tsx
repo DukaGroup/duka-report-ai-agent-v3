@@ -99,7 +99,7 @@ function WorkbookChart({ chart }: { chart: PreviewChart }) {
           {series.flatMap((item, seriesIndex) => item.values.map((value, index) => {
             if (value === null) return null;
             const barHeight = 17 / series.length;
-            return <rect key={`${seriesIndex}-${index}`} x={Math.min(origin, scale(value))} y={18 + index * 27 + seriesIndex * barHeight} width={Math.max(1, Math.abs(scale(value) - origin))} height={barHeight} fill={chartColors[seriesIndex]}>
+            return <rect key={`${seriesIndex}-${index}`} x={Math.min(origin, scale(value))} y={18 + index * 27 + seriesIndex * barHeight} width={Math.max(1, Math.abs(scale(value) - origin))} height={barHeight} fill={chartColors[seriesIndex]} className="chart-bar-h" style={{ "--i": index } as CSSProperties}>
               <title>{`${categories[index] || index + 1} · ${item.name}: ${numberLabel(value)}`}</title>
             </rect>;
           }))}
@@ -123,8 +123,8 @@ function WorkbookChart({ chart }: { chart: PreviewChart }) {
       const x2 = 365 + 105 * Math.cos(end);
       const y2 = 130 + 105 * Math.sin(end);
       if (!value) return null;
-      if (value === total) return <circle key={index} cx="365" cy="130" r="105" fill={chartColors[index % chartColors.length]}><title>{`${categories[index] || index + 1}: ${numberLabel(value)}`}</title></circle>;
-      return <path key={index} d={`M 365 130 L ${x1} ${y1} A 105 105 0 ${end - start > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`} fill={chartColors[index % chartColors.length]}>
+      if (value === total) return <circle key={index} cx="365" cy="130" r="105" fill={chartColors[index % chartColors.length]} className="chart-slice"><title>{`${categories[index] || index + 1}: ${numberLabel(value)}`}</title></circle>;
+      return <path key={index} d={`M 365 130 L ${x1} ${y1} A 105 105 0 ${end - start > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`} fill={chartColors[index % chartColors.length]} className="chart-slice" style={{ "--i": index } as CSSProperties}>
         <title>{`${categories[index] || index + 1}: ${numberLabel(value)}`}</title>
       </path>;
     });
@@ -166,6 +166,8 @@ function WorkbookChart({ chart }: { chart: PreviewChart }) {
                     width={width}
                     height={Math.max(1, Math.abs(y(value) - zero))}
                     fill={chartColors[seriesIndex]}
+                    className="chart-bar-v"
+                    style={{ "--i": index } as CSSProperties}
                   >
                     <title>{`${categories[index] || index + 1} · ${item.name}: ${numberLabel(value)}`}</title>
                   </rect>
@@ -180,9 +182,9 @@ function WorkbookChart({ chart }: { chart: PreviewChart }) {
               const line = coordinates.map(([x, yValue], index) => `${index === 0 ? "M" : "L"} ${x} ${yValue}`).join(" ");
               const area = coordinates.length ? `${line} L ${coordinates[coordinates.length - 1][0]} ${zero} L ${coordinates[0][0]} ${zero} Z` : "";
               return <g key={seriesIndex}>
-                {chart.type === "area" && <path d={area} fill={chartColors[seriesIndex]} fillOpacity="0.15" />}
-                <path d={line} fill="none" stroke={chartColors[seriesIndex]} strokeWidth="2.5" />
-                {coordinates.length <= 60 && coordinates.map(([x, yValue], index) => <circle key={index} cx={x} cy={yValue} r="3" fill={chartColors[seriesIndex]} />)}
+                {chart.type === "area" && <path d={area} fill={chartColors[seriesIndex]} fillOpacity="0.15" className="chart-area" />}
+                <path d={line} fill="none" stroke={chartColors[seriesIndex]} strokeWidth="2.5" className="chart-line" pathLength={1} />
+                {coordinates.length <= 60 && coordinates.map(([x, yValue], index) => <circle key={index} cx={x} cy={yValue} r="3" fill={chartColors[seriesIndex]} className="chart-point" style={{ "--i": index } as CSSProperties} />)}
               </g>;
             })}
           {labelIndexes.map((index) => (
@@ -361,7 +363,7 @@ export function ReportWorkbookPreview({ reportId }: { reportId: string }) {
             </div>
           </div>
           {visible.rows.length ? (
-            <div ref={gridScroll} className="workbook-grid-scroll" role="region" aria-label={`Përmbajtja e fletës ${sheet.name}`} tabIndex={0}>
+            <div ref={gridScroll} key={sheet.name} className="workbook-grid-scroll" role="region" aria-label={`Përmbajtja e fletës ${sheet.name}`} tabIndex={0}>
               <table className="workbook-grid">
                 <thead><tr>
                   <th className="workbook-corner" scope="col" aria-label="Numri i rreshtit" />
@@ -373,7 +375,7 @@ export function ReportWorkbookPreview({ reportId }: { reportId: string }) {
                 <tbody>
                   {visible.rows.map((row, rowIndex) => {
                     const absoluteRow = visible.row_start + rowIndex;
-                    return <tr key={absoluteRow}>
+                    return <tr key={absoluteRow} style={{ "--i": Math.min(rowIndex, 24) } as CSSProperties}>
                       <th scope="row" className={selection.row === absoluteRow ? "selected" : ""}>{absoluteRow}</th>
                       {row.map((cell, cellIndex) => {
                         const absoluteColumn = visible.column_start + cellIndex;

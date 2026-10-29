@@ -36,6 +36,8 @@ import {
 import { GlobalSearch } from "./GlobalSearch";
 import { ChatScrollFollower } from "./chatScroll";
 import HanaIntro, { type IntroMode } from "./HanaIntro";
+import { HanaFace } from "./HanaFace";
+import { ReportProgress } from "./ReportProgress";
 import { useJustCompleted } from "./useJustCompleted";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { CopyMessageButton } from "./CopyMessageButton";
@@ -500,6 +502,18 @@ function Workspace({
   const isDev = user.role === "devs";
   const canManageMembers = isDev || user.role === "president";
   const [hanaProfileOpen, setHanaProfileOpen] = useState(false);
+  // Each time her profile opens, Hana says a short line in her own voice.
+  const [profileSaid, setProfileSaid] = useState(0);
+  const profileLine = `${
+    new Date().getHours() < 12
+      ? "Mirëmëngjes"
+      : new Date().getHours() < 18
+        ? "Mirëdita"
+        : "Mirëmbrëma"
+  }, ${user.name.trim().split(/\s+/)[0]}! Si mund t'ju ndihmoj sot?`;
+  useEffect(() => {
+    if (hanaProfileOpen) setProfileSaid(0);
+  }, [hanaProfileOpen]);
   const [page, setPage] = useState<Page>("conversations"),
     [error, setError] = useState("");
   const [subscription, setSubscription] =
@@ -522,6 +536,26 @@ function Workspace({
   const [conversations, setConversations] = useState<Conversation[]>([]),
     [currentId, setCurrentId] = useState<string | null>(null),
     [messages, setMessages] = useState<Message[]>([]);
+  // The reply that just finished while the user watched gets a small flourish.
+  const [justAnswered, setJustAnswered] = useState<string | null>(null);
+  // The conversation whose reply was being written on the previous render.
+  const streamingIn = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const streaming = messages.some(
+      (m) => m.role === "assistant" && m.status === "streaming",
+    );
+    const last = [...messages].reverse().find((m) => m.role === "assistant");
+    const here = currentId ?? "__new__";
+    const finishedHere =
+      streamingIn.current === here &&
+      !streaming &&
+      last?.status === "completed";
+    streamingIn.current = streaming ? here : undefined;
+    if (!finishedHere || !last) return;
+    setJustAnswered(last.id);
+    const timer = window.setTimeout(() => setJustAnswered(null), 6000);
+    return () => clearTimeout(timer);
+  }, [messages, currentId]);
   const [draft, setDraft] = useState(
     () => loadDrafts(user.id).get("__new__")?.draft || "",
   );
@@ -1496,6 +1530,30 @@ function Workspace({
       fail(e);
     }
   }
+  // Cards leaving the list play a short animation first: into the trash, back
+  // out of it, or gone for good.
+  const [leavingReports, setLeavingReports] = useState<
+    Record<string, "trash" | "restore" | "gone">
+  >({});
+  async function animateReportsOut(
+    ids: string[],
+    kind: "trash" | "restore" | "gone",
+  ) {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
+      return;
+    setLeavingReports((items) => ({
+      ...items,
+      ...Object.fromEntries(ids.map((id) => [id, kind])),
+    }));
+    await new Promise((resolve) => window.setTimeout(resolve, 460));
+  }
+  function forgetLeaving(ids: string[]) {
+    setLeavingReports((items) => {
+      const next = { ...items };
+      ids.forEach((id) => delete next[id]);
+      return next;
+    });
+  }
   function closeReport() {
     reportSelection.current = null;
     setReport(null);
@@ -1506,10 +1564,12 @@ function Workspace({
     try {
       await api(`/reports/${deleteReport.id}`, { method: "DELETE" });
       if (report?.id === deleteReport.id) closeReport();
+      setDeleteReport(null);
+      await animateReportsOut([deleteReport.id], "trash");
       setReports((items) =>
         items.filter((item) => item.id !== deleteReport.id),
       );
-      setDeleteReport(null);
+      forgetLeaving([deleteReport.id]);
       await loadReports();
     } catch (e) {
       fail(e);
@@ -1522,7 +1582,9 @@ function Workspace({
     setRestoringReportId(item.id);
     try {
       await api(`/reports/${item.id}/restore`, { method: "POST" });
+      await animateReportsOut([item.id], "restore");
       setDeletedReports((items) => items.filter((row) => row.id !== item.id));
+      forgetLeaving([item.id]);
       await loadReports();
     } catch (e) {
       fail(e);
@@ -1545,13 +1607,18 @@ function Workspace({
         }),
       });
       if (report && request.ids.includes(report.id)) closeReport();
+      setReportDeleteRequest(null);
+      await animateReportsOut(
+        request.ids,
+        request.permanent ? "gone" : "trash",
+      );
       const keep = (item: Report) => !request.ids.includes(item.id);
       if (request.permanent) setDeletedReports((items) => items.filter(keep));
       else setReports((items) => items.filter(keep));
       setSelectedReportIds((items) =>
         items.filter((id) => !request.ids.includes(id)),
       );
-      setReportDeleteRequest(null);
+      forgetLeaving(request.ids);
       await loadReports();
     } catch (e) {
       fail(e);
@@ -2925,6 +2992,12 @@ function Workspace({
                                 m.status === "streaming")
                                 ? " working"
                                 : ""
+                            }${
+                              m.role === "assistant" &&
+                              m.status === "streaming" &&
+                              m.content
+                                ? " speaking"
+                                : ""
                             }`}
                             id={`message-${m.id}`}
                           >
@@ -2948,6 +3021,15 @@ function Workspace({
                                 className="thought-bubble"
                                 aria-hidden="true"
                               >
+                                <i />
+                                <i />
+                                <i />
+                              </span>
+                            )}
+                            {m.role === "assistant" && (
+                              // Moves like a voice while she writes.
+                              <span className="voice-badge" aria-hidden="true">
+                                <i />
                                 <i />
                                 <i />
                                 <i />
@@ -2987,7 +3069,13 @@ function Workspace({
                                 />
                               )}
                               {m.content && (
-                                <MarkdownContent>
+                                <MarkdownContent
+                                  streaming={
+                                    m.role === "assistant" &&
+                                    m.status === "streaming"
+                                  }
+                                  celebrate={justAnswered === m.id}
+                                >
                                   {m.role === "assistant" &&
                                   m.status === "failed"
                                     ? userError(m.content, isDev)
@@ -3084,7 +3172,9 @@ function Workspace({
                             </Badge>
                           </div>
                           {["queued", "running"].includes(r.status) && (
-                            <p>{label(r.stage || "gathering")}</p>
+                            <ReportProgress
+                              stage={r.status === "queued" ? "queued" : r.stage}
+                            />
                           )}
                           {r.error && (
                             <p className="message-warning">
@@ -4118,7 +4208,7 @@ function Workspace({
               <div className="report-grid">
                 {libraryReports.map((r) => (
                   <article
-                    className={`report-card${selectedReportIds.includes(r.id) ? " selected" : ""}${justReady.has(r.id) ? " just-ready" : ""}`}
+                    className={`report-card${selectedReportIds.includes(r.id) ? " selected" : ""}${justReady.has(r.id) ? " just-ready" : ""}${leavingReports[r.id] ? ` leaving-${leavingReports[r.id]}` : ""}`}
                     key={r.id}
                   >
                     <div className="report-card-top">
@@ -4176,6 +4266,12 @@ function Workspace({
                           "",
                       ) || "Raport biznesi"}
                     </p>
+                    {!reportTrash &&
+                      ["queued", "running"].includes(r.status) && (
+                        <ReportProgress
+                          stage={r.status === "queued" ? "queued" : r.stage}
+                        />
+                      )}
                     <div className="report-card-footer">
                       <span>{date(r.deleted_at || r.created_at)}</span>
                     </div>
@@ -4269,11 +4365,18 @@ function Workspace({
           onClose={() => setHanaProfileOpen(false)}
         >
           <div className="hana-profile-intro">
-            <div className="hana-profile-portrait">
-              <img src="/brand/hana-avatar.png" alt="Portreti i Hanës" />
+            <div
+              className="hana-profile-portrait"
+              role="img"
+              aria-label="Portreti i Hanës"
+            >
+              <HanaFace line={profileLine} onProgress={setProfileSaid} />
             </div>
             <div>
               <span className="eyebrow">ASISTENTJA JUAJ</span>
+              <p className="hana-profile-says" aria-live="polite">
+                {profileLine.slice(0, profileSaid)}
+              </p>
               <p>
                 Hana ju ndihmon të analizoni të dhënat e biznesit, të gjeni
                 përgjigje për pyetjet tuaja dhe të krijoni raporte Excel nga
@@ -5257,7 +5360,15 @@ function EmptyState({
 }) {
   return (
     <div className="empty-state">
-      <div>{icon}</div>
+      {/* A small night sky: the moon glows behind the icon, stars twinkle. */}
+      <div className="empty-art">
+        <span className="empty-moon" aria-hidden="true" />
+        <i aria-hidden="true" />
+        <i aria-hidden="true" />
+        <i aria-hidden="true" />
+        <i aria-hidden="true" />
+        <span className="empty-icon">{icon}</span>
+      </div>
       <h3>{title}</h3>
       <p>{text}</p>
     </div>

@@ -1,7 +1,122 @@
+import {
+  Children,
+  isValidElement,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const components: Components = {
+type HastNode = {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+
+/*
+ * While Hana is still writing, every word is wrapped in its own span. Words
+ * that are already on screen keep their element, so only the new ones play a
+ * short fade-in: the reply flows in instead of jumping in chunks.
+ */
+function wrapWords() {
+  const visit = (node: HastNode) => {
+    if (!node.children) return;
+    if (node.tagName === "code" || node.tagName === "pre") return;
+    node.children = node.children.flatMap((child) => {
+      if (child.type !== "text" || !child.value) {
+        visit(child);
+        return [child];
+      }
+      return child.value
+        .split(/(\s+)/)
+        .filter(Boolean)
+        .map((part) =>
+          /^\s+$/.test(part)
+            ? { type: "text", value: part }
+            : {
+                type: "element",
+                tagName: "span",
+                properties: { className: ["stream-word"] },
+                children: [{ type: "text", value: part }],
+              },
+        );
+    });
+  };
+  return (tree: HastNode) => visit(tree);
+}
+
+function plainText(node: ReactNode): string {
+  return Children.toArray(node)
+    .map((child) =>
+      typeof child === "string" || typeof child === "number"
+        ? String(child)
+        : isValidElement<{ children?: ReactNode }>(child)
+          ? plainText(child.props.children)
+          : "",
+    )
+    .join("");
+}
+
+// A figure such as "1.234.567 €", "45,2%" or "ALL 12 000"; never a date.
+const FIGURE =
+  /^[-+−]?\s?(?:€|\$|ALL|L)?\s?\d[\d.,\s ]*(?:\s?(?:%|€|\$|ALL|lekë|Lekë|EUR|USD|mijë|mln|milionë?))?$/;
+const DATE = /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/;
+export const isFigure = (text: string) =>
+  text.length <= 24 && FIGURE.test(text.trim()) && !DATE.test(text.trim());
+
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/** Each digit rolls up to its value, like an odometer. Format stays exact. */
+function RollingFigure({ text }: { text: string }) {
+  const [rolled, setRolled] = useState(false);
+  useEffect(() => {
+    // Wait until the zeros have been drawn once, so the roll always plays.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setRolled(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, []);
+  let digit = 0;
+  return (
+    <strong className={`rolling-figure${rolled ? " rolled" : ""}`} aria-label={text}>
+      {[...text].map((character, index) =>
+        /\d/.test(character) ? (
+          <span
+            key={index}
+            className="roll-digit"
+            aria-hidden="true"
+            style={
+              {
+                "--digit": Number(character),
+                "--order": digit++,
+              } as CSSProperties
+            }
+          >
+            <span>
+              {DIGITS.map((value) => (
+                <span key={value}>{value}</span>
+              ))}
+            </span>
+          </span>
+        ) : (
+          <span key={index} aria-hidden="true">
+            {character}
+          </span>
+        ),
+      )}
+    </strong>
+  );
+}
+
+const baseComponents: Components = {
   table: ({ node: _node, ...props }) => (
     <div
       className="markdown-table-scroll"
@@ -20,10 +135,37 @@ const components: Components = {
   ),
 };
 
-export function MarkdownContent({ children }: { children: string }) {
+const figureComponents: Components = {
+  ...baseComponents,
+  strong: ({ node: _node, children, ...props }) => {
+    const text = plainText(children);
+    return isFigure(text) ? (
+      <RollingFigure text={text} />
+    ) : (
+      <strong {...props}>{children}</strong>
+    );
+  },
+};
+
+export function MarkdownContent({
+  children,
+  streaming = false,
+  celebrate = false,
+}: {
+  children: string;
+  // Hana is still writing this reply.
+  streaming?: boolean;
+  // The reply just finished while the user watched: key figures roll up.
+  celebrate?: boolean;
+}) {
   return (
-    <div className="markdown">
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+    <div className={`markdown${streaming ? " streaming" : ""}`}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rehypePlugins={streaming ? [wrapWords as any] : []}
+        components={celebrate ? figureComponents : baseComponents}
+      >
         {children}
       </Markdown>
     </div>

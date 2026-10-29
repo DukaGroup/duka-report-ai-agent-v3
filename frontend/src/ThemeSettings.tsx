@@ -24,6 +24,55 @@ const themes = [
   },
 ] as const;
 
+type ViewTransition = { ready: Promise<void> };
+type TransitionDocument = Document & {
+  startViewTransition?: (update: () => void) => ViewTransition;
+};
+
+/**
+ * Switch theme with the new look spreading out in a circle from the button
+ * that was pressed. Browsers without view transitions just switch.
+ */
+function revealTheme(value: ThemePreference, from: HTMLElement) {
+  const doc = document as TransitionDocument;
+  const before = document.documentElement.dataset.theme;
+  const after =
+    value === "system"
+      ? window.matchMedia?.("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : value;
+  const reduced = window.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  // Same look before and after (e.g. "System" while already dark): no circle.
+  if (!doc.startViewTransition || reduced || before === after)
+    return setThemePreference(value);
+  const box = from.getBoundingClientRect();
+  const x = box.left + box.width / 2;
+  const y = box.top + box.height / 2;
+  const radius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y),
+  );
+  const transition = doc.startViewTransition(() => setThemePreference(value));
+  void transition.ready.then(() =>
+    document.documentElement.animate(
+      {
+        clipPath: [
+          `circle(0px at ${x}px ${y}px)`,
+          `circle(${radius}px at ${x}px ${y}px)`,
+        ],
+      },
+      {
+        duration: 650,
+        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+        pseudoElement: "::view-transition-new(root)",
+      },
+    ),
+  );
+}
+
 export function ThemeSettings() {
   const [preference, resolved] = useSyncExternalStore(
     subscribeTheme,
@@ -46,7 +95,9 @@ export function ThemeSettings() {
             type="button"
             className="theme-option"
             aria-pressed={preference === theme.id}
-            onClick={() => setThemePreference(theme.id as ThemePreference)}
+            onClick={(event) =>
+              revealTheme(theme.id as ThemePreference, event.currentTarget)
+            }
           >
             <span
               className={`theme-preview theme-preview-${theme.id}`}

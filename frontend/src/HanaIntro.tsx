@@ -7,17 +7,24 @@ import {
 } from "react";
 import { ArrowRight, Sparkles } from "lucide-react";
 import "./hana-intro.css";
+import {
+  HanaMouth,
+  useMouthSpring,
+  type MouthHandle,
+  type MouthShape,
+} from "./HanaMouth";
+import { mouthAt, PACE, planSpeech, type IntroMode } from "./hanaSpeech";
 
+export type { IntroMode };
 type Phase = "sky" | "moon" | "transform" | "alive" | "setting" | "leaving";
-export type IntroMode = "presentation" | "greeting" | "farewell";
 
 // When each phase starts (ms). The everyday greeting is a shorter version.
 const TIMELINE: Record<
   Exclude<IntroMode, "farewell">,
   [number, number, number]
 > = {
-  presentation: [350, 3100, 4600],
-  greeting: [150, 1400, 2500],
+  presentation: [200, 1500, 2600],
+  greeting: [80, 800, 1500],
 };
 
 const reducedMotion = () =>
@@ -51,232 +58,6 @@ function introLines(name: string, mode: IntroMode) {
     "Gati? Le të fillojmë bashkë!",
   ];
 }
-
-/*
- * Speech planning. Each sentence is split into syllables, and every syllable
- * gets a smooth open-and-close curve: the vowel sets how wide the mouth opens,
- * m/b/p close the lips, and the last syllable before a pause is drawn out, the
- * way people slow down at the end of a phrase. Letters appear in time with it.
- */
-const VOWEL_OPEN: Record<string, number> = {
-  a: 1, o: 0.82, e: 0.68, u: 0.52, y: 0.42, i: 0.4, ë: 0.34,
-};
-const isVowel = (c: string) => c.toLowerCase() in VOWEL_OPEN;
-const isLetter = (c: string) => /[a-zçë]/i.test(c);
-const closesLips = (c: string | undefined) => !!c && /[mbp]/i.test(c);
-
-type Pace = { syllable: number; word: number; comma: number; stop: number };
-const PACE: Record<IntroMode, Pace> = {
-  presentation: { syllable: 225, word: 45, comma: 420, stop: 720 },
-  greeting: { syllable: 205, word: 40, comma: 360, stop: 600 },
-  farewell: { syllable: 230, word: 45, comma: 420, stop: 700 },
-};
-
-type Syllable = {
-  start: number;
-  end: number;
-  open: number;
-  closedStart: boolean;
-  closedEnd: boolean;
-  stressed: boolean;
-};
-type Speech = {
-  syllables: Syllable[];
-  // When each character of the sentence appears (ms from its start).
-  reveal: number[];
-  // Moments for a stronger head movement ("!" and "?").
-  emphasis: number[];
-  total: number;
-};
-
-// Splits a word into syllables: one consonant between vowels starts the next
-// syllable; with two or more, the first stays with the previous one.
-function syllables(word: string): [number, number][] {
-  const groups: [number, number][] = [];
-  for (let i = 0; i < word.length; ) {
-    if (isVowel(word[i])) {
-      let j = i;
-      while (j < word.length && isVowel(word[j])) j++;
-      groups.push([i, j]);
-      i = j;
-    } else i++;
-  }
-  if (groups.length <= 1) return [[0, word.length]];
-  const parts: [number, number][] = [];
-  let begin = 0;
-  for (let g = 0; g < groups.length - 1; g++) {
-    const gap = groups[g + 1][0] - groups[g][1];
-    const cut = groups[g][1] + (gap >= 2 ? 1 : 0);
-    parts.push([begin, cut]);
-    begin = cut;
-  }
-  parts.push([begin, word.length]);
-  return parts;
-}
-
-function planSpeech(text: string, pace: Pace): Speech {
-  const reveal = new Array<number>(text.length).fill(0);
-  const result: Syllable[] = [];
-  const emphasis: number[] = [];
-  let time = 0;
-  let i = 0;
-  while (i < text.length) {
-    const c = text[i];
-    if (isLetter(c)) {
-      let j = i;
-      while (j < text.length && (isLetter(text[j]) || text[j] === "-")) j++;
-      const word = text.slice(i, j);
-      const parts = syllables(word);
-      const next = text.slice(j).trimStart()[0] || "";
-      const phraseEnd = /[,.!?…:;]/.test(next) || j >= text.length;
-      parts.forEach(([a, b], index) => {
-        const piece = word.slice(a, b);
-        const vowel = [...piece].find(isVowel)?.toLowerCase();
-        const last = index === parts.length - 1;
-        // A final "ë" is barely spoken in Albanian.
-        const weak = last && parts.length > 1 && /ë$/i.test(piece) && piece.length <= 2;
-        // Stress usually falls on the second-to-last syllable.
-        const stressed =
-          parts.length === 1 ? piece.length > 3 : index === parts.length - 2;
-        let duration =
-          pace.syllable *
-          (0.78 + Math.min(piece.length, 5) * 0.08) *
-          (0.92 + Math.random() * 0.16);
-        if (stressed) duration *= 1.12;
-        if (weak) duration *= 0.6;
-        if (last && phraseEnd) duration *= 1.3;
-        let open = vowel ? VOWEL_OPEN[vowel] : 0.3;
-        if (stressed) open = Math.min(1, open * 1.1);
-        if (weak) open *= 0.45;
-        open *= 0.85 + Math.random() * 0.15;
-        const nextPiece = parts[index + 1]
-          ? word.slice(parts[index + 1][0], parts[index + 1][1])
-          : "";
-        result.push({
-          start: time,
-          end: time + duration,
-          open,
-          closedStart: closesLips(piece[0]),
-          closedEnd: closesLips(piece.at(-1)) || closesLips(nextPiece[0]),
-          stressed,
-        });
-        for (let k = a; k < b; k++)
-          reveal[i + k] = time + ((k - a) / piece.length) * duration * 0.85;
-        time += duration;
-      });
-      i = j;
-      continue;
-    }
-    reveal[i] = time;
-    if (c === " ") time += pace.word;
-    else if (/[.!?…]/.test(c)) {
-      if (c === "!" || c === "?") emphasis.push(Math.max(0, time - 250));
-      // "…" and several marks in a row only pause once.
-      if (!/[.!?…]/.test(text[i + 1] || "")) time += pace.stop;
-    } else if (/[,:;]/.test(c)) time += pace.comma;
-    else if (/\d/.test(c)) {
-      // Numbers are spoken like a short syllable each.
-      result.push({
-        start: time,
-        end: time + pace.syllable,
-        open: 0.55,
-        closedStart: false,
-        closedEnd: false,
-        stressed: false,
-      });
-      time += pace.syllable;
-    }
-    i++;
-  }
-  // The final pause is handled between sentences instead.
-  const lastSound = result.at(-1)?.end ?? 0;
-  return { syllables: result, reveal, emphasis, total: Math.max(lastSound, time - pace.stop) };
-}
-
-const smooth = (x: number) => x * x * (3 - 2 * x);
-
-// How open the mouth should be at a moment of the sentence.
-function mouthAt(speech: Speech, time: number) {
-  for (const s of speech.syllables) {
-    if (time < s.start) return 0;
-    if (time > s.end) continue;
-    const p = (time - s.start) / (s.end - s.start);
-    const from = s.closedStart ? 0 : 0.18;
-    const to = s.closedEnd ? 0 : 0.24;
-    // Open toward the vowel, hold it briefly, then ease into the next sound.
-    const shape =
-      p < 0.38
-        ? from + (1 - from) * smooth(p / 0.38)
-        : p < 0.62
-          ? 1 - 0.08 * ((p - 0.38) / 0.24)
-          : 0.92 + (to - 0.92) * smooth((p - 0.62) / 0.38);
-    return s.open * shape;
-  }
-  return 0;
-}
-
-// Where her lips meet in the portrait (percent of the image), left to right.
-const SEAM: [number, number][] = [
-  [46.8, 45.65], [47.6, 45.85], [48.5, 45.98], [49.5, 45.9], [50.5, 45.8],
-  [51.5, 45.74], [52.5, 45.58], [53.5, 45.28], [54.5, 45.0], [55.5, 44.72],
-  [56.5, 44.38], [57.5, 43.9], [58.3, 43.4],
-];
-// How far the mouth opens at most, in percent of the portrait height.
-const MAX_OPEN = 1.9;
-const seamY = (x: number) => {
-  for (let i = 1; i < SEAM.length; i++) {
-    const [x0, y0] = SEAM[i - 1];
-    const [x1, y1] = SEAM[i];
-    if (x <= x1) return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
-  }
-  return SEAM.at(-1)![1];
-};
-const point = ([x, y]: [number, number]) => `${x.toFixed(2)} ${y.toFixed(2)}`;
-
-const MOUTH_LEFT = 47.3;
-const MOUTH_RIGHT = 57.9;
-// Closed at the lip corners, widest in the middle.
-const opening = (x: number) => {
-  const t = (x - MOUTH_LEFT) / (MOUTH_RIGHT - MOUTH_LEFT);
-  return t <= 0 || t >= 1 ? 0 : Math.sin(Math.PI * t);
-};
-// The lower lip is cut into thin slices that drop by different amounts, so
-// the middle opens most while the corners stay where they are.
-const SLICES = Array.from({ length: 72 }, (_, index) => {
-  const width = (59.6 - 46) / 72;
-  const x = 46 + index * width;
-  return { x, width, drop: opening(x + width / 2) };
-});
-
-// The opening between the lips: closed at the corners, widest in the middle.
-function mouthPath(open: number) {
-  const top: [number, number][] = [];
-  const bottom: [number, number][] = [];
-  for (let i = 0; i <= 24; i++) {
-    const x = MOUTH_LEFT + ((MOUTH_RIGHT - MOUTH_LEFT) * i) / 24;
-    const y = seamY(x) - 0.05;
-    // The upper lip lifts a little; most of the opening is the jaw dropping.
-    const shape = opening(x);
-    top.push([x, y - open * 0.12 * shape]);
-    bottom.push([x, y + 0.05 + open * shape]);
-  }
-  return `M${top.map(point).join("L")}L${bottom.reverse().map(point).join("L")}Z`;
-}
-// Upper teeth, just under the upper lip, only seen when the mouth is open.
-function teethPath(open: number) {
-  const height = Math.min(open * 0.42, 0.75);
-  const top: [number, number][] = [];
-  const bottom: [number, number][] = [];
-  for (let i = 0; i <= 10; i++) {
-    const x = 49 + (7.6 * i) / 10;
-    const y = seamY(x) - open * 0.12;
-    top.push([x, y]);
-    bottom.push([x, y + height * Math.pow(Math.sin((Math.PI * i) / 10), 0.5)]);
-  }
-  return `M${top.map(point).join("L")}L${bottom.reverse().map(point).join("L")}Z`;
-}
-// The lower lip and the skin just under it; the soft mask hides its edges.
-const JAW_CLIP = `M46.2 46.4L${SEAM.map(point).join("L")}L59.4 45.6L58.6 48.6L55.6 51L52 51.8L48.4 50.8L46.4 48.6Z`;
 
 // Deterministic pseudo-random values keep the sky identical between renders.
 function seeded(count: number, seed: number) {
@@ -321,11 +102,8 @@ export default function HanaIntro({
   const head = useRef<HTMLDivElement>(null);
   const gesture = useRef<HTMLDivElement>(null);
   const inhale = useRef<HTMLDivElement>(null);
-  const mouthTarget = useRef(0);
-  const cavity = useRef<SVGPathElement>(null);
-  const cavityClip = useRef<SVGPathElement>(null);
-  const teeth = useRef<SVGPathElement>(null);
-  const slices = useRef<(SVGGElement | null)[]>([]);
+  const mouth = useRef<MouthHandle>(null);
+  const mouthTarget = useRef<MouthShape>({ open: 0, round: 0 });
   const leaving = useRef(false);
   const stars = useMemo(() => seeded(90, 7), []);
   const sparks = useMemo(() => seeded(28, 31), []);
@@ -344,49 +122,14 @@ export default function HanaIntro({
     return () => timers.forEach(clearTimeout);
   }, [still, mode]);
 
-  // A soft spring follows the planned mouth shape every frame. It gives the
-  // jaw a little weight, so it never snaps, like hand-drawn animation.
-  useEffect(() => {
-    if (still) return;
-    let frame = 0;
-    let current = 0;
-    let velocity = 0;
-    let drawn = -1;
-    let previous = performance.now();
-    const stiffness = 26; // Higher follows faster; lower is lazier.
-    const draw = (now: number) => {
-      const dt = Math.min(0.05, (now - previous) / 1000);
-      previous = now;
-      const target = mouthTarget.current;
-      // Critically damped spring: smooth, with no wobble.
-      const acceleration =
-        stiffness * stiffness * (target - current) - 2 * stiffness * velocity;
-      velocity += acceleration * dt;
-      current = Math.max(0, Math.min(1.05, current + velocity * dt));
-      if (Math.abs(current - drawn) > 0.002) {
-        drawn = current;
-        root.current?.style.setProperty("--mouth", current.toFixed(3));
-        const open = current * MAX_OPEN;
-        const d = mouthPath(open);
-        cavity.current?.setAttribute("d", d);
-        cavityClip.current?.setAttribute("d", d);
-        teeth.current?.setAttribute("d", teethPath(open));
-        teeth.current?.setAttribute(
-          "opacity",
-          Math.min(1, Math.max(0, (current - 0.25) / 0.35)).toFixed(2),
-        );
-        SLICES.forEach((slice, index) =>
-          slices.current[index]?.setAttribute(
-            "transform",
-            `translate(0 ${(open * slice.drop).toFixed(3)})`,
-          ),
-        );
-      }
-      frame = requestAnimationFrame(draw);
-    };
-    frame = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(frame);
-  }, [still]);
+  // A soft spring follows the planned mouth shape every frame, so the jaw
+  // has a little weight and never snaps, like hand-drawn animation.
+  useMouthSpring(
+    mouth,
+    mouthTarget,
+    (level) => root.current?.style.setProperty("--mouth", level.toFixed(3)),
+    !still,
+  );
 
   // Small head movements on stressed words, the way people talk with their head.
   function emphasise(strong: boolean) {
@@ -435,7 +178,7 @@ export default function HanaIntro({
         emphasis++;
       }
       if (time >= plan.total) {
-        mouthTarget.current = 0;
+        mouthTarget.current = { open: 0, round: 0 };
         setChars(lines[line].length);
         return;
       }
@@ -444,7 +187,7 @@ export default function HanaIntro({
     frame = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(frame);
-      mouthTarget.current = 0;
+      mouthTarget.current = { open: 0, round: 0 };
     };
   }, [phase, line, still, speech, lines]);
 
@@ -453,7 +196,7 @@ export default function HanaIntro({
   useEffect(() => {
     if (phase !== "alive" || still || !sentenceDone) return;
     if (line >= lines.length - 1) return;
-    const gap = mode === "presentation" ? 1000 : mode === "farewell" ? 800 : 600;
+    const gap = mode === "presentation" ? 550 : mode === "farewell" ? 450 : 350;
     const breath = window.setTimeout(
       () =>
         inhale.current?.animate(
@@ -545,15 +288,15 @@ export default function HanaIntro({
       // Hana turns back into the moon, which sets below the horizon.
       // She finishes the goodbye, waits a moment, then sets like the moon.
       const timers = [
-        window.setTimeout(() => setPhase("setting"), 1700),
+        window.setTimeout(() => setPhase("setting"), 900),
         window.setTimeout(() => {
           leaving.current = true;
           onDone();
-        }, 4500),
+        }, 2600),
       ];
       return () => timers.forEach(clearTimeout);
     }
-    const timer = window.setTimeout(leave, 1800);
+    const timer = window.setTimeout(leave, 1100);
     return () => clearTimeout(timer);
   }, [finished]);
 
@@ -562,7 +305,7 @@ export default function HanaIntro({
     leaving.current = true;
     if (still) return onDone();
     setPhase("leaving");
-    window.setTimeout(onDone, 900);
+    window.setTimeout(onDone, 600);
   }
 
   useEffect(() => {
@@ -655,118 +398,7 @@ export default function HanaIntro({
                         alt=""
                         draggable={false}
                       />
-                      <svg
-                        className="hana-mouth"
-                        viewBox="0 0 100 100"
-                        preserveAspectRatio="none"
-                      >
-                        <defs>
-                          <clipPath id="hana-cavity-clip">
-                            <path ref={cavityClip} d={mouthPath(0)} />
-                          </clipPath>
-                          <clipPath id="hana-jaw-clip">
-                            <path d={JAW_CLIP} />
-                          </clipPath>
-                          {SLICES.map((slice, index) => (
-                            <clipPath key={index} id={`hana-slice-${index}`}>
-                              <rect
-                                x={slice.x - 0.02}
-                                y="40"
-                                width={slice.width + 0.04}
-                                height="16"
-                              />
-                            </clipPath>
-                          ))}
-                          <filter
-                            id="hana-jaw-soft"
-                            x="-20%"
-                            y="-20%"
-                            width="140%"
-                            height="140%"
-                          >
-                            <feGaussianBlur stdDeviation="0.8" />
-                          </filter>
-                          <mask id="hana-jaw-mask">
-                            <ellipse
-                              cx="52.6"
-                              cy="46.6"
-                              rx="7"
-                              ry="4.2"
-                              fill="#fff"
-                              transform="rotate(-11 52.6 46.6)"
-                              filter="url(#hana-jaw-soft)"
-                            />
-                          </mask>
-                          <radialGradient
-                            id="hana-cavity-fill"
-                            cx="50%"
-                            cy="40%"
-                            r="65%"
-                          >
-                            <stop offset="0%" stopColor="#1f0608" />
-                            <stop offset="65%" stopColor="#4a1418" />
-                            <stop offset="100%" stopColor="#8f3a3c" />
-                          </radialGradient>
-                          <linearGradient
-                            id="hana-teeth-fill"
-                            x1="0"
-                            y1="0"
-                            x2="0"
-                            y2="1"
-                          >
-                            <stop offset="0%" stopColor="#fbf6f1" />
-                            <stop offset="100%" stopColor="#d9cbc2" />
-                          </linearGradient>
-                        </defs>
-                        {/* Inside of the mouth, revealed as the jaw drops. */}
-                        <path
-                          ref={cavity}
-                          d={mouthPath(0)}
-                          fill="url(#hana-cavity-fill)"
-                        />
-                        <g clipPath="url(#hana-cavity-clip)">
-                          <ellipse
-                            cx="52.6"
-                            cy="47.6"
-                            rx="3.6"
-                            ry="1.3"
-                            fill="#7a2c33"
-                            opacity="0.8"
-                          />
-                          <path
-                            ref={teeth}
-                            d={teethPath(0)}
-                            fill="url(#hana-teeth-fill)"
-                            opacity="0"
-                          />
-                        </g>
-                        {/* The lower lip, dropping most in the middle. */}
-                        <g mask="url(#hana-jaw-mask)">
-                          {SLICES.map((_, index) => (
-                            <g
-                              key={index}
-                              ref={(element) => {
-                                slices.current[index] = element;
-                              }}
-                            >
-                              <g
-                                clipPath={`url(#hana-slice-${index})`}
-                              >
-                                <g clipPath="url(#hana-jaw-clip)">
-                                  <image
-                                    href="/brand/hana-avatar.png"
-                                    x="0"
-                                    y="0"
-                                    width="100"
-                                    height="100"
-                                    preserveAspectRatio="none"
-                                  />
-                                </g>
-                              </g>
-                            </g>
-                          ))}
-                        </g>
-                      </svg>
+                      <HanaMouth ref={mouth} />
                       <span className="hana-lid left" />
                       <span className="hana-lid right" />
                     </div>

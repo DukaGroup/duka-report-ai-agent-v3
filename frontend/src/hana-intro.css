@@ -16,7 +16,7 @@
   font-family: inherit;
 }
 .hana-intro.phase-leaving {
-  animation: intro-fade-out 0.9s ease-in forwards;
+  animation: intro-fade-out 0.6s ease-in forwards;
 }
 @keyframes intro-fade-in {
   from {
@@ -181,12 +181,12 @@
   box-shadow: 0 0 24px 4px rgba(255, 246, 214, 0.5);
 }
 .phase-moon .intro-moon {
-  animation: intro-moon-rise 2s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
+  animation: intro-moon-rise 1.2s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
 }
 .phase-transform .intro-moon {
   opacity: 1;
   transform: none;
-  animation: intro-moon-become 1.5s ease-in forwards;
+  animation: intro-moon-become 1s ease-in forwards;
 }
 .phase-alive .intro-moon,
 .phase-leaving .intro-moon {
@@ -270,7 +270,7 @@
   transform: translateX(-12%);
 }
 .phase-moon .moon-shadow {
-  animation: intro-phase 2.6s ease-in-out 0.6s forwards;
+  animation: intro-phase 1.2s ease-in-out 0.15s forwards;
 }
 .phase-transform .moon-shadow {
   transform: translateX(-130%);
@@ -295,7 +295,7 @@
   pointer-events: none;
 }
 .phase-transform .intro-flash {
-  animation: intro-flash 1.6s ease-out 0.55s both;
+  animation: intro-flash 1.1s ease-out 0.3s both;
 }
 @keyframes intro-flash {
   0% {
@@ -328,7 +328,7 @@
   opacity: 0;
 }
 .phase-transform .intro-burst span {
-  animation: intro-spark 1.3s ease-out calc(0.6s + var(--delay)) both;
+  animation: intro-spark 0.9s ease-out calc(0.3s + var(--delay)) both;
 }
 @keyframes intro-spark {
   0% {
@@ -352,7 +352,7 @@
   pointer-events: none;
 }
 .phase-transform .intro-hana {
-  animation: intro-reveal 1.4s cubic-bezier(0.3, 0.7, 0.2, 1) 0.75s both;
+  animation: intro-reveal 1s cubic-bezier(0.3, 0.7, 0.2, 1) 0.35s both;
 }
 .phase-alive .intro-hana,
 .phase-leaving .intro-hana {
@@ -360,7 +360,7 @@
   clip-path: circle(100% at 50% 50%);
 }
 .phase-leaving .intro-hana {
-  animation: intro-hana-leave 0.9s ease-in forwards;
+  animation: intro-hana-leave 0.6s ease-in forwards;
 }
 @keyframes intro-reveal {
   0% {
@@ -480,6 +480,18 @@
  * Talking: a real opening appears between her lips (with teeth and a soft
  * dark inside) while the lower lip and chin drop by the same amount.
  */
+/* A talking portrait used outside the introduction (e.g. her profile). */
+.hana-face {
+  position: absolute;
+  inset: 0;
+}
+.hana-face > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
 .hana-mouth {
   position: absolute;
   inset: 0;
@@ -529,10 +541,12 @@
   height: 3.3%;
   transform: rotate(-11deg) scaleY(0);
 }
-.hana-portrait.blink .hana-lid.left {
+.hana-portrait.blink .hana-lid.left,
+.hana-face.blink .hana-lid.left {
   transform: rotate(-2deg) scaleY(1);
 }
-.hana-portrait.blink .hana-lid.right {
+.hana-portrait.blink .hana-lid.right,
+.hana-face.blink .hana-lid.right {
   transform: rotate(-11deg) scaleY(1);
 }
 
@@ -798,31 +812,31 @@
   }
 }
 
-/* Everyday greeting: the same moon and transformation, about twice as fast. */
+/* Everyday greeting: the same moon and transformation, quicker still. */
 .hana-intro.mode-greeting {
   cursor: pointer;
 }
 .mode-greeting.phase-moon .intro-moon {
-  animation-duration: 1.1s;
+  animation-duration: 0.65s;
 }
 .mode-greeting.phase-moon .moon-shadow {
-  animation-duration: 1.1s;
-  animation-delay: 0.2s;
+  animation-duration: 0.6s;
+  animation-delay: 0.05s;
 }
 .mode-greeting.phase-transform .intro-moon {
-  animation-duration: 1s;
+  animation-duration: 0.7s;
 }
 .mode-greeting.phase-transform .intro-flash {
-  animation-duration: 1.1s;
-  animation-delay: 0.3s;
+  animation-duration: 0.7s;
+  animation-delay: 0.15s;
 }
 .mode-greeting.phase-transform .intro-burst span {
-  animation-duration: 0.9s;
-  animation-delay: calc(0.3s + var(--delay));
+  animation-duration: 0.6s;
+  animation-delay: calc(0.15s + var(--delay));
 }
 .mode-greeting.phase-transform .intro-hana {
-  animation-duration: 1s;
-  animation-delay: 0.35s;
+  animation-duration: 0.7s;
+  animation-delay: 0.2s;
 }
 .mode-greeting .intro-speech {
   min-height: 0;
@@ -833,7 +847,7 @@
   cursor: pointer;
 }
 .mode-farewell.phase-alive .intro-hana {
-  animation: intro-farewell-appear 0.6s ease-out both;
+  animation: intro-farewell-appear 0.4s ease-out both;
 }
 @keyframes intro-farewell-appear {
   from {
@@ -846,7 +860,7 @@
 }
 .phase-setting .intro-hana {
   opacity: 1;
-  animation: intro-hana-set 0.9s ease-in forwards;
+  animation: intro-hana-set 0.6s ease-in forwards;
 }
 @keyframes intro-hana-set {
   0% {
@@ -865,7 +879,7 @@
   }
 }
 .phase-setting .intro-moon {
-  animation: intro-moon-set 2s ease-in 0.55s both;
+  animation: intro-moon-set 1.3s ease-in 0.35s both;
 }
 @keyframes intro-moon-set {
   0% {
@@ -882,7 +896,7 @@
   }
 }
 .phase-setting .intro-speech {
-  animation: intro-fade-out 0.6s ease-in forwards;
+  animation: intro-fade-out 0.4s ease-in forwards;
 }
 .phase-setting .intro-skip {
   opacity: 0;

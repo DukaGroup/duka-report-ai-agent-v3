@@ -1719,19 +1719,26 @@ td small {
   gap: 24px;
 }
 .hana-profile-portrait {
-  width: 148px;
-  height: 148px;
-  flex: 0 0 148px;
+  position: relative;
+  width: 156px;
+  height: 156px;
+  flex: 0 0 156px;
   overflow: hidden;
   border-radius: 22px;
   background: #e5edf7;
 }
-.hana-profile-portrait img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transform: scale(1.45) translateY(7%);
+/* Zoomed toward her face so her mouth is visible when she talks. */
+.hana-profile-portrait .hana-face {
+  transform: scale(1.75) translateY(10%);
+  transform-origin: 50% 42%;
+}
+.hana-profile-says {
+  min-height: 1.5em;
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-style: italic;
 }
 .hana-profile-intro p {
   margin: 9px 0 0;
@@ -1773,9 +1780,9 @@ td small {
     gap: 16px;
   }
   .hana-profile-portrait {
-    width: 112px;
-    height: 112px;
-    flex-basis: 112px;
+    width: 120px;
+    height: 120px;
+    flex-basis: 120px;
   }
 }
 .modal form {
@@ -1874,6 +1881,12 @@ textarea {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+/* A message Hana is still working on keeps its normal layout: her picture
+   stays at the top, next to her name, however long the message grows. */
+.message.working {
+  gap: 13px;
+  align-items: flex-start;
 }
 .spin {
   animation: spin 1s linear infinite;
