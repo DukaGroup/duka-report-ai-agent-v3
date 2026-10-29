@@ -7,6 +7,7 @@ import {
   shift,
   useFloating,
 } from "@floating-ui/react-dom";
+import { screenBoundary, uiZoom, unzoomed, zoomedPlatform } from "./uiScale";
 
 type ActiveTooltip = { anchor: HTMLElement; text: string };
 
@@ -28,8 +29,13 @@ export function TooltipLayer() {
     placement: "top",
     strategy: "fixed",
     transform: false,
+    platform: zoomedPlatform,
     whileElementsMounted: autoUpdate,
-    middleware: [offset(10), flip({ padding: 12 }), shift({ padding: 12 })],
+    middleware: [
+      offset(10 * uiZoom()),
+      flip({ padding: 12, ...screenBoundary() }),
+      shift({ padding: 12, ...screenBoundary() }),
+    ],
   });
 
   useEffect(() => {
@@ -131,7 +137,7 @@ export function TooltipLayer() {
           role="tooltip"
           className="app-tooltip"
           style={{
-            ...floatingStyles,
+            ...unzoomed(floatingStyles),
             visibility: isPositioned ? "visible" : "hidden",
           }}
         >

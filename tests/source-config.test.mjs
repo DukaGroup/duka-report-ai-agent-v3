@@ -12,7 +12,7 @@ async function moduleUrl(file,imports={}){
  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}}).outputText.replace(/from "([^"]+)"/g,(_,name)=>`from ${JSON.stringify(imports[name]||pathToFileURL(require.resolve(name)).href)}`);
  return `data:text/javascript;base64,${Buffer.from(js).toString('base64')}`;
 }
-const {SourceConnectionForm}=await import(await moduleUrl('SourceConnectionForm.tsx',{'./Select':await moduleUrl('Select.tsx')}));
+const {SourceConnectionForm}=await import(await moduleUrl('SourceConnectionForm.tsx',{'./Select':await moduleUrl('Select.tsx',{'./uiScale':await moduleUrl('uiScale.ts')})}));
 const {errorMessage}=await import(await moduleUrl('locale.ts'));
 test('old HANA policy errors identify an outdated backend',()=>{
  const message=errorMessage('Production HANA connections require encryption and certificate validation.');

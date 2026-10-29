@@ -2,6 +2,23 @@ import type { MouthShape } from "./HanaMouth";
 
 export type IntroMode = "presentation" | "greeting" | "farewell";
 
+/** Exact critically damped spring step; stable even when frames are delayed. */
+export function stepSpring(
+  position: number,
+  velocity: number,
+  target: number,
+  stiffness: number,
+  dt: number,
+) {
+  const offset = position - target;
+  const impulse = (velocity + stiffness * offset) * dt;
+  const decay = Math.exp(-stiffness * dt);
+  return {
+    position: target + (offset + impulse) * decay,
+    velocity: (velocity - stiffness * impulse) * decay,
+  };
+}
+
 /*
  * Speech planning. Each sentence is split into syllables, and every syllable
  * gets a smooth open-and-close curve: the vowel sets how wide the mouth opens,
@@ -9,21 +26,35 @@ export type IntroMode = "presentation" | "greeting" | "farewell";
  * way people slow down at the end of a phrase. Letters appear in time with it.
  */
 const VOWEL_OPEN: Record<string, number> = {
-  a: 1, o: 0.8, e: 0.66, u: 0.5, y: 0.42, i: 0.4, ë: 0.34,
+  a: 1,
+  o: 0.8,
+  e: 0.66,
+  u: 0.5,
+  y: 0.42,
+  i: 0.4,
+  ë: 0.34,
 };
 // Lips round for o, u and y (like the German ü); spread for e and i.
 const VOWEL_ROUND: Record<string, number> = {
-  o: 0.75, u: 1, y: 0.7, ë: 0.15,
+  o: 0.75,
+  u: 1,
+  y: 0.7,
+  ë: 0.15,
 };
 const isVowel = (c: string) => c.toLowerCase() in VOWEL_OPEN;
 const isLetter = (c: string) => /[a-zçë]/i.test(c);
 const closesLips = (c: string | undefined) => !!c && /[mbp]/i.test(c);
 
-export type Pace = { syllable: number; word: number; comma: number; stop: number };
+export type Pace = {
+  syllable: number;
+  word: number;
+  comma: number;
+  stop: number;
+};
 export const PACE: Record<IntroMode, Pace> = {
-  presentation: { syllable: 165, word: 30, comma: 280, stop: 480 },
-  greeting: { syllable: 150, word: 25, comma: 230, stop: 380 },
-  farewell: { syllable: 155, word: 28, comma: 250, stop: 420 },
+  presentation: { syllable: 115, word: 18, comma: 160, stop: 260 },
+  greeting: { syllable: 105, word: 15, comma: 130, stop: 210 },
+  farewell: { syllable: 110, word: 16, comma: 140, stop: 230 },
 };
 
 type Syllable = {
@@ -89,7 +120,8 @@ export function planSpeech(text: string, pace: Pace): Speech {
         const vowel = [...piece].find(isVowel)?.toLowerCase();
         const last = index === parts.length - 1;
         // A final "ë" is barely spoken in Albanian.
-        const weak = last && parts.length > 1 && /ë$/i.test(piece) && piece.length <= 2;
+        const weak =
+          last && parts.length > 1 && /ë$/i.test(piece) && piece.length <= 2;
         // Stress usually falls on the second-to-last syllable.
         const stressed =
           parts.length === 1 ? piece.length > 3 : index === parts.length - 2;
@@ -147,7 +179,12 @@ export function planSpeech(text: string, pace: Pace): Speech {
   }
   // The final pause is handled between sentences instead.
   const lastSound = result.at(-1)?.end ?? 0;
-  return { syllables: result, reveal, emphasis, total: Math.max(lastSound, time - pace.stop) };
+  return {
+    syllables: result,
+    reveal,
+    emphasis,
+    total: Math.max(lastSound, time - pace.stop),
+  };
 }
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
@@ -173,4 +210,3 @@ export function mouthAt(speech: Speech, time: number): MouthShape {
   }
   return { open: 0, round: 0 };
 }
-

@@ -372,20 +372,13 @@
 .message.assistant {
   animation: motion-from-left 0.45s var(--ease-out) backwards;
 }
+/* Hana's picture in chat never changes position: it stays next to her name.
+   Only its glow shows what she is doing. */
 .message-avatar.assistant {
-  animation: motion-pop 0.5s var(--ease-spring) backwards;
+  animation: motion-fade 0.4s ease-out backwards;
   transition:
     border-color 0.2s,
-    box-shadow 0.2s,
-    transform 0.2s var(--ease-out);
-}
-.message-avatar.assistant:hover {
-  transform: scale(1.08) rotate(-3deg);
-}
-.message.assistant:last-child .message-avatar.assistant {
-  animation:
-    motion-pop 0.5s var(--ease-spring) backwards,
-    motion-float 4s ease-in-out 0.6s infinite;
+    box-shadow 0.2s;
 }
 .message-actions {
   transition: opacity 0.2s;
@@ -531,11 +524,8 @@
     opacity: 1;
   }
 }
-.message.working .message-avatar.assistant,
-.message.assistant.working:last-child .message-avatar.assistant {
-  animation:
-    motion-think 3.6s ease-in-out infinite,
-    motion-think-glow 1.8s ease-in-out infinite;
+.message.working .message-avatar.assistant {
+  animation: motion-think-glow 1.8s ease-in-out infinite;
 }
 /* Looking up and to the side, then back: a person thinking. */
 @keyframes motion-think {
@@ -729,11 +719,8 @@
     transform: scaleY(1);
   }
 }
-.message.speaking .message-avatar.assistant,
-.message.assistant.speaking:last-child .message-avatar.assistant {
-  animation:
-    motion-speak 2.4s ease-in-out infinite,
-    motion-speak-glow 1.6s ease-in-out infinite;
+.message.speaking .message-avatar.assistant {
+  animation: motion-speak-glow 1.6s ease-in-out infinite;
 }
 /* Small nods, the way people move their head while talking. */
 @keyframes motion-speak {
@@ -1203,4 +1190,11 @@
   .report-progress-track::after {
     display: none;
   }
+}
+
+/* A report link in a reply while the report is still being prepared. */
+.report-link-pending {
+  color: var(--muted);
+  font-style: italic;
+  animation: motion-fade 0.3s ease-out backwards;
 }

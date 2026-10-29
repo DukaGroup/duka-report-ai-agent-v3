@@ -31,3 +31,17 @@ test('equal timestamps preserve user/assistant order and an empty conversation h
   assert.deepEqual(timeline.map(e => e.key), ['message-user', 'message-assistant']);
   assert.deepEqual(buildChatTimeline([], []), []);
 });
+
+test('a streaming reply stays at the end when the browser clock is behind the server', () => {
+  const messages = [message('earlier-user', '10'), message('earlier-answer', '11'),
+    message('new-question', '01'), {...message('streaming', '01'), role:'assistant', status:'streaming'}];
+  const before = buildChatTimeline(messages, [report('earlier-excel', '12')]);
+  const after = buildChatTimeline(messages.map(m => m.id === 'streaming' ? {...m, content:'New report answer'} : m), [report('earlier-excel', '12')]);
+  assert.deepEqual(before.filter(e=>e.kind==='message').map(e=>e.message.id), messages.map(m=>m.id));
+  assert.deepEqual(after.map(e=>e.key), before.map(e=>e.key));
+});
+
+test('a missing timestamp never moves a new answer ahead of conversation history', () => {
+  const messages = [message('history', '10'), {...message('streaming','11'), created_at:''}];
+  assert.deepEqual(buildChatTimeline(messages, []).map(e=>e.message.id), ['history','streaming']);
+});

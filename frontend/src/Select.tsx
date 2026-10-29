@@ -18,6 +18,7 @@ import {
   size,
   useFloating,
 } from "@floating-ui/react-dom";
+import { fromScreen, screenBoundary, uiZoom, unzoomed, zoomedPlatform } from "./uiScale";
 
 type Option = { value: string; label: ReactNode; disabled?: boolean };
 type Props = {
@@ -95,17 +96,21 @@ export function Select(props: Props) {
     placement: "bottom-start",
     strategy: "fixed",
     transform: false,
+    platform: zoomedPlatform,
     whileElementsMounted: autoUpdate,
     middleware: [
-      offset(6),
-      flip({ padding: 8 }),
-      shift({ padding: 8 }),
+      offset(6 * uiZoom()),
+      flip({ padding: 8, ...screenBoundary() }),
+      shift({ padding: 8, ...screenBoundary() }),
       size({
         padding: 8,
+        ...screenBoundary(),
         apply({ availableHeight, availableWidth, rects, elements }) {
+          // Measured in screen pixels; styles are CSS pixels (see uiScale).
+          const width = fromScreen(rects.reference.width);
           Object.assign(elements.floating.style, {
-            width: `${Math.min(Math.max(rects.reference.width, 220), Math.max(0, availableWidth))}px`,
-            maxHeight: `${Math.max(0, Math.min(300, availableHeight))}px`,
+            width: `${Math.min(Math.max(width, 220), Math.max(0, fromScreen(availableWidth)))}px`,
+            maxHeight: `${Math.max(0, Math.min(300, fromScreen(availableHeight)))}px`,
           });
         },
       }),
@@ -278,7 +283,7 @@ export function Select(props: Props) {
             }}
             className="select-popover"
             style={{
-              ...floatingStyles,
+              ...unzoomed(floatingStyles),
               visibility: isPositioned ? "visible" : "hidden",
             }}
             onKeyDown={keyboard}

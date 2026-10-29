@@ -6,6 +6,7 @@ import {
   type MouthShape,
 } from "./HanaMouth";
 import { mouthAt, PACE, planSpeech } from "./hanaSpeech";
+import { HANA_AVATAR } from "./hanaAvatar";
 
 const reducedMotion = () =>
   typeof window !== "undefined" &&
@@ -100,7 +101,7 @@ export function HanaFace({
 
   return (
     <div className={`hana-face${blink ? " blink" : ""}`} aria-hidden="true">
-      <img src="/brand/hana-avatar.png" alt="" draggable={false} />
+      <img src={HANA_AVATAR} alt="" draggable={false} />
       <HanaMouth ref={mouth} />
       <span className="hana-lid left" />
       <span className="hana-lid right" />

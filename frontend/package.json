@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "format": "prettier --write src index.html vite.config.ts",
-    "test": "node --test ../tests/voice.test.mjs ../tests/subscription-recovery.test.mjs ../tests/chat-timeline.test.mjs ../tests/conversation-runs.test.mjs ../tests/chat-scroll.test.mjs ../tests/composer-keyboard.test.mjs ../tests/markdown-tables.test.mjs ../tests/durable-frontend.test.mjs ../tests/theme-settings.test.mjs ../tests/system-notifications.test.mjs ../tests/source-config.test.mjs ../tests/session.test.mjs"
+    "test": "node --test ../tests/*.test.mjs"
   },
   "dependencies": {
     "@floating-ui/react-dom": "2.1.9",

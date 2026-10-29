@@ -2,7 +2,7 @@
 .hana-intro {
   --look-x: 0;
   --look-y: 0;
-  --figure: min(64vh, 560px, 88vw);
+  --figure: min(calc(64vh / var(--ui-zoom, 1)), 560px, calc(88vw / var(--ui-zoom, 1)));
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -12,11 +12,11 @@
     radial-gradient(120% 90% at 50% 110%, #1d3a6b 0%, transparent 60%),
     radial-gradient(80% 60% at 15% 0%, #1a2350 0%, transparent 70%),
     linear-gradient(180deg, #050816 0%, #0b1433 55%, #13265a 100%);
-  animation: intro-fade-in 0.6s ease-out both;
+  animation: intro-fade-in 0.3s ease-out both;
   font-family: inherit;
 }
 .hana-intro.phase-leaving {
-  animation: intro-fade-out 0.6s ease-in forwards;
+  animation: intro-fade-out 0.35s ease-in forwards;
 }
 @keyframes intro-fade-in {
   from {
@@ -84,11 +84,11 @@
   }
   14% {
     opacity: 0;
-    transform: translate(70vw, 23vw) rotate(18deg);
+    transform: translate(calc(70vw / var(--ui-zoom, 1)), calc(23vw / var(--ui-zoom, 1))) rotate(18deg);
   }
   100% {
     opacity: 0;
-    transform: translate(70vw, 23vw) rotate(18deg);
+    transform: translate(calc(70vw / var(--ui-zoom, 1)), calc(23vw / var(--ui-zoom, 1))) rotate(18deg);
   }
 }
 
@@ -109,7 +109,7 @@
   transition:
     background 0.2s,
     transform 0.2s;
-  animation: intro-rise-in 0.6s ease-out 0.8s both;
+  animation: intro-rise-in 0.35s ease-out 0.3s both;
 }
 .intro-skip:hover {
   background: rgba(255, 255, 255, 0.18);
@@ -124,7 +124,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(16px, 4vw, 64px);
+  gap: clamp(16px, calc(4vw / var(--ui-zoom, 1)), 64px);
   padding: 24px;
   box-sizing: border-box;
 }
@@ -151,7 +151,7 @@
   height: 46%;
   margin: -23% 0 0 -23%;
   opacity: 0;
-  transform: translateY(70vh) scale(0.7);
+  transform: translateY(calc(70vh / var(--ui-zoom, 1))) scale(0.7);
 }
 /* A soft gradient glow renders smoothly, unlike a very large box-shadow. */
 .intro-moon::before {
@@ -181,12 +181,12 @@
   box-shadow: 0 0 24px 4px rgba(255, 246, 214, 0.5);
 }
 .phase-moon .intro-moon {
-  animation: intro-moon-rise 1.2s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
+  animation: intro-moon-rise 0.6s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
 }
 .phase-transform .intro-moon {
   opacity: 1;
   transform: none;
-  animation: intro-moon-become 1s ease-in forwards;
+  animation: intro-moon-become 0.55s ease-in forwards;
 }
 .phase-alive .intro-moon,
 .phase-leaving .intro-moon {
@@ -270,7 +270,7 @@
   transform: translateX(-12%);
 }
 .phase-moon .moon-shadow {
-  animation: intro-phase 1.2s ease-in-out 0.15s forwards;
+  animation: intro-phase 0.55s ease-in-out 0.05s forwards;
 }
 .phase-transform .moon-shadow {
   transform: translateX(-130%);
@@ -295,7 +295,7 @@
   pointer-events: none;
 }
 .phase-transform .intro-flash {
-  animation: intro-flash 1.1s ease-out 0.3s both;
+  animation: intro-flash 0.6s ease-out 0.12s both;
 }
 @keyframes intro-flash {
   0% {
@@ -328,7 +328,7 @@
   opacity: 0;
 }
 .phase-transform .intro-burst span {
-  animation: intro-spark 0.9s ease-out calc(0.3s + var(--delay)) both;
+  animation: intro-spark 0.5s ease-out calc(0.12s + var(--delay) * 0.5) both;
 }
 @keyframes intro-spark {
   0% {
@@ -352,7 +352,7 @@
   pointer-events: none;
 }
 .phase-transform .intro-hana {
-  animation: intro-reveal 1s cubic-bezier(0.3, 0.7, 0.2, 1) 0.35s both;
+  animation: intro-reveal 0.55s cubic-bezier(0.3, 0.7, 0.2, 1) 0.12s both;
 }
 .phase-alive .intro-hana,
 .phase-leaving .intro-hana {
@@ -360,7 +360,7 @@
   clip-path: circle(100% at 50% 50%);
 }
 .phase-leaving .intro-hana {
-  animation: intro-hana-leave 0.6s ease-in forwards;
+  animation: intro-hana-leave 0.35s ease-in forwards;
 }
 @keyframes intro-reveal {
   0% {
@@ -464,9 +464,18 @@
   }
 }
 /* The portrait is cropped at the waist; fade it out instead of a hard edge. */
+/* The portrait is a square photo; its edges fade softly into the night sky. */
 .hana-portrait {
-  -webkit-mask-image: linear-gradient(180deg, #000 74%, transparent 98%);
-  mask-image: linear-gradient(180deg, #000 74%, transparent 98%);
+  -webkit-mask-image: radial-gradient(
+    ellipse 50% 54% at 50% 47%,
+    #000 58%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 50% 54% at 50% 47%,
+    #000 58%,
+    transparent 100%
+  );
 }
 .hana-portrait img {
   position: absolute;
@@ -474,7 +483,6 @@
   width: 100%;
   height: 100%;
   user-select: none;
-  filter: drop-shadow(0 18px 40px rgba(0, 0, 0, 0.45));
 }
 /*
  * Talking: a real opening appears between her lips (with teeth and a soft
@@ -502,52 +510,54 @@
 }
 
 /* Blinking eyelids, closed only for a fraction of a second. */
+/* Eyelids (measured on the portrait): skin in her cool lighting, sliding
+   down over the eye and showing a dark lash line when closed. */
 .hana-lid {
   position: absolute;
-  border-radius: 50% 50% 46% 46% / 62% 62% 38% 38%;
-  background: radial-gradient(
-    120% 140% at 50% 0%,
-    #e2a688 0%,
-    #d39274 55%,
-    #c4846a 100%
+  border-radius: 50% 50% 46% 46% / 72% 72% 28% 28%;
+  background: linear-gradient(
+    180deg,
+    #555261 0%,
+    #686473 45%,
+    #77717e 100%
   );
-  box-shadow: 0 0 2px 1px rgba(211, 146, 116, 0.8);
+  box-shadow: 0 0 6px 2px rgba(104, 100, 115, 0.8);
   transform: scaleY(0);
   transform-origin: 50% 0;
   transition: transform 0.07s ease-in;
 }
-/* Closed eyes show a curved lash line. */
 .hana-lid::after {
   content: "";
   position: absolute;
-  left: 4%;
-  right: 4%;
-  bottom: 14%;
-  height: 55%;
-  border-bottom: 2px solid #2a1510;
+  left: 1%;
+  right: 1%;
+  bottom: 3%;
+  height: 36%;
+  border-bottom: 0.45em solid #16101a;
   border-radius: 0 0 50% 50% / 0 0 100% 100%;
+  filter: blur(0.4px);
 }
 .hana-lid.left {
-  left: 39%;
-  top: 31.6%;
-  width: 7.8%;
-  height: 3.6%;
-  transform: rotate(-2deg) scaleY(0);
+  left: 36.4%;
+  top: 35.5%;
+  width: 10%;
+  height: 4.4%;
+  transform: rotate(4deg) scaleY(0);
 }
 .hana-lid.right {
-  left: 53.6%;
-  top: 29.4%;
-  width: 7.4%;
-  height: 3.3%;
-  transform: rotate(-11deg) scaleY(0);
+  left: 54.3%;
+  top: 35.5%;
+  width: 10%;
+  height: 4.4%;
+  transform: rotate(-4deg) scaleY(0);
 }
 .hana-portrait.blink .hana-lid.left,
 .hana-face.blink .hana-lid.left {
-  transform: rotate(-2deg) scaleY(1);
+  transform: rotate(4deg) scaleY(1);
 }
 .hana-portrait.blink .hana-lid.right,
 .hana-face.blink .hana-lid.right {
-  transform: rotate(-11deg) scaleY(1);
+  transform: rotate(-4deg) scaleY(1);
 }
 
 .hana-floaters span {
@@ -577,27 +587,27 @@
 /* Speech bubble */
 .intro-speech {
   position: relative;
-  width: min(440px, 90vw);
+  width: min(440px, calc(90vw / var(--ui-zoom, 1)));
   padding: 22px 24px 20px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.1);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(14px);
-  min-height: 210px;
+  min-height: 0;
   box-sizing: border-box;
   opacity: 0;
   transform: translateY(24px) scale(0.96);
   pointer-events: none;
 }
 .phase-alive .intro-speech {
-  animation: intro-bubble 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  animation: intro-bubble 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
   pointer-events: auto;
 }
 .phase-leaving .intro-speech {
   opacity: 1;
   transform: none;
-  animation: intro-fade-out 0.5s ease-in forwards;
+  animation: intro-fade-out 0.3s ease-in forwards;
 }
 .intro-speech::before {
   content: "";
@@ -769,7 +779,7 @@
 
 @media (max-width: 760px) {
   .hana-intro {
-    --figure: min(46vh, 86vw);
+    --figure: min(calc(46vh / var(--ui-zoom, 1)), calc(86vw / var(--ui-zoom, 1)));
   }
   .intro-stage {
     flex-direction: column;
@@ -778,7 +788,7 @@
     gap: 4px;
   }
   .hana-intro:not(.phase-alive):not(.phase-leaving) .intro-scene {
-    transform: translateY(18vh);
+    transform: translateY(calc(18vh / var(--ui-zoom, 1)));
   }
   .intro-speech::before {
     left: 50%;
@@ -812,42 +822,51 @@
   }
 }
 
-/* Everyday greeting: the same moon and transformation, quicker still. */
-.hana-intro.mode-greeting {
-  cursor: pointer;
+/* The complete greeting/farewell, including its fade, fits inside 1.85 s. */
+.hana-intro .intro-scene {
+  transition-duration: 0.2s;
+}
+.hana-intro.phase-moon .intro-moon {
+  animation-duration: 0.1s;
+}
+.hana-intro.phase-transform .intro-moon,
+.hana-intro.phase-transform .intro-hana {
+  animation-duration: 0.16s;
+  animation-delay: 0s;
+}
+.hana-intro .hana-sway,
+.hana-intro .hana-breathe {
+  animation: none;
 }
 .mode-greeting.phase-moon .intro-moon {
-  animation-duration: 0.65s;
+  animation-duration: 0.38s;
 }
 .mode-greeting.phase-moon .moon-shadow {
-  animation-duration: 0.6s;
-  animation-delay: 0.05s;
+  animation-duration: 0.34s;
+  animation-delay: 0s;
 }
 .mode-greeting.phase-transform .intro-moon {
-  animation-duration: 0.7s;
+  animation-duration: 0.38s;
 }
 .mode-greeting.phase-transform .intro-flash {
-  animation-duration: 0.7s;
-  animation-delay: 0.15s;
+  animation-duration: 0.4s;
+  animation-delay: 0.06s;
 }
 .mode-greeting.phase-transform .intro-burst span {
-  animation-duration: 0.6s;
-  animation-delay: calc(0.15s + var(--delay));
+  animation-duration: 0.35s;
+  animation-delay: calc(0.06s + var(--delay) * 0.3);
 }
 .mode-greeting.phase-transform .intro-hana {
-  animation-duration: 0.7s;
-  animation-delay: 0.2s;
+  animation-duration: 0.4s;
+  animation-delay: 0.06s;
 }
 .mode-greeting .intro-speech {
   min-height: 0;
 }
 
 /* Farewell: Hana waves, turns back into a crescent moon, and the moon sets. */
-.hana-intro.mode-farewell {
-  cursor: pointer;
-}
 .mode-farewell.phase-alive .intro-hana {
-  animation: intro-farewell-appear 0.4s ease-out both;
+  animation: intro-farewell-appear 0.25s ease-out both;
 }
 @keyframes intro-farewell-appear {
   from {
@@ -860,7 +879,7 @@
 }
 .phase-setting .intro-hana {
   opacity: 1;
-  animation: intro-hana-set 0.6s ease-in forwards;
+  animation: intro-hana-set 0.2s ease-in forwards;
 }
 @keyframes intro-hana-set {
   0% {
@@ -879,7 +898,7 @@
   }
 }
 .phase-setting .intro-moon {
-  animation: intro-moon-set 1.3s ease-in 0.35s both;
+  animation: intro-moon-set 0.3s ease-in 0.04s both;
 }
 @keyframes intro-moon-set {
   0% {
@@ -892,11 +911,11 @@
   }
   100% {
     opacity: 0.4;
-    transform: translateY(65vh) scale(0.75);
+    transform: translateY(calc(65vh / var(--ui-zoom, 1))) scale(0.75);
   }
 }
 .phase-setting .intro-speech {
-  animation: intro-fade-out 0.4s ease-in forwards;
+  animation: intro-fade-out 0.25s ease-in forwards;
 }
 .phase-setting .intro-skip {
   opacity: 0;

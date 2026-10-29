@@ -2,6 +2,8 @@ import {
   Children,
   isValidElement,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -147,24 +149,58 @@ const figureComponents: Components = {
   },
 };
 
+const REPORT_LINK = /\/api\/reports\/([^/?#]+)\/export\b/;
+
 export function MarkdownContent({
   children,
   streaming = false,
   celebrate = false,
+  reportStatus,
 }: {
   children: string;
   // Hana is still writing this reply.
   streaming?: boolean;
   // The reply just finished while the user watched: key figures roll up.
   celebrate?: boolean;
+  // A report's current status, so its download link only works once ready.
+  reportStatus?: (id: string) => string | undefined;
 }) {
+  // Read through a ref so the rendering components stay the same between
+  // renders (new component types would rebuild and re-animate the reply).
+  const status = useRef(reportStatus);
+  status.current = reportStatus;
+  const checksReports = !!reportStatus;
+  const components = useMemo<Components>(() => {
+    const base = celebrate ? figureComponents : baseComponents;
+    if (!checksReports) return base;
+    return {
+      ...base,
+      a: ({ node: _node, href, children: label, ...props }) => {
+        const report = href?.match(REPORT_LINK)?.[1];
+        const state = report ? status.current?.(report) : undefined;
+        if (report && state && state !== "completed")
+          return (
+            <span className="report-link-pending">
+              {state === "failed"
+                ? "Raporti nuk u krijua."
+                : "Excel-i po përgatitet…"}
+            </span>
+          );
+        return (
+          <a href={href} {...props}>
+            {label}
+          </a>
+        );
+      },
+    };
+  }, [celebrate, checksReports]);
   return (
     <div className={`markdown${streaming ? " streaming" : ""}`}>
       <Markdown
         remarkPlugins={[remarkGfm]}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rehypePlugins={streaming ? [wrapWords as any] : []}
-        components={celebrate ? figureComponents : baseComponents}
+        components={components}
       >
         {children}
       </Markdown>

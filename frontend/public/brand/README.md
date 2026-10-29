@@ -4,7 +4,7 @@ Unmodified logos and icons from the official Duka Group website. Stored locally 
 
 Official palette from the website’s Elementor global styles: navy `#082340`, blue `#5792CC`.
 
-`hana-avatar.png` is a generated portrait for the Hana assistant, separate from the official Duka Group logo assets.
+`hana-avatar.webp` is the exact Hana assistant portrait supplied by the user as `futuristic_ai_assistant_avatar_sleek--1--1p8dx.webp`; `hana-avatar-256.webp` is its resized copy for small avatars and notifications. These are separate from the official Duka Group logo assets. The talking animation and blink overlays are aligned to this portrait.
 
 - `duka-group-logo.webp`: https://duka-group.com/wp-content/uploads/2024/01/Logo-DUKA-Group-web-768x173.webp
 - `duka-group-logo-light.webp`: https://duka-group.com/wp-content/uploads/2024/01/Logo-DUKA-Group-secondary-768x173.webp

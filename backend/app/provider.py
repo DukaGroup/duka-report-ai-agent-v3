@@ -16,6 +16,7 @@ from jsonschema import ValidationError
 from fastapi import HTTPException
 from pydantic import ValidationError as InputValidationError
 
+from .answer_stream import AnswerStream
 from .connectors import SourceNotConfigured, DatabaseUnavailable
 from .schemas import ReportRequest
 from .database_tools import DatabaseQuery
@@ -108,7 +109,7 @@ Build one comprehensive report with a main query plus up to eight additional ana
 Each additional database analysis can specify its own source_id and database. If source_id is omitted, it inherits the primary source. If database is omitted on the same source, it inherits the primary database; on another source, it uses that source's default database. Use this to export cross-database evidence into ONE workbook, with sheets named by business company/branch, never by database or source. Structural joins operate within one database; for cross-database calculations, author dictionary joins and comparisons over multiple complete calculate_data inputs instead of inventing cross-database SQL. State, in business terms, which companies/periods are included, duplicates excluded with reasons, and unresolved coverage limitations.
 The primary query and every supplied additional analysis must be complete. A connection failure, access revocation, unavailable view or export capacity limit stops generation; no requested analysis is silently omitted. The required flag is retained for compatibility, but all supplied analyses are required for a complete workbook. If a requested source fails with SQL 208, repair the view or use equivalent working base tables without changing the business scope. Do not claim a complete report after dropping that source. SQL filters and grouping define the requested scope; query.limit only limits chat previews, never the Excel export.
 For a single-day report, preserve that day as the data scope; include other days or periods only when requested. Use bounded aggregates to cover all matching transactions, and include complete requested detail within server limits. When data cannot support an analysis, report the missing inputs explicitly.
-You author the report script and choose its table, chart and presentation operations; the backend securely renders those operations and preserves the captured data. Return the report ID and link [Shkarko Excel](/api/reports/REPORT_ID/export/xlsx), replacing REPORT_ID with the real tool result. Explain that the link becomes available when generation completes; do not say a queued report is finished.
+You author the report script and choose its table, chart and presentation operations; the backend securely renders those operations and preserves the captured data. Never write a download link or URL for a report: the report card with its Excel download button appears automatically in chat and in Raportet once generation completes. Say briefly that the report is being prepared; do not say a queued report is finished.
 Excel report generation includes a Python build(report) script, executed by the backend's isolated workbook worker using approved report helpers. The worker never receives credentials or filesystem/network tools. The backend adds complete protected source tables and checks workbook values before publishing. Generate build(report) only in background report tasks using workbook_script_api. During chat, author calculate(tables) using calculate_data. Do not use shell or arbitrary code-execution tools.
 Legacy registered datasets remain usable via list_datasets/fetch_dataset/create_report, but are optional.
 Reports are generated in the background; their status and Excel download appear directly in chat and in Raportet. The input stays locked until generation finishes or the user interrupts it.
@@ -719,7 +720,8 @@ enabled = false
         if output_schema:
             params["outputSchema"] = output_schema
         complete = False
-        texts = {}
+        # Progress notes written between steps never reach the visible answer.
+        answer = AnswerStream()
         last_error = {}
         try:
             result = await self.rpc("turn/start", params)
@@ -744,18 +746,28 @@ enabled = false
                     raise ProviderError("Subscription connection lost. Reconnect and try again.")
                 if event_params.get("turnId") and event_params["turnId"] != turn_id:
                     continue
+                item = event_params.get("item") or {}
                 if method == "item/agentMessage/delta":
-                    yield {"type": "delta", "text": event_params.get("delta", "")}
-                elif method == "item/started" and event_params.get("item", {}).get("type") == "reasoning":
-                    # Announce the phase, never forward private reasoning content.
-                    yield {"type": "activity", "activity": "reasoning"}
-                elif method == "item/completed" and event_params.get("item", {}).get("type") == "agentMessage":
-                    item = event_params["item"]
-                    texts[item["id"]] = item.get("text", "")
-                elif method == "item/started" and event_params.get("item", {}).get("type") == "dynamicToolCall":
-                    yield {"type": "tool", "name": event_params["item"].get("tool", "Reporting data")}
-                elif method == "item/started" and event_params.get("item", {}).get("type") == "webSearch":
-                    yield {"type": "tool", "name": "WebSearch"}
+                    for shown in answer.feed(event_params.get("delta", ""), event_params.get("itemId")):
+                        yield shown
+                elif method == "item/started" and item.get("type") == "agentMessage":
+                    for shown in answer.note_phase(item.get("id"), item.get("phase")):
+                        yield shown
+                elif method == "item/completed" and item.get("type") == "agentMessage":
+                    for shown in answer.complete(item.get("id"), item.get("text", ""), item.get("phase")):
+                        yield shown
+                elif method == "item/started" and item.get("type") not in (None, "userMessage"):
+                    # Any work step (reasoning, tool, search…) means the text
+                    # written just before it was a progress note.
+                    for shown in answer.work_started():
+                        yield shown
+                    if item.get("type") == "reasoning":
+                        # Announce the phase, never forward private reasoning content.
+                        yield {"type": "activity", "activity": "reasoning"}
+                    elif item.get("type") == "dynamicToolCall":
+                        yield {"type": "tool", "name": item.get("tool", "Reporting data")}
+                    elif item.get("type") == "webSearch":
+                        yield {"type": "tool", "name": "WebSearch"}
                 elif method == "turn/completed":
                     turn = event_params["turn"]
                     if turn.get("id") != turn_id:
@@ -764,8 +776,15 @@ enabled = false
                     status = turn.get("status")
                     if status == "failed":
                         raise native_error({**last_error, **(turn.get("error") or {})} or {"message": "ChatGPT could not complete this response."})
-                    yield {"type": "done", "status": status, "text": "\n\n".join(texts.values())}
+                    for shown in answer.release():
+                        yield shown
+                    yield {"type": "done", "status": status, "text": answer.answer()}
                     return
+        except ProviderError as exc:
+            # Keep the unfinished answer (never the progress notes) for a
+            # handoff to another subscription; it is not shown to the user.
+            exc.draft = answer.answer()
+            raise
         finally:
             if not complete and self.process and self.process.returncode is None:
                 with contextlib.suppress(Exception):
@@ -1127,8 +1146,8 @@ class SubscriptionManager:
                 else:
                     report = await self.report_handler(user_id, self.report_request(user_id, params, arguments),
                                                        params.get("threadId"), params.get("turnId"))
-                    result = {"report_id": report["id"], "title": report["title"], "status": report["status"],
-                              "excel_download": f"/api/reports/{report['id']}/export/xlsx"}
+                    # No download link here: it only exists once the report is finished.
+                    result = {"report_id": report["id"], "title": report["title"], "status": report["status"]}
                     if report["error"]:
                         result["error"] = report["error"]
             except HTTPException as exc:
@@ -1184,7 +1203,6 @@ class SubscriptionManager:
                         "report_id": report["id"],
                         "status": report["status"],
                         "title": report["title"],
-                        "excel_download": f"/api/reports/{report['id']}/export/xlsx",
                     }
                     if report["error"]:
                         result["error"] = report["error"]
@@ -1246,7 +1264,6 @@ class SubscriptionManager:
                         "title": report["title"],
                         "status": report["status"],
                         "location": "Raportet",
-                        "excel_download": f"/api/reports/{report['id']}/export/xlsx",
                     }
                     if report["error"]:
                         result["error"] = report["error"]

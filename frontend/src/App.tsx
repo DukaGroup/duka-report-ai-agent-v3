@@ -105,6 +105,7 @@ import { DeviceNotificationSettings } from "./DeviceNotificationSettings";
 import { restoreDeviceNotifications } from "./deviceNotifications";
 import { settingsSections } from "./settings";
 import type { SettingsTab } from "./settings";
+import { HANA_AVATAR_SMALL } from "./hanaAvatar";
 
 type Page = "conversations" | "chat" | "reports" | "settings";
 function cReasoning(c: Conversation) {
@@ -632,6 +633,9 @@ function Workspace({
   const [stoppingIds, setStoppingIds] = useState<Record<string, boolean>>({});
   const stopping = useRef(new Set<string>());
   const sendSequence = useRef(0);
+  // Stable display keys for replies: the streaming placeholder and the saved
+  // reply it becomes share one key.
+  const replyKeys = useRef(new Map<string, string>());
   const reportFetchVersion = useRef(0);
   const stoppingReports = !!stoppingIds[currentId || ""];
   const [reports, setReports] = useState<Report[]>([]);
@@ -1059,7 +1063,18 @@ function Workspace({
         searchMessage.current = null;
       }
     }
-  }, [messages, busy, reportBusy, currentId, page]);
+  }, [messages, reports, busy, reportBusy, currentId, page]);
+  useLayoutEffect(() => {
+    const scroll = messageScroll.current;
+    if (page !== "chat" || !scroll || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      scrollFollower.current.update(scroll);
+      setShowJump(scrollFollower.current.showsJump(scroll));
+    });
+    observer.observe(scroll);
+    if (scroll.firstElementChild) observer.observe(scroll.firstElementChild);
+    return () => observer.disconnect();
+  }, [page, currentId, messages.length]);
   async function loadSubscription() {
     if (subscriptionRequest.current) return subscriptionRequest.current;
     const request = fetchSubscription().catch((e: unknown) => {
@@ -1704,6 +1719,7 @@ function Workspace({
           status: "streaming",
         },
       ];
+      replyKeys.current.set("streaming", `reply-${sendSequence.current}`);
       token = runs.current.start(id, initialMessages, true);
       setReplyNotifications((items) =>
         items.filter((item) => item.conversationId !== streamId),
@@ -1716,7 +1732,11 @@ function Workspace({
         model,
         (event) => {
           if (!ownsRun()) return;
-          if (event.type === "message") replyId = event.id;
+          if (event.type === "message") {
+            replyId = event.id;
+            const key = replyKeys.current.get("streaming");
+            if (key) replyKeys.current.set(event.id, key);
+          }
           if (event.type === "message") submitting.current.delete(streamId);
           if (event.type === "message" && event.user_message_id)
             runs.current.identifyUser(streamId, event.user_message_id, token);
@@ -2465,7 +2485,15 @@ function Workspace({
   const conversationReports = currentId
     ? reports.filter((r) => r.conversation_id === currentId)
     : [];
-  const chatTimeline = buildChatTimeline(messages, conversationReports);
+  // Download links in replies only work once their report is finished.
+  const reportStatus = (id: string) =>
+    (
+      conversationReports.find((r) => r.id === id) ||
+      reports.find((r) => r.id === id)
+    )?.status;
+  const chatTimeline = buildChatTimeline(messages, conversationReports, (id) =>
+    replyKeys.current.get(id),
+  );
   const empty = messages.length === 0 && conversationReports.length === 0;
   const libraryConversations = conversations;
   const conversationActionBusy = deleting || uploading || openingConversation;
@@ -2477,7 +2505,11 @@ function Workspace({
   const selectedVisibleConversations = visibleConversations.filter((c) =>
     selectedConversationIds.includes(c.id),
   );
-  const allLibraryReports = reportTrash ? deletedReports : reports;
+  // Raportet lists a report only once it has finished; while it is being
+  // generated it is visible (with its progress) only in its conversation.
+  const allLibraryReports = (reportTrash ? deletedReports : reports).filter(
+    (r) => !["queued", "running"].includes(r.status),
+  );
   const libraryReports = reportQuery.trim()
     ? allLibraryReports.filter((item) => reportMatches?.has(item.id))
     : allLibraryReports;
@@ -2923,7 +2955,7 @@ function Workspace({
                       data-tooltip="Shiko profilin e Hanës"
                       onClick={() => setHanaProfileOpen(true)}
                     >
-                      <img src="/brand/hana-avatar.png" alt="" />
+                      <img src={HANA_AVATAR_SMALL} alt="" />
                     </button>
                     <span className="eyebrow"> BIZNESI JUAJ NË BISEDË </span>
                     <h1>
@@ -3009,7 +3041,7 @@ function Workspace({
                                 data-tooltip="Shiko profilin e Hanës"
                                 onClick={() => setHanaProfileOpen(true)}
                               >
-                                <img src="/brand/hana-avatar.png" alt="" />
+                                <img src={HANA_AVATAR_SMALL} alt="" />
                               </button>
                             ) : (
                               <div className="message-avatar user">
@@ -3075,6 +3107,7 @@ function Workspace({
                                     m.status === "streaming"
                                   }
                                   celebrate={justAnswered === m.id}
+                                  reportStatus={reportStatus}
                                 >
                                   {m.role === "assistant" &&
                                   m.status === "failed"
@@ -3210,7 +3243,7 @@ function Workspace({
                           data-tooltip="Shiko profilin e Hanës"
                           onClick={() => setHanaProfileOpen(true)}
                         >
-                          <img src="/brand/hana-avatar.png" alt="" />
+                          <img src={HANA_AVATAR_SMALL} alt="" />
                         </button>
                         <span className="thought-bubble" aria-hidden="true">
                           <i />
@@ -4266,12 +4299,7 @@ function Workspace({
                           "",
                       ) || "Raport biznesi"}
                     </p>
-                    {!reportTrash &&
-                      ["queued", "running"].includes(r.status) && (
-                        <ReportProgress
-                          stage={r.status === "queued" ? "queued" : r.stage}
-                        />
-                      )}
+
                     <div className="report-card-footer">
                       <span>{date(r.deleted_at || r.created_at)}</span>
                     </div>

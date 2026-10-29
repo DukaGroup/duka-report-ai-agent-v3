@@ -596,6 +596,8 @@ class PooledRuntime:
                         )
                     if event["type"] == "delta":
                         partial += event["text"]
+                    elif event["type"] == "snapshot":
+                        partial = event.get("text", "")
                     elif event["type"] == "done":
                         if checkpoint:
                             read_checkpoint(
@@ -614,6 +616,8 @@ class PooledRuntime:
             except ProviderError as exc:
                 if exc.category not in ("quota", "auth", "model"):
                     raise
+                # The provider keeps unfinished answer text it had not shown yet.
+                partial = getattr(exc, "draft", None) or partial
                 checkpoint, data = self.checkpoint(original, partial)
                 if self.account_record and exc.category != "model":
                     await self.pool.unavailable(self.account_record, exc)

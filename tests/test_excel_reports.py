@@ -173,13 +173,15 @@ def test_multi_analysis_report_links_to_chat_and_excel_is_owner_only(client, adm
         },
     )
     result = json.loads(response["contentItems"][0]["text"])
-    assert result["excel_download"].endswith("/export/xlsx")
+    # The queued report gets no download link; it only exists once finished.
+    assert "excel_download" not in result
+    download = f"/api/reports/{result['report_id']}/export/xlsx"
     report = wait_report(client, result["report_id"])
     assert report["status"] == "completed", report
     assert report["conversation_id"] == conversation["id"]
     listed = next(r for r in client.get("/api/reports").json() if r["id"] == report["id"])
     assert listed["conversation_id"] == conversation["id"] and listed["stage"] == "completed"
-    exported = client.get(result["excel_download"])
+    exported = client.get(download)
     assert exported.status_code == 200
     archive = zipfile.ZipFile(io.BytesIO(exported.content))
     assert "xl/worksheets/sheet3.xml" in archive.namelist()
@@ -189,7 +191,7 @@ def test_multi_analysis_report_links_to_chat_and_excel_is_owner_only(client, adm
     assert (client.app.state.settings.data_dir / "reports" / (report["id"] + ".xlsx")).exists()
     create_member(client)
     sign_in_member(client)
-    assert client.get(result["excel_download"]).status_code == 404
+    assert client.get(download).status_code == 404
     assert client.post(f"/api/reports/{report['id']}/stop", headers=HEADERS).status_code == 404
 
 

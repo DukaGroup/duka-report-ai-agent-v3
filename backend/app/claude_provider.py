@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+from .answer_stream import AnswerStream
 from .provider import BASE_INSTRUCTIONS, REPORT_TOOLS, ProviderError
 
 
@@ -282,6 +283,9 @@ class ClaudeRuntime:
                                output_format={"type": "json_schema", "schema": output_schema} if output_schema else None,
                                **({"resume": session} if persisted else {"session_id": session}))
         fragments, partial = [], False
+        # Text written before a tool call is a progress note, not the answer.
+        answer = AnswerStream()
+        message_number = 0
         try:
             client = ClaudeSDKClient(options)
             # Include initialization in the stop path, before __aenter__ awaits.
@@ -293,14 +297,21 @@ class ClaudeRuntime:
                     if isinstance(message, RateLimitEvent) and message.rate_limit_info.status == "rejected":
                         raise ProviderError("Claude subscription usage limit reached.", category="quota", reset_at=message.rate_limit_info.resets_at)
                     if isinstance(message, StreamEvent):
-                        if (message.event.get("type") == "content_block_start"
-                                and message.event.get("content_block", {}).get("type") in ("thinking", "redacted_thinking")):
-                            yield {"type": "activity", "activity": "reasoning"}
+                        kind = message.event.get("type")
+                        block = message.event.get("content_block", {}).get("type")
+                        if kind == "message_start":
+                            message_number += 1
+                        if kind == "content_block_start" and block in ("thinking", "redacted_thinking", "tool_use", "server_tool_use"):
+                            for shown in answer.work_started():
+                                yield shown
+                            if block in ("thinking", "redacted_thinking"):
+                                yield {"type": "activity", "activity": "reasoning"}
                         delta = message.event.get("delta", {})
                         if delta.get("type") == "text_delta":
                             partial = True
                             fragments.append(delta["text"])
-                            yield {"type": "delta", "text": delta["text"]}
+                            for shown in answer.feed(delta["text"], message_number):
+                                yield shown
                     elif isinstance(message, AssistantMessage):
                         if message.error:
                             from .provider import native_error
@@ -308,22 +319,29 @@ class ClaudeRuntime:
                             raise native_error({"error": message.error, "message": error_text or "Claude subscription: " + message.error})
                         for block in message.content:
                             if isinstance(block, ToolUseBlock):
+                                for shown in answer.work_started():
+                                    yield shown
                                 yield {"type": "tool", "name": block.name.removeprefix("mcp__duka_reporting__")}
                             elif isinstance(block, TextBlock) and not partial:
                                 fragments.append(block.text)
-                                yield {"type": "delta", "text": block.text}
+                                for shown in answer.feed(block.text, id(message)):
+                                    yield shown
                     elif isinstance(message, ResultMessage):
                         if message.is_error:
                             from .provider import native_error
                             raise native_error({"subtype": message.subtype, "message": message.result or "Claude could not complete this response.",
                                                 "error": "rate_limit" if message.api_error_status == 429 else "authentication_failed" if message.api_error_status == 401 else ""})
-                        text = json.dumps(message.structured_output, ensure_ascii=False) if message.structured_output is not None else message.result or "".join(fragments)
+                        for shown in answer.release():
+                            yield shown
+                        final = answer.answer()
+                        text = json.dumps(message.structured_output, ensure_ascii=False) if message.structured_output is not None else message.result or final
                         self.sessions.add(thread_id)
                         status = "interrupted" if message.terminal_reason in ("aborted_streaming", "aborted_tools") else "completed"
                         yield {"type": "done", "status": status, "text": text}
                         return
                 raise ProviderError("Claude stopped before completing its response. Try again.")
-        except ProviderError:
+        except ProviderError as exc:
+            exc.draft = answer.answer()
             raise
         except Exception as exc:
             # SDK/CLI exceptions can contain auth material; never expose them.

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import { setThemePreference, subscribeTheme, themeSnapshot } from "./theme";
 import type { ThemePreference } from "./theme";
+import { fromScreen } from "./uiScale";
 
 const themes = [
   {
@@ -49,11 +50,16 @@ function revealTheme(value: ThemePreference, from: HTMLElement) {
   if (!doc.startViewTransition || reduced || before === after)
     return setThemePreference(value);
   const box = from.getBoundingClientRect();
-  const x = box.left + box.width / 2;
-  const y = box.top + box.height / 2;
-  const radius = Math.hypot(
-    Math.max(x, window.innerWidth - x),
-    Math.max(y, window.innerHeight - y),
+  const centerX = box.left + box.width / 2;
+  const centerY = box.top + box.height / 2;
+  // Screen pixels → CSS pixels, since the interface may be zoomed.
+  const x = fromScreen(centerX);
+  const y = fromScreen(centerY);
+  const radius = fromScreen(
+    Math.hypot(
+      Math.max(centerX, window.innerWidth - centerX),
+      Math.max(centerY, window.innerHeight - centerY),
+    ),
   );
   const transition = doc.startViewTransition(() => setThemePreference(value));
   void transition.ready.then(() =>

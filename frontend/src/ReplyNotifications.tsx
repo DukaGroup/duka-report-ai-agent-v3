@@ -1,6 +1,7 @@
 import { ArrowUpRight, Check, X } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 import type { ReplyNotification } from "./replyNotifications";
+import { fromScreen } from "./uiScale";
 
 export function ReplyNotifications({
   items,
@@ -31,8 +32,9 @@ export function ReplyNotifications({
           viewportTop + (viewport?.height || window.innerHeight),
           composer?.getBoundingClientRect().top ?? Infinity,
         ) - 12;
-      container.current.style.top = `${top}px`;
-      container.current.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+      // Screen pixels → CSS pixels (the interface may be zoomed).
+      container.current.style.top = `${fromScreen(top)}px`;
+      container.current.style.maxHeight = `${fromScreen(Math.max(0, bottom - top))}px`;
     };
     position();
     const observer = new ResizeObserver(position);

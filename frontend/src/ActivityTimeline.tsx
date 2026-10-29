@@ -10,7 +10,9 @@ export function ActivityTimeline({
 }) {
   if (!steps.length) return null;
   return (
-    <details className="activity-timeline" open={active || undefined}>
+    // Closed by default, even while Hana works: the steps show only when the
+    // user opens them.
+    <details className="activity-timeline">
       <summary>
         {/* Points right when closed and turns down when opened. */}
         <ChevronRight size={14} className="activity-chevron" />

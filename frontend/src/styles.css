@@ -111,7 +111,7 @@ a:focus-visible {
 }
 .app-tooltip {
   z-index: 10000;
-  max-width: min(300px, calc(100vw - 24px));
+  max-width: min(300px, calc(calc(100vw / var(--ui-zoom, 1)) - 24px));
   padding: 9px 12px;
   border: 1px solid var(--sidebar-border);
   border-left: 3px solid var(--brand-blue);
@@ -150,7 +150,7 @@ select:focus {
 }
 .workspace {
   display: flex;
-  height: 100dvh;
+  height: calc(100dvh / var(--ui-zoom, 1));
   overflow: clip;
 }
 .sidebar {
@@ -527,6 +527,9 @@ select:focus {
   overflow: auto;
   min-height: 0;
   overscroll-behavior-y: contain;
+  /* The follower owns scrolling; browser anchoring must not drag a reader
+     down as a streaming answer or report card grows below them. */
+  overflow-anchor: none;
 }
 .empty-scroll {
   display: flex;
@@ -560,7 +563,8 @@ select:focus {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scale(2) translateY(10%);
+  /* Framed on her face (the portrait also shows her shoulders). */
+  transform: scale(1.6) translateY(3%);
 }
 .eyebrow {
   font-size: 0.75rem;
@@ -665,7 +669,7 @@ select:focus {
   width: 100%;
   height: 72px;
   min-height: 72px;
-  max-height: min(35dvh, 220px);
+  max-height: min(calc(35dvh / var(--ui-zoom, 1)), 220px);
   resize: none;
   border: 0;
   outline: none !important;
@@ -872,7 +876,8 @@ select:focus {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scale(2) translateY(10%);
+  /* Framed on her face (the portrait also shows her shoulders). */
+  transform: scale(1.6) translateY(3%);
 }
 .message-avatar.user {
   background: var(--surface-tint);
@@ -1009,7 +1014,7 @@ select:focus {
   accent-color: var(--brand-action);
 }
 .server-database-list {
-  max-height: 48dvh;
+  max-height: calc(48dvh / var(--ui-zoom, 1));
   overflow: auto;
   margin-bottom: 16px;
 }
@@ -1696,7 +1701,7 @@ td small {
   border-radius: 15px;
   padding: 28px;
   box-shadow: 0 25px 100px var(--shadow);
-  max-height: 92dvh;
+  max-height: calc(92dvh / var(--ui-zoom, 1));
   overflow: auto;
 }
 .modal-title {
@@ -1725,12 +1730,12 @@ td small {
   flex: 0 0 156px;
   overflow: hidden;
   border-radius: 22px;
-  background: #e5edf7;
+  background: #1c2a3d;
 }
 /* Zoomed toward her face so her mouth is visible when she talks. */
 .hana-profile-portrait .hana-face {
-  transform: scale(1.75) translateY(10%);
-  transform-origin: 50% 42%;
+  transform: scale(1.55) translateY(1%);
+  transform-origin: 50% 47%;
 }
 .hana-profile-says {
   min-height: 1.5em;
@@ -1892,7 +1897,7 @@ textarea {
   animation: spin 1s linear infinite;
 }
 .auth-page {
-  min-height: 100dvh;
+  min-height: calc(100dvh / var(--ui-zoom, 1));
   background:
     radial-gradient(ellipse at 75% 10%, var(--surface-tint) 0, transparent 60%),
     var(--page-bg);
@@ -1963,7 +1968,7 @@ textarea {
   letter-spacing: 0;
 }
 .loading-screen {
-  height: 100dvh;
+  height: calc(100dvh / var(--ui-zoom, 1));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2178,7 +2183,7 @@ textarea {
     font-size: 0.875rem;
     height: 66px;
     min-height: 66px;
-    max-height: min(35dvh, 180px);
+    max-height: min(calc(35dvh / var(--ui-zoom, 1)), 180px);
   }
   .composer textarea::placeholder {
     font-size: 0.8125rem;
@@ -2880,9 +2885,9 @@ textarea {
   margin-left: auto;
 }
 .report-preview-modal {
-  width: min(1480px, calc(100vw - 32px));
+  width: min(1480px, calc(calc(100vw / var(--ui-zoom, 1)) - 32px));
   max-width: 1480px;
-  max-height: 96dvh;
+  max-height: calc(96dvh / var(--ui-zoom, 1));
 }
 .report-preview-modal .modal-title h2 {
   overflow-wrap: anywhere;
@@ -3092,7 +3097,7 @@ textarea {
   color: #586c5f;
 }
 .workbook-grid-scroll {
-  max-height: min(62dvh, 700px);
+  max-height: min(calc(62dvh / var(--ui-zoom, 1)), 700px);
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: #b9c8bd #f2f5f2;
@@ -3339,7 +3344,7 @@ textarea {
     min-height: 200px;
   }
   .report-preview-modal {
-    width: calc(100vw - 24px);
+    width: calc(calc(100vw / var(--ui-zoom, 1)) - 24px);
   }
   .library-tabs {
     width: 100%;
@@ -3494,7 +3499,7 @@ textarea {
 .chat-versions {
   display: grid;
   gap: 14px;
-  max-height: 65vh;
+  max-height: calc(65vh / var(--ui-zoom, 1));
   overflow: auto;
 }
 .version-choice {
@@ -3878,8 +3883,8 @@ textarea {
   right: 24px;
   top: 76px;
   z-index: 9;
-  width: min(450px, calc(100vw - 32px));
-  max-height: calc(100dvh - 100px);
+  width: min(450px, calc(calc(100vw / var(--ui-zoom, 1)) - 32px));
+  max-height: calc(calc(100dvh / var(--ui-zoom, 1)) - 100px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -3955,7 +3960,7 @@ textarea {
   .reply-notifications {
     right: 12px;
     top: 70px;
-    width: min(450px, calc(100vw - 24px));
+    width: min(450px, calc(calc(100vw / var(--ui-zoom, 1)) - 24px));
   }
   .reply-notification {
     padding: 18px 14px;
@@ -4570,6 +4575,6 @@ textarea {
     max-width: none;
   }
   .global-search-results {
-    max-height: 50vh;
+    max-height: calc(50vh / var(--ui-zoom, 1));
   }
 }

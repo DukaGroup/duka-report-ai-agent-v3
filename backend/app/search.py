@@ -34,7 +34,9 @@ def workspace_search(db, user, query):
         if len(results) >= 20:
             break
     reports = db.all(
+        # Reports appear in search (like in Raportet) only once they are finished.
         "SELECT id,title,instructions,snapshot_id FROM reports WHERE user_id=? AND deleted_at IS NULL "
+        "AND status NOT IN ('queued','running') "
         "AND (title LIKE ? ESCAPE '\\' OR instructions LIKE ? ESCAPE '\\' OR content_json LIKE ? ESCAPE '\\') "
         "ORDER BY created_at DESC LIMIT 80", (user["id"], value, value, value))
     count = 0

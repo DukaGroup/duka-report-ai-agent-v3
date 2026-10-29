@@ -219,9 +219,13 @@ test('completion tracking is isolated to each signed-in workspace',()=>{
 });
 test('custom completion notices have Albanian open/dismiss actions and escape conversation titles',async()=>{
   const require=createRequire(new URL('../frontend/package.json',import.meta.url));
-  const source=await readFile(new URL('../frontend/src/ReplyNotifications.tsx',import.meta.url),'utf8');
-  const compiled=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}}).outputText
-    .replace(/from "([^"]+)"/g,(_,name)=>`from ${JSON.stringify(pathToFileURL(require.resolve(name)).href)}`);
+  const compile=async(file,local={})=>{
+    const source=await readFile(new URL('../frontend/src/'+file,import.meta.url),'utf8');
+    return ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,jsx:ts.JsxEmit.ReactJSX}}).outputText
+      .replace(/from "([^"]+)"/g,(_,name)=>`from ${JSON.stringify(local[name]||pathToFileURL(require.resolve(name)).href)}`);
+  };
+  const scale=await compile('uiScale.ts');
+  const compiled=await compile('ReplyNotifications.tsx',{'./uiScale':`data:text/javascript;base64,${Buffer.from(scale).toString('base64')}`});
   const {ReplyNotifications}=await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
   const html=renderToStaticMarkup(React.createElement(ReplyNotifications,{items:[{id:'r1',conversationId:'a',title:'<script>private</script>'}],disabled:false,onOpen(){},onDismiss(){}}));
   assert.match(html,/aria-live="polite"/);
