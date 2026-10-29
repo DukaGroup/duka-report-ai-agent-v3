@@ -53,7 +53,7 @@ function seeded(count: number, seed: number) {
   return Array.from({ length: count }, () => [next(), next(), next(), next()]);
 }
 
-/** One-second transformations, with a separate greeting under two seconds. */
+/** A 0.7-second moonrise, half a second becoming Hana, then a short greeting. */
 export default function HanaIntro({
   name,
   mode,
@@ -113,8 +113,8 @@ export default function HanaIntro({
       if (!farewell) {
         for (const [time, next] of [
           [0, "moon"],
-          [200, "transform"],
-          [timing.transformation, "alive"],
+          [timing.rise, "transform"],
+          [timing.speechStart, "alive"],
         ] as const)
           timers.push(window.setTimeout(() => setPhase(next), time));
       }

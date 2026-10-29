@@ -822,16 +822,16 @@
   }
 }
 
-/* One second for the transformation, then a separate 1.7-second greeting. */
+/* A 0.7-second rise, half a second becoming Hana, then a 1.7-second greeting. */
 .hana-intro .intro-scene {
   transition-duration: 0.2s;
 }
 .hana-intro.phase-moon .intro-moon {
-  animation-duration: 0.2s;
+  animation-duration: 0.7s;
 }
 .hana-intro.phase-transform .intro-moon,
 .hana-intro.phase-transform .intro-hana {
-  animation-duration: 0.8s;
+  animation-duration: 0.5s;
   animation-delay: 0s;
 }
 .hana-intro .hana-sway,

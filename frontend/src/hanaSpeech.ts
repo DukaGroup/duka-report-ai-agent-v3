@@ -2,12 +2,14 @@ import type { MouthShape } from "./HanaMouth";
 
 export type IntroMode = "presentation" | "greeting" | "farewell";
 
-/** Transformation and greeting have separate time budgets. */
+/** Moonrise, transformation and greeting have separate time budgets. */
 export function transitionTiming(mode: IntroMode, still = false) {
-  const transformation = still ? 0 : 1000;
-  const speechStart = mode === "farewell" ? 0 : transformation;
+  const rise = still || mode === "farewell" ? 0 : 700;
+  const transformation = still ? 0 : mode === "farewell" ? 1000 : 500;
+  const speechStart = mode === "farewell" ? 0 : rise + transformation;
   const speechEnd = speechStart + 1700;
   return {
+    rise,
     transformation,
     speechStart,
     speechEnd,
