@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.provider import ProviderError, native_error
-from app.subscription_pool import digest, encoded, read_checkpoint
+from app.subscription_pool import COMPACT_LIMIT, context_digest, digest, encoded, read_checkpoint
 from conftest import HEADERS
 from test_claude_subscriptions import claude as claude_fixture, connect_claude
 from test_excel_reports import subscribe, wait_report
@@ -53,25 +53,6 @@ def claude(client, monkeypatch):
                     rate_limit_info=RateLimitInfo(status="rejected", resets_at=int(time.time() + 3600), raw={}),
                     uuid=str(uuid4()),
                     session_id=self.session,
-                )
-                return
-            if '"task":"Compact this continuation checkpoint.' in self.content:
-                yield sdk.AssistantMessage(
-                    content=[
-                        sdk.TextBlock(
-                            text="Working summary: preserve the original cutoff, SAP 400, bank-loan exclusion; inspect full evidence by checkpoint ID."
-                        )
-                    ],
-                    model="fixture",
-                )
-                yield sdk.ResultMessage(
-                    subtype="success",
-                    duration_ms=1,
-                    duration_api_ms=1,
-                    is_error=False,
-                    num_turns=1,
-                    session_id=self.session,
-                    result="Working summary: preserve the original cutoff, SAP 400, bank-loan exclusion; inspect full evidence by checkpoint ID.",
                 )
                 return
             if '"handoff_checkpoint"' in self.content:
@@ -332,7 +313,7 @@ def test_checkpoint_cannot_be_read_from_another_chat_or_member(client, admin):
         )
 
 
-def test_large_context_is_compacted_on_destination_with_complete_archive(client, admin, claude):
+def test_large_context_is_shortened_in_code_with_complete_archive(client, admin, claude):
     from app.db import now
 
     subscribe(client)
@@ -347,18 +328,18 @@ def test_large_context_is_compacted_on_destination_with_complete_archive(client,
     checkpoint = client.app.state.db.one(
         "SELECT * FROM model_checkpoints WHERE scope_id=? ORDER BY created_at DESC", (cid,)
     )
-    compactions = [
-        json.loads(c.received_content)
-        for c in claude
-        if hasattr(c, "received_content") and '"task":"Compact this continuation checkpoint.' in c.received_content
-    ]
-    assert len(compactions) > 1
-    assert "".join(c["chunk"] for c in compactions) == encoded(json.loads(checkpoint["content_json"]))
+    received = [c.received_content for c in claude if hasattr(c, "received_content")]
+    # The handoff costs no extra model call: only the continuing answer is sent.
+    assert len(received) == 1
     assert all(c.options.model == "claude-opus-5-5" for c in claude if hasattr(c, "received_content"))
-    final = json.loads([c.received_content for c in claude if hasattr(c, "received_content")][-1])
+    final = json.loads(received[-1])
     assert final["context"]["full_context_checkpoint"] == checkpoint["id"]
     assert len(encoded(final)) < 30000
-    assert previous in checkpoint["content_json"]
+    assert "Original cutoff includes August 25; SAP 500 excluded." in received[-1]
+    assert "more characters in the checkpoint" in received[-1]
+    # The complete history is archived exactly once, not again in the request.
+    assert checkpoint["content_json"].count(previous) == 1
+    assert "previous_messages" not in json.loads(checkpoint["content_json"])["current_request"]
 
 
 def test_three_chatgpt_two_claude_accounts_are_each_tried_once_in_order(client, admin, claude):
@@ -426,35 +407,43 @@ def test_account_management_is_devs_only_and_preserves_original_credential_home(
     )
 
 
-def test_grant_change_during_compaction_stops_before_transferring_continuation(client, admin, claude, monkeypatch):
-    from app.db import now
-    from app.claude_provider import ClaudeRuntime
-
-    subscribe(client)
-    connect_claude(client)
-    cid = chat(client)
-    client.app.state.db.execute(
-        "INSERT INTO messages VALUES(?,?,?,?,?,?)",
-        (str(uuid4()), cid, "user", "Earlier constraints. " * 6000, "completed", now()),
-    )
-    exhaust(client, "legacy-chatgpt")
-    original = ClaudeRuntime.stream
-
-    async def change_access(self, thread, content, *args, **kwargs):
-        if '"task":"Compact this continuation checkpoint.' in content:
-            client.app.state.db.execute(
-                "INSERT INTO data_access_versions VALUES(?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1",
-                (admin["id"],),
-            )
-            yield {"type": "done", "status": "completed", "text": "Factual summary."}
-        else:
-            async for event in original(self, thread, content, *args, **kwargs):
-                yield event
-
-    monkeypatch.setattr(ClaudeRuntime, "stream", change_access)
-    events = send(client, cid)
-    assert events[-1]["type"] == "error" and "access changed" in events[-1]["message"]
-    assert not [c for c in claude if hasattr(c, "received_content")]
+def test_handoff_digest_keeps_scope_and_marks_omitted_evidence():
+    rows = [{"Partner": f"P{n}", "Balance": n} for n in range(400)]
+    data = {
+        "messages": [{"role": "user", "content": "Use SAP 400 only, include August 25.", "status": "completed"}],
+        "tool_evidence": [
+            {
+                "evidence_id": 7,
+                "request": {
+                    "tool": "query_database",
+                    "arguments": {"source_id": "erp", "company": "SAP 400", "date_to": "2026-08-25"},
+                    "_permission_checks": [["erp", None, "stamp"]],
+                },
+                "response": {
+                    "success": True,
+                    "contentItems": [{"type": "inputText", "text": encoded({"rows": rows, "row_count": 400})}],
+                },
+            }
+        ] * 30,
+        "calculations": [],
+        "existing_reports": [],
+        "previous_report_turns": [],
+        "current_request": '{"new_message":"Continue"}',
+        "unfinished_draft_unverified": "",
+    }
+    context = context_digest("checkpoint-1", data)
+    assert len(encoded(context)) <= COMPACT_LIMIT
+    assert context["full_context_checkpoint"] == "checkpoint-1"
+    assert context["messages"] == data["messages"]
+    assert context["current_request"] == data["current_request"]
+    evidence = context["tool_evidence"][0]
+    assert evidence["evidence_id"] == 7 and evidence["tool"] == "query_database"
+    assert evidence["arguments"] == {"source_id": "erp", "company": "SAP 400", "date_to": "2026-08-25"}
+    assert evidence["result"]["row_count"] == 400
+    assert evidence["result"]["rows"][0] == {"Partner": "P0", "Balance": 0}
+    assert evidence["result"]["rows"][-1].endswith("more items in the checkpoint]")
+    # Permission stamps are internal and never sent to the model.
+    assert "_permission_checks" not in encoded(context)
 
 
 def test_user_can_interrupt_while_destination_is_continuing(client, admin, claude, monkeypatch):

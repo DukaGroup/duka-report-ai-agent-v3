@@ -25,6 +25,28 @@ ACCOUNT_STATUS_TTL = 60
 STALE_STATUS_GRACE = 15 * 60
 
 
+class LoginState:
+    """What every runtime on one Claude login shares.
+
+    Each chat, report and control runtime is its own object, but they all use
+    the same credential home. Reading login status or the model list starts
+    the CLI, so a new worker (for example after switching from ChatGPT) reuses
+    what another runtime on that login already read.
+    """
+
+    def __init__(self):
+        # (expires_at, status). Only a connected status is cached; an auth
+        # failure during a turn clears it so failover still sees the change.
+        self.account_cache = self.last_connected = None
+        self.model_catalog = None
+        # One status read at a time per login: parallel CLI starts race on the
+        # same credential files and can report a working login as signed out.
+        self.status_lock = asyncio.Lock()
+
+
+LOGINS: dict[str, LoginState] = {}
+
+
 class ClaudeRuntime:
     provider = "claude"
 
@@ -36,11 +58,21 @@ class ClaudeRuntime:
         self.active_turns, self.sessions, self.clients = {}, set(), {}
         self.login, self.login_process, self.login_task = None, None, None
         self.login_lock = asyncio.Lock()
-        self.status_lock = asyncio.Lock()
-        self.model_catalog = None
-        # (expires_at, status). Only a connected status is cached; an auth
-        # failure during a turn clears it so failover still sees the change.
-        self.account_cache = self.last_connected = None
+
+    @property
+    def shared(self):
+        # `home` can be reassigned after construction, so look it up each time.
+        return LOGINS.setdefault(str(self.home), LoginState())
+
+    def _shared_field(name):
+        return property(lambda self: getattr(self.shared, name),
+                        lambda self, value: setattr(self.shared, name, value))
+
+    account_cache = _shared_field("account_cache")
+    last_connected = _shared_field("last_connected")
+    model_catalog = _shared_field("model_catalog")
+    status_lock = property(lambda self: self.shared.status_lock)
+    del _shared_field
 
     def prepare(self):
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -87,8 +119,6 @@ class ClaudeRuntime:
     async def account(self):
         if self.account_cache and self.account_cache[0] > time.monotonic():
             return {**self.account_cache[1], "login": self.login}
-        # One status read at a time: parallel CLI starts race on the same
-        # credential files and can report a working login as signed out.
         async with self.status_lock:
             if self.account_cache and self.account_cache[0] > time.monotonic():
                 return {**self.account_cache[1], "login": self.login}

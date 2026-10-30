@@ -839,6 +839,8 @@ class SubscriptionManager:
         self.workers = {}
         self.worker_leases = set()
         self.worker_lock = asyncio.Lock()
+        # Replaced workers shutting down in the background (see retire).
+        self.retiring = set()
         self.provider_changes = set()
         self.account_changes = set()
         self.report_handler = None
@@ -908,20 +910,25 @@ class SubscriptionManager:
                 self.workers[key] = PooledRuntime(self, user_id, kind, identifier, self.model_for_user(user_id, model))
             self.worker_leases.add(key)
             runtime = self.workers[key]
-        # Never hold the shared registry lock across native I/O. Stopping one
-        # chat must not wait behind another worker's SDK shutdown or eviction.
-        try:
-            for old in retired:
-                old.request_stop()
-            await asyncio.gather(*(old.close() for old in retired))
-        except BaseException:
-            async with self.worker_lock:
-                if self.workers.get(key) is runtime:
-                    self.workers.pop(key, None)
-                    self.worker_leases.discard(key)
-            await runtime.close()
-            raise
+        # Never hold the shared registry lock across native I/O, and never make
+        # the new message wait for a replaced worker (for example the previous
+        # provider's process after a switch) to shut down.
+        for old in retired:
+            self.retire(old)
         return runtime
+
+    def retire(self, runtime):
+        """Stop a worker that left the registry and close it in the background."""
+        async def close():
+            try:
+                await runtime.close()
+            except Exception:
+                logging.getLogger(__name__).warning("A replaced model worker did not close cleanly.", exc_info=True)
+
+        runtime.request_stop()
+        task = asyncio.create_task(close())
+        self.retiring.add(task)
+        task.add_done_callback(self.retiring.discard)
 
     async def release_worker(self, user_id, kind, identifier):
         key = (user_id, kind, identifier)
@@ -1367,7 +1374,7 @@ class SubscriptionManager:
     async def close(self):
         await asyncio.gather(*(r.close() for r in self.pool.controls.values()), return_exceptions=True)
         self.pool.controls.clear()
-        await asyncio.gather(*(r.close() for r in self.workers.values()), return_exceptions=True)
+        await asyncio.gather(*(r.close() for r in self.workers.values()), *self.retiring, return_exceptions=True)
         self.workers.clear()
         self.worker_leases.clear()
         await asyncio.gather(*(r.close() for r in self.runtimes.values()), return_exceptions=True)

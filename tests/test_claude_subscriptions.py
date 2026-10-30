@@ -250,3 +250,31 @@ def test_provider_login_urls_reject_arbitrary_redirects():
     assert not login_url("https://claude.com.evil.example/oauth/authorize")
     assert not login_url("http://claude.com/oauth/authorize")
     assert not login_url("https://evil.example/oauth/authorize")
+
+
+def test_runtimes_on_one_login_share_status_and_models(client, admin, monkeypatch):
+    import asyncio
+    from app.claude_provider import ClaudeRuntime
+
+    reads = []
+
+    async def status(self, *args):
+        reads.append(args)
+        return 0, json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "claude@example.com"}).encode()
+
+    monkeypatch.setattr(ClaudeRuntime, "auth_command", status)
+    manager = client.app.state.manager
+    # A chat worker created after switching providers is a new runtime object.
+    first = manager.runtime(admin["id"], "claude", "chat/one")
+    second = manager.runtime(admin["id"], "claude", "chat/two")
+
+    async def both():
+        return await first.account(), await second.account()
+
+    assert all(result["connected"] for result in asyncio.run(both()))
+    assert reads == [("status",)]
+    first.model_catalog = [{"model": "claude:default"}]
+    assert second.model_catalog == [{"model": "claude:default"}]
+    # Signing out on one runtime is seen by every runtime on that login.
+    first.account_cache = first.last_connected = first.model_catalog = None
+    assert second.model_catalog is None and second.account_cache is None
