@@ -15,7 +15,10 @@ from app.config import Settings
 from app.db import Database
 from app.deployment_security import bootstrap_token, verify_bootstrap
 from app.schemas import Credentials
-from app.security import LoginLimiter, create_session, password_work, token_hash, verify_password
+from app.security import (
+    LoginLimiter, PERSISTENT_COOKIE_SECONDS, PERSISTENT_SESSION_EXPIRY,
+    create_session, make_existing_sessions_persistent, password_work, token_hash, verify_password,
+)
 from conftest import HEADERS
 from test_application import create_member
 from test_deployment_security import production_settings
@@ -210,7 +213,43 @@ def test_session_tokens_are_hashed_expire_and_logout_is_session_scoped(client, a
     assert client.get("/api/conversations").status_code == 401
 
 
-@pytest.mark.parametrize("hours", [0, -1, 169])
+def test_persistent_session_cookie_renews_and_logout_still_revokes(client, admin):
+    assert client.app.state.settings.session_hours == 0
+    token = client.cookies.get("duka_session")
+    row = client.app.state.db.one("SELECT expires_at FROM sessions WHERE token_hash=?", (token_hash(token),))
+    assert row["expires_at"] == PERSISTENT_SESSION_EXPIRY
+    response = client.get("/api/conversations")
+    assert response.status_code == 200
+    assert f"Max-Age={PERSISTENT_COOKIE_SECONDS}" in response.headers["set-cookie"]
+    assert client.cookies.get("duka_session") == token
+    assert client.post("/api/auth/logout", headers=HEADERS).status_code == 200
+    assert client.cookies.get("duka_session") is None
+    assert client.app.state.db.one("SELECT 1 FROM sessions WHERE token_hash=?", (token_hash(token),)) is None
+
+
+def test_existing_valid_sessions_become_persistent_without_reviving_expired_ones(client, admin):
+    db = client.app.state.db
+    token = client.cookies.get("duka_session")
+    expired = "expired-fixture-token"
+    db.execute("UPDATE sessions SET expires_at=? WHERE token_hash=?", (time.time() + 60, token_hash(token)))
+    db.execute("INSERT INTO sessions VALUES(?,?,?)", (token_hash(expired), admin["id"], time.time() - 1))
+    make_existing_sessions_persistent(db)
+    assert db.one("SELECT expires_at FROM sessions WHERE token_hash=?", (token_hash(token),))["expires_at"] == PERSISTENT_SESSION_EXPIRY
+    assert db.one("SELECT expires_at FROM sessions WHERE token_hash=?", (token_hash(expired),))["expires_at"] < time.time()
+
+
+def test_fixed_session_lifetime_remains_available(client, admin):
+    settings = replace(client.app.state.settings, session_hours=24)
+    response = Response()
+    before = time.time()
+    create_session(client.app.state.db, settings, response, admin["id"])
+    token = response.headers["set-cookie"].split(";", 1)[0].split("=", 1)[1]
+    expiry = client.app.state.db.one("SELECT expires_at FROM sessions WHERE token_hash=?", (token_hash(token),))["expires_at"]
+    assert before + 86400 <= expiry <= time.time() + 86400
+    assert "Max-Age=86400" in response.headers["set-cookie"]
+
+
+@pytest.mark.parametrize("hours", [-1, 169])
 def test_unsafe_session_lifetimes_fail_before_creating_storage(tmp_path, hours):
     settings = replace(Settings(), data_dir=tmp_path / "data", env_file=None, session_hours=hours)
     with pytest.raises(ValueError, match="SESSION_HOURS"):

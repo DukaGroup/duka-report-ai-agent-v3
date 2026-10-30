@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   HanaMouth,
   useMouthSpring,
@@ -6,7 +6,9 @@ import {
   type MouthShape,
 } from "./HanaMouth";
 import { mouthAt, PACE, planSpeech } from "./hanaSpeech";
-import { HANA_AVATAR } from "./hanaAvatar";
+import { HANA_PORTRAIT } from "./hanaAvatar";
+import { HanaEyes } from "./HanaEyes";
+import "./hana-intro.css";
 
 const reducedMotion = () =>
   typeof window !== "undefined" &&
@@ -14,8 +16,8 @@ const reducedMotion = () =>
 
 /**
  * Hana's portrait that blinks by herself and, when given a line, says it with
- * the same natural mouth movement as her introduction. `onProgress` receives
- * how much of the line has been said, so a caption can follow along.
+ * the same mouth as her introduction. `onProgress` receives how much of the
+ * line has been said, so a caption can follow along.
  */
 export function HanaFace({
   line,
@@ -27,39 +29,13 @@ export function HanaFace({
   onProgress?: (characters: number) => void;
 }) {
   const still = useMemo(reducedMotion, []);
-  const [blink, setBlink] = useState(false);
   const mouth = useRef<MouthHandle>(null);
+  const pose = useRef<HTMLDivElement>(null);
   const target = useRef<MouthShape>({ open: 0, round: 0 });
   const progress = useRef(onProgress);
   progress.current = onProgress;
 
   useMouthSpring(mouth, target, undefined, !still);
-
-  // Blink at irregular moments, sometimes twice.
-  useEffect(() => {
-    if (still) return;
-    let timer = 0;
-    const timers: number[] = [];
-    const schedule = () => {
-      timer = window.setTimeout(
-        () => {
-          setBlink(true);
-          timers.push(window.setTimeout(() => setBlink(false), 160));
-          if (Math.random() < 0.25) {
-            timers.push(window.setTimeout(() => setBlink(true), 320));
-            timers.push(window.setTimeout(() => setBlink(false), 480));
-          }
-          schedule();
-        },
-        2000 + Math.random() * 3500,
-      );
-    };
-    schedule();
-    return () => {
-      clearTimeout(timer);
-      timers.forEach(clearTimeout);
-    };
-  }, [still]);
 
   // Say the line once, with the caption following her voice.
   useEffect(() => {
@@ -69,9 +45,10 @@ export function HanaFace({
       return;
     }
     const plan = planSpeech(line, PACE.greeting);
-    let frame = 0;
+    let animationFrame = 0;
     let begin = 0;
     let shown = 0;
+    let syllable = 0;
     const tick = (now: number) => {
       begin ||= now;
       const time = now - begin;
@@ -82,29 +59,48 @@ export function HanaFace({
         progress.current?.(count);
       }
       target.current = mouthAt(plan, time);
+      // A small nod lands on some stressed syllables, as people do.
+      while (
+        syllable < plan.syllables.length &&
+        plan.syllables[syllable].start <= time
+      ) {
+        if (plan.syllables[syllable].stressed && syllable % 4 === 0)
+          pose.current?.animate(
+            [
+              { transform: "none" },
+              { transform: "translateY(0.25%) rotate(-0.3deg)" },
+              { transform: "none" },
+            ],
+            { duration: 720, easing: "ease-in-out" },
+          );
+        syllable++;
+      }
       if (time >= plan.total) {
         target.current = { open: 0, round: 0 };
         progress.current?.(line.length);
         return;
       }
-      frame = requestAnimationFrame(tick);
+      animationFrame = requestAnimationFrame(tick);
     };
     const start = window.setTimeout(() => {
-      frame = requestAnimationFrame(tick);
+      animationFrame = requestAnimationFrame(tick);
     }, delay);
     return () => {
       clearTimeout(start);
-      cancelAnimationFrame(frame);
+      cancelAnimationFrame(animationFrame);
       target.current = { open: 0, round: 0 };
     };
   }, [line, delay, still]);
 
   return (
-    <div className={`hana-face${blink ? " blink" : ""}`} aria-hidden="true">
-      <img src={HANA_AVATAR} alt="" draggable={false} />
-      <HanaMouth ref={mouth} />
-      <span className="hana-lid left" />
-      <span className="hana-lid right" />
+    <div className="hana-face" aria-hidden="true">
+      <div className="hana-face-source">
+        <div ref={pose} className="hana-face-pose">
+          <img src={HANA_PORTRAIT} alt="" draggable={false} />
+          <HanaMouth ref={mouth} />
+          <HanaEyes />
+        </div>
+      </div>
     </div>
   );
 }

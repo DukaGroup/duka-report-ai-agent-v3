@@ -181,6 +181,30 @@ def test_midstream_quota_uses_next_same_provider_and_keeps_native_account_bindin
     assert not [c for c in claude if hasattr(c, "received_content")]
 
 
+def test_dropped_native_process_restarts_on_same_account_without_marking_it_unavailable(client, admin):
+    subscribe(client)
+    directory = home(client, "legacy-chatgpt")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "crash-once").touch()
+    cid = chat(client)
+    events = send(client, cid)
+    assert events[-1]["status"] == "completed", events[-1]
+    assert not any(e.get("provider") == "claude" for e in events)
+    account = client.app.state.manager.pool.get("legacy-chatgpt")
+    assert account["unavailable_reason"] is None
+    status = client.get("/api/subscription").json()
+    assert status["connected"] and status["can_respond"]
+
+
+def test_status_probes_account_flagged_without_known_reset(client, admin):
+    subscribe(client)
+    client.app.state.db.execute(
+        "UPDATE subscription_accounts SET unavailable_reason='auth',retry_at=NULL WHERE id='legacy-chatgpt'"
+    )
+    status = client.get("/api/subscription").json()
+    assert status["connected"] and status["can_respond"]
+
+
 def test_cross_provider_handoff_uses_opus55_and_valid_supported_effort(client, admin, claude):
     subscribe(client)
     connect_claude(client)

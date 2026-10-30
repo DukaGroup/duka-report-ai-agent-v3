@@ -1,4 +1,4 @@
-import type { MouthShape } from "./HanaMouth";
+import type { MouthShape } from "./hanaFaceGeometry";
 
 export type IntroMode = "presentation" | "greeting" | "farewell";
 
@@ -204,24 +204,56 @@ export function planSpeech(text: string, pace: Pace): Speech {
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
 
-// How open the mouth should be at a moment of the sentence.
+type MouthKey = { time: number; open: number; round: number };
+// Breaks longer than this (commas, full stops) let the lips close.
+const PAUSE = 50;
+
+/**
+ * Key mouth shapes for a sentence. Each vowel is a peak; between syllables
+ * the mouth only half closes, the way sounds run together in real speech,
+ * and it shuts fully only for m, b and p and in pauses.
+ */
+function mouthKeys(speech: Speech): MouthKey[] {
+  const keys: MouthKey[] = [];
+  const list = speech.syllables;
+  list.forEach((s, i) => {
+    const previous = list[i - 1];
+    const next = list[i + 1];
+    const duration = s.end - s.start;
+    if (!previous || s.start - previous.end > PAUSE)
+      keys.push({ time: s.start, open: 0, round: 0 });
+    else if (s.closedStart) keys.push({ time: s.start, open: 0, round: s.round * 0.5 });
+    keys.push({ time: s.start + duration * 0.42, open: s.open * 0.92, round: s.round });
+    if (!next || next.start - s.end > PAUSE)
+      keys.push({ time: s.end, open: 0, round: 0 });
+    else if (s.closedEnd) keys.push({ time: s.end, open: 0, round: (s.round + next.round) / 2 });
+    else
+      keys.push({
+        time: s.end,
+        open: 0.32 * Math.min(s.open, next.open),
+        round: (s.round + next.round) / 2,
+      });
+  });
+  return keys;
+}
+const keyCache = new WeakMap<Speech, MouthKey[]>();
+
+/** How open and how rounded the mouth is at a moment of the sentence. */
 export function mouthAt(speech: Speech, time: number): MouthShape {
-  for (const s of speech.syllables) {
-    if (time < s.start) return { open: 0, round: 0 };
-    if (time > s.end) continue;
-    const p = (time - s.start) / (s.end - s.start);
-    const from = s.closedStart ? 0 : 0.18;
-    const to = s.closedEnd ? 0 : 0.24;
-    // Open toward the vowel, hold it briefly, then ease into the next sound.
-    const shape =
-      p < 0.38
-        ? from + (1 - from) * smooth(p / 0.38)
-        : p < 0.62
-          ? 1 - 0.08 * ((p - 0.38) / 0.24)
-          : 0.92 + (to - 0.92) * smooth((p - 0.62) / 0.38);
-    // Lips round a little before the vowel and relax after it.
-    const round = s.round * Math.sin(Math.PI * Math.min(1, p * 1.15));
-    return { open: s.open * shape, round };
+  let keys = keyCache.get(speech);
+  if (!keys) {
+    keys = mouthKeys(speech);
+    keyCache.set(speech, keys);
   }
-  return { open: 0, round: 0 };
+  if (!keys.length || time <= keys[0].time || time >= keys[keys.length - 1].time)
+    return { open: 0, round: 0 };
+  let i = 1;
+  while (keys[i].time < time) i++;
+  const a = keys[i - 1],
+    b = keys[i];
+  const t = b.time > a.time ? smooth((time - a.time) / (b.time - a.time)) : 1;
+  return {
+    open: a.open + (b.open - a.open) * t,
+    round: a.round + (b.round - a.round) * t,
+  };
 }

@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from .db import now, uid
-from .progress import public_step
+from .progress import public_step, viewer_event
 from .provider import ProviderError
 from .completion import report_completion
 
@@ -213,7 +213,7 @@ class ChatJobs:
             if acquired:
                 await self.state.manager.release_worker(user, "chat", cid)
 
-    async def events(self, identifier, after=0):
+    async def events(self, identifier, after=0, *, technical=True):
         quiet = 0
         while True:
             # Take the wake-up signal before reading, so an event saved between
@@ -225,7 +225,8 @@ class ChatJobs:
             )
             for row in rows:
                 after = row["seq"]
-                yield json.dumps({**json.loads(row["event_json"]), "seq": after}) + "\n"
+                event = viewer_event(json.loads(row["event_json"]), technical=technical)
+                yield json.dumps({**event, "seq": after}) + "\n"
             job = self.db.one("SELECT status FROM chat_runs WHERE id=?", (identifier,))
             if not job or (job["status"] not in ACTIVE and not rows):
                 self.signals.pop(identifier, None)

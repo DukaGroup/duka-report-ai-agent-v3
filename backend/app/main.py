@@ -50,8 +50,10 @@ from .security import (
     create_session,
     current_user,
     hash_password,
+    make_existing_sessions_persistent,
     public_user,
     password_work,
+    set_session_cookie,
     token_hash,
     verify_password,
 )
@@ -87,6 +89,8 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         app.state.settings = settings
         app.state.db = Database(settings.data_dir / "application.sqlite3")
         app.state.db.initialize()
+        if settings.session_hours == 0:
+            make_existing_sessions_persistent(app.state.db)
         prepare_bootstrap(settings, app.state.db)
         app.state.traffic = TrafficLog(app.state.db)
         app.state.traffic.start()
@@ -167,6 +171,20 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             if request.headers.get("x-duka-request") != "1":
                 return JSONResponse({"detail": "Missing application request header."}, status_code=403)
         response = await call_next(request)
+        token = getattr(request.state, "session_token", None)
+        has_session_cookie = any(
+            name.lower() == b"set-cookie" and value.startswith(f"{COOKIE}=".encode())
+            for name, value in response.raw_headers
+        )
+        if (
+            settings.session_hours == 0
+            and token
+            and request.url.path.startswith("/api/")
+            and request.url.path != "/api/auth/logout"
+            and response.status_code < 400
+            and not has_session_cookie
+        ):
+            set_session_cookie(response, settings, token)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
@@ -392,7 +410,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             "WHERE m.conversation_id=? ORDER BY m.created_at,m.rowid", (conversation_id,)
         )
         from .progress import conversation_progress
-        progress = await asyncio.to_thread(conversation_progress, request.app.state.db, conversation_id)
+        progress = await asyncio.to_thread(conversation_progress, request.app.state.db, conversation_id, user["role"] == "devs")
         for m in messages:
             if m["role"] == "assistant":
                 m["steps"] = progress.get(m["id"], [])
@@ -425,7 +443,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
         owned_conversation(request, conversation_id, user['id'])
         if not app.state.db.one('SELECT id FROM chat_runs WHERE id=? AND conversation_id=? AND user_id=?', (identifier, conversation_id, user['id'])):
             raise HTTPException(404, 'Response not found.')
-        return StreamingResponse(app.state.chat_jobs.events(identifier, after), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
+        return StreamingResponse(app.state.chat_jobs.events(identifier, after, technical=user["role"] == "devs"), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
 
     @app.post("/api/conversations/{conversation_id}/attachments", status_code=201)
     async def upload_attachment(
@@ -569,7 +587,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             if accepted and accepted['conversation_id'] != conversation_id:
                 raise HTTPException(422, 'This request key belongs to another conversation.')
             if accepted:
-                return StreamingResponse(app.state.chat_jobs.events(accepted['run_id']), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
+                return StreamingResponse(app.state.chat_jobs.events(accepted['run_id'], technical=user["role"] == "devs"), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
         selected_model = request.app.state.manager.model_for_user(user["id"], body.model or row["model"])
         selected_provider = request.app.state.manager.model_provider(selected_model)
         runtime = await request.app.state.manager.pool.available_control(selected_provider)
@@ -693,7 +711,7 @@ def create_app(settings=None, manager_factory=SubscriptionManager):
             raise
 
         app.state.chat_jobs.start(assistant_id, runtime, lock)
-        return StreamingResponse(app.state.chat_jobs.events(assistant_id), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
+        return StreamingResponse(app.state.chat_jobs.events(assistant_id, technical=user["role"] == "devs"), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
     def cancel_pending_submission(conversation_id, user):
         # Stop also covers discovery/authentication before a chat is accepted.

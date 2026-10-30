@@ -10,6 +10,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { api } from "./api";
+import { SERVICE_UNAVAILABLE } from "./locale";
 
 type PreviewCell = {
   text: string;
@@ -210,7 +211,7 @@ function WorkbookChart({ chart }: { chart: PreviewChart }) {
   );
 }
 
-export function ReportWorkbookPreview({ reportId }: { reportId: string }) {
+export function ReportWorkbookPreview({ reportId, technical = false }: { reportId: string; technical?: boolean }) {
   const [sheetIndex, setSheetIndex] = useState(0);
   const [rowStart, setRowStart] = useState(1);
   const [columnStart, setColumnStart] = useState(1);
@@ -337,7 +338,7 @@ export function ReportWorkbookPreview({ reportId }: { reportId: string }) {
       {addressError && <p className="workbook-address-error" role="alert">{addressError}</p>}
       {error && (
         <div className="workbook-preview-error" role="alert">
-          <span>{error}</span>
+          <span>{technical ? error : SERVICE_UNAVAILABLE}</span>
           <button type="button" className="button outline small" onClick={() => setRetry((n) => n + 1)}>
             <RotateCcw size={15} /> Provo përsëri
           </button>
@@ -346,6 +347,15 @@ export function ReportWorkbookPreview({ reportId }: { reportId: string }) {
       {loading && <div className="workbook-preview-loading" role="status"><LoaderCircle size={20} className="spin" /> Po hapet fleta…</div>}
       {!loading && !error && sheet && visible && (
         <>
+          {/* Charts come first, above the sheet's cells. */}
+          {visible.charts.length > 0 && (
+            <section className="workbook-charts" aria-label="Grafikët e fletës">
+              <button className="workbook-charts-toggle" type="button" aria-expanded={chartsOpen} onClick={() => setChartsOpen((value) => !value)}>
+                <BarChart3 size={17} /> Grafikët e fletës ({visible.charts.length}) <ChevronDown size={16} className={chartsOpen ? "open" : ""} />
+              </button>
+              {chartsOpen && <div className="workbook-charts-list">{visible.charts.map((chart, index) => <WorkbookChart chart={chart} key={`${index}:${chart.title}`} />)}</div>}
+            </section>
+          )}
           <div className="workbook-preview-meta">
             <strong>{sheet.name}</strong>
             <span>{numberLabel(sheet.row_count)} rreshta · {numberLabel(sheet.column_count)} kolona</span>
@@ -410,14 +420,6 @@ export function ReportWorkbookPreview({ reportId }: { reportId: string }) {
               <button key={`${index}:${item.name}`} type="button" className={index === sheetIndex ? "active" : ""} aria-pressed={index === sheetIndex} onClick={() => changeSheet(index)}>{item.name}</button>
             ))}
           </div>
-          {visible.charts.length > 0 && (
-            <section className="workbook-charts" aria-label="Grafikët e fletës">
-              <button className="workbook-charts-toggle" type="button" aria-expanded={chartsOpen} onClick={() => setChartsOpen((value) => !value)}>
-                <BarChart3 size={17} /> Grafikët e fletës ({visible.charts.length}) <ChevronDown size={16} className={chartsOpen ? "open" : ""} />
-              </button>
-              {chartsOpen && <div className="workbook-charts-list">{visible.charts.map((chart, index) => <WorkbookChart chart={chart} key={`${index}:${chart.title}`} />)}</div>}
-            </section>
-          )}
           <p className="workbook-preview-note">Të gjitha fletët, rreshtat dhe kolonat mund të shfletohen këtu. Shkruani një adresë si Q120 për të shkuar drejtpërdrejt te një qelizë.</p>
         </>
       )}

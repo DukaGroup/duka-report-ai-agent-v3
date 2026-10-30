@@ -299,6 +299,10 @@ const errors: Record<string, string> = {
     "Ndaloni përgjigjen aktuale para se të fshini bisedën.",
   "The subscription connection timed out. Try again.":
     "Lidhja me abonimin tejkaloi kohën e pritjes. Provoni përsëri.",
+  "The subscription connection was interrupted. Try again.":
+    "Lidhja me abonimin u ndërpre për një çast. Provoni përsëri.",
+  "Claude subscription status could not be read. Try again in a moment.":
+    "Gjendja e abonimit Claude nuk u lexua dot. Provoni përsëri pas pak.",
   "Invalid email or password.": "Emaili ose fjalëkalimi është i pasaktë.",
   "Authentication required.": "Duhet të hyni në llogari.",
   "Sign in to continue.": "Hyni në llogari për të vazhduar.",
@@ -355,15 +359,13 @@ export function errorMessage(value: string): string {
   }
   return value;
 }
-// Technical failure details (providers, models, credentials, servers) are only
-// useful to Devs. Everyone else sees a calm, plain explanation instead.
-const TECHNICAL =
-  /subscri|abonim|provider|ofrues|model|reasoning|token|quota|rate.?limit|credential|kredencial|çelës|enkript|server|volum|connector|HTTP|\b[45]\d\d\b|traceback|exception|error:|ChatGPT|Claude|OpenAI|Anthropic|Codex|\bAPI\b|SQL|query|script|timeout|ECONN|socket/i;
+// The only error presidents and managers ever see. Devs see the real error.
+export const SERVICE_UNAVAILABLE =
+  "Shërbimi nuk është i disponueshëm për momentin.";
 
 export function userError(value: string, isDev: boolean): string {
-  const translated = errorMessage(value);
-  if (isDev || !TECHNICAL.test(value + " " + translated)) return translated;
-  return "Hana nuk arriti ta përfundojë këtë tani. Provoni sërish pas pak; nëse vazhdon, njoftoni ekipin teknik.";
+  if (!value) return value;
+  return isDev ? errorMessage(value) : SERVICE_UNAVAILABLE;
 }
 export function auditLabel(action: string): string {
   const events: Record<string, string> = {

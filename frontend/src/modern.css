@@ -1,0 +1,1101 @@
+/*
+ * Modern look: an animated aurora background, glass surfaces, gradient
+ * accents and lively (but calm) motion. Loaded after styles.css and
+ * motion.css; layout stays the same, only the look changes.
+ */
+@property --ring-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+:root {
+  --accent-a: #2f80ed;
+  --accent-b: #6b5cff;
+  --accent-c: #18c2e8;
+  --accent-grad: linear-gradient(
+    135deg,
+    var(--accent-a) 0%,
+    var(--accent-b) 55%,
+    var(--accent-c) 100%
+  );
+  --accent-soft: linear-gradient(
+    135deg,
+    rgba(47, 128, 237, 0.12),
+    rgba(107, 92, 255, 0.1)
+  );
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.75);
+  --glass-edge: rgba(120, 150, 200, 0.22);
+  --lift-shadow:
+    0 18px 40px -18px rgba(30, 60, 140, 0.35),
+    0 4px 14px rgba(30, 60, 140, 0.08);
+  --soft-shadow: 0 8px 24px -12px rgba(30, 60, 140, 0.25);
+  --aurora-1: rgba(80, 140, 255, 0.28);
+  --aurora-2: rgba(140, 100, 255, 0.22);
+  --aurora-3: rgba(30, 200, 230, 0.2);
+  --chart-a: #6b8cff;
+  --chart-b: #2fc0e8;
+}
+:root[data-theme="dark"] {
+  --glass: rgba(20, 34, 54, 0.68);
+  --glass-strong: rgba(22, 38, 60, 0.86);
+  --glass-border: rgba(140, 180, 255, 0.14);
+  --glass-edge: rgba(140, 180, 255, 0.16);
+  --lift-shadow:
+    0 18px 40px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(120, 170, 255, 0.12);
+  --soft-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.6);
+  --aurora-1: rgba(60, 120, 255, 0.22);
+  --aurora-2: rgba(130, 90, 255, 0.18);
+  --aurora-3: rgba(20, 180, 220, 0.14);
+}
+
+/* ---------- Background ---------- */
+.main-shell {
+  position: relative;
+  isolation: isolate;
+  background: var(--page-bg);
+}
+.main-shell::before,
+.main-shell::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 50%;
+  filter: blur(60px);
+}
+.main-shell::before {
+  width: 55%;
+  height: 60%;
+  top: -18%;
+  right: -10%;
+  background: radial-gradient(circle, var(--aurora-1), transparent 70%);
+  animation: aurora-a 22s ease-in-out infinite alternate;
+}
+.main-shell::after {
+  width: 50%;
+  height: 55%;
+  bottom: -20%;
+  left: 10%;
+  background:
+    radial-gradient(circle at 30% 40%, var(--aurora-2), transparent 65%),
+    radial-gradient(circle at 70% 60%, var(--aurora-3), transparent 60%);
+  animation: aurora-b 26s ease-in-out infinite alternate;
+}
+@keyframes aurora-a {
+  to {
+    transform: translate(-18%, 14%) scale(1.15);
+  }
+}
+@keyframes aurora-b {
+  to {
+    transform: translate(22%, -12%) scale(1.1) rotate(20deg);
+  }
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(
+      120% 40% at 0% 0%,
+      rgba(80, 140, 255, 0.25),
+      transparent 60%
+    ),
+    radial-gradient(
+      100% 35% at 100% 100%,
+      rgba(130, 90, 255, 0.22),
+      transparent 65%
+    ),
+    linear-gradient(180deg, #08203d 0%, #0a1834 55%, #121640 100%);
+  box-shadow: 4px 0 30px -10px rgba(5, 20, 50, 0.5);
+}
+.sidebar::after {
+  /* A slow light sweeping down the edge. */
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(120, 200, 255, 0.7),
+    transparent
+  );
+  background-size: 100% 40%;
+  background-repeat: no-repeat;
+  animation: edge-light 6s ease-in-out infinite;
+  z-index: 1;
+}
+@keyframes edge-light {
+  from {
+    background-position: 0 -40%;
+  }
+  to {
+    background-position: 0 140%;
+  }
+}
+.new-chat {
+  position: relative;
+  overflow: hidden;
+  border: 0;
+  border-radius: 14px;
+  background: var(--accent-grad);
+  background-size: 160% 160%;
+  box-shadow: 0 10px 24px -10px rgba(80, 120, 255, 0.8);
+  transition:
+    transform 0.25s var(--ease-out),
+    box-shadow 0.25s;
+  animation: grad-shift 8s ease-in-out infinite;
+}
+.new-chat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 30px -10px rgba(80, 120, 255, 0.95);
+}
+.new-chat::after,
+.button.primary::after,
+.send-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  transition: transform 0.7s var(--ease-out);
+  pointer-events: none;
+}
+.new-chat:hover::after,
+.button.primary:not(:disabled):hover::after,
+.send-button:not(:disabled):hover::after {
+  transform: translateX(120%);
+}
+@keyframes grad-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+.nav-item,
+.recent-item {
+  border-radius: 12px;
+  transition:
+    background-color 0.2s,
+    transform 0.2s var(--ease-out),
+    box-shadow 0.2s;
+}
+.nav-item:hover,
+.recent-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  transform: translateX(3px);
+}
+.nav-item.selected,
+.recent-row.active .recent-item {
+  background: linear-gradient(
+    90deg,
+    rgba(90, 140, 255, 0.32),
+    rgba(130, 100, 255, 0.12)
+  );
+  box-shadow:
+    inset 3px 0 0 #7fd0ff,
+    0 6px 18px -10px rgba(90, 140, 255, 0.8);
+}
+.nav-count {
+  background: rgba(127, 208, 255, 0.18);
+  color: #bfe8ff;
+}
+.profile .avatar {
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.15),
+    0 6px 16px -6px rgba(100, 140, 255, 0.8);
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  background: color-mix(in srgb, var(--page-bg) 62%, transparent);
+  backdrop-filter: blur(16px) saturate(1.3);
+  border-bottom: 1px solid var(--glass-edge);
+  position: relative;
+  z-index: 3;
+}
+.global-search input {
+  border-radius: 14px;
+  background: var(--glass);
+  border-color: var(--glass-edge);
+  transition:
+    box-shadow 0.25s,
+    border-color 0.25s,
+    background-color 0.25s;
+}
+.global-search input:focus {
+  background: var(--glass-strong);
+  border-color: transparent;
+  box-shadow:
+    0 0 0 2px rgba(107, 92, 255, 0.45),
+    0 10px 24px -12px rgba(80, 120, 255, 0.6);
+  outline: none;
+}
+.workspace-tag {
+  border-radius: 999px;
+  background: var(--glass);
+  border-color: var(--glass-edge);
+}
+.workspace-tag > span {
+  background: #2fd27a;
+  box-shadow: 0 0 0 0 rgba(47, 210, 122, 0.6);
+  animation: live-dot 2s ease-out infinite;
+}
+@keyframes live-dot {
+  70% {
+    box-shadow: 0 0 0 6px rgba(47, 210, 122, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 210, 122, 0);
+  }
+}
+
+/* ---------- Headings ---------- */
+.chat-welcome h1,
+.page-content > header h1,
+.page-content h1:first-of-type {
+  background: linear-gradient(
+    110deg,
+    var(--ink) 0%,
+    var(--ink) 35%,
+    var(--accent-b) 55%,
+    var(--accent-c) 70%,
+    var(--ink) 90%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: heading-shine 9s ease-in-out infinite;
+}
+@keyframes heading-shine {
+  0%,
+  100% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0% 0;
+  }
+}
+
+/* ---------- Buttons ---------- */
+.button {
+  border-radius: 12px;
+  transition:
+    transform 0.2s var(--ease-out),
+    box-shadow 0.25s,
+    background-color 0.25s,
+    border-color 0.25s;
+}
+.button:not(:disabled):active,
+.icon-button:not(:disabled):active {
+  transform: scale(0.96);
+}
+.button.primary {
+  position: relative;
+  overflow: hidden;
+  background: var(--accent-grad);
+  background-size: 160% 160%;
+  color: #fff;
+  box-shadow: 0 10px 22px -12px rgba(80, 110, 255, 0.9);
+}
+.button.primary:not(:disabled):hover {
+  background: var(--accent-grad);
+  background-size: 160% 160%;
+  background-position: 100% 50%;
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px -12px rgba(80, 110, 255, 1);
+}
+.button.outline {
+  background: var(--glass);
+  border-color: var(--glass-edge);
+  backdrop-filter: blur(8px);
+}
+.button.outline:not(:disabled):hover {
+  border-color: rgba(107, 92, 255, 0.5);
+  box-shadow: 0 8px 20px -12px rgba(80, 110, 255, 0.7);
+}
+.icon-button {
+  border-radius: 10px;
+  transition:
+    background-color 0.2s,
+    transform 0.2s var(--ease-out),
+    color 0.2s;
+}
+
+/* ---------- Chat ---------- */
+.chat-welcome .suggestions button {
+  position: relative;
+  border-radius: 18px;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--soft-shadow);
+  transition:
+    transform 0.3s var(--ease-out),
+    box-shadow 0.3s,
+    border-color 0.3s;
+}
+.chat-welcome .suggestions button:hover {
+  transform: translateY(-5px);
+  border-color: rgba(107, 92, 255, 0.45);
+  box-shadow: var(--lift-shadow);
+}
+.chat-welcome .suggestions button > svg:first-child {
+  width: 38px;
+  height: 38px;
+  padding: 9px;
+  border-radius: 12px;
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 8px 18px -8px rgba(80, 110, 255, 0.9);
+  transition: transform 0.35s var(--ease-spring);
+}
+.chat-welcome .suggestions button:hover > svg:first-child {
+  transform: rotate(-8deg) scale(1.08);
+}
+.welcome-symbol {
+  border: 0;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.7),
+    0 0 0 6px rgba(107, 92, 255, 0.25),
+    0 14px 30px -10px rgba(80, 110, 255, 0.7);
+  animation: symbol-ring 3.5s ease-in-out infinite;
+}
+@keyframes symbol-ring {
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(255, 255, 255, 0.7),
+      0 0 0 10px rgba(107, 92, 255, 0.12),
+      0 18px 36px -10px rgba(80, 110, 255, 0.8);
+  }
+}
+
+/* Your messages: a gradient bubble. */
+.message.user .message-body {
+  background: var(--accent-grad);
+  background-size: 140% 140%;
+  border: 0;
+  color: #fff;
+  border-radius: 20px 6px 20px 20px;
+  box-shadow: 0 12px 26px -14px rgba(80, 110, 255, 0.9);
+}
+.message.user .message-body .message-author,
+.message.user .message-body .message-author span {
+  color: rgba(255, 255, 255, 0.85);
+}
+.message.user .message-body .markdown,
+.message.user .message-body .markdown * {
+  color: #fff;
+}
+.message.user .message-actions .icon-button {
+  color: rgba(255, 255, 255, 0.85);
+}
+/* Hana's replies: a soft glass card. */
+.message.assistant .message-body {
+  padding: 12px 18px 14px;
+  border-radius: 6px 20px 20px 20px;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--soft-shadow);
+}
+.message-avatar.assistant {
+  border-radius: 50%;
+  box-shadow: 0 6px 14px -6px rgba(8, 35, 64, 0.6);
+}
+
+/* Composer with a living gradient edge when you write. */
+.composer {
+  position: relative;
+  border-radius: 22px;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--glass-strong), var(--glass-strong)) padding-box,
+    linear-gradient(135deg, var(--glass-edge), var(--glass-edge)) border-box;
+  backdrop-filter: blur(16px);
+  box-shadow: var(--lift-shadow);
+}
+.composer:focus-within {
+  background:
+    linear-gradient(var(--glass-strong), var(--glass-strong)) padding-box,
+    conic-gradient(
+        from var(--ring-angle),
+        var(--accent-a),
+        var(--accent-b),
+        var(--accent-c),
+        var(--accent-a)
+      )
+      border-box;
+  animation: ring-spin 4s linear infinite;
+  box-shadow:
+    0 0 0 4px rgba(107, 92, 255, 0.12),
+    var(--lift-shadow);
+}
+@keyframes ring-spin {
+  to {
+    --ring-angle: 360deg;
+  }
+}
+.send-button {
+  position: relative;
+  overflow: hidden;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 8px 18px -8px rgba(80, 110, 255, 0.9);
+}
+.send-button:disabled {
+  filter: grayscale(0.6);
+  opacity: 0.55;
+  box-shadow: none;
+}
+
+/* Markdown in replies */
+.markdown .markdown-table-scroll {
+  border-radius: 14px;
+  border-color: var(--glass-edge);
+  box-shadow: var(--soft-shadow);
+}
+.markdown thead th {
+  background: var(--accent-soft);
+}
+.markdown strong {
+  color: var(--ink);
+}
+
+/* Charts above tables in replies. */
+.answer-chart {
+  margin: 10px 0 14px;
+  padding: 14px 16px 12px;
+  border-radius: 16px;
+  background: linear-gradient(
+    160deg,
+    rgba(107, 92, 255, 0.08),
+    rgba(24, 194, 232, 0.06)
+  );
+  border: 1px solid var(--glass-edge);
+  animation: motion-pop 0.5s var(--ease-out) backwards;
+}
+.answer-chart figcaption {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 10px;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.answer-chart figcaption span {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.75rem;
+}
+.answer-chart ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.answer-chart li {
+  display: grid;
+  grid-template-columns: minmax(80px, 30%) 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.8125rem;
+  animation: motion-from-left 0.45s var(--ease-out) backwards;
+  animation-delay: calc(var(--i) * 0.05s);
+}
+.answer-bar-label {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.answer-bar-track {
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(120, 150, 200, 0.14);
+  overflow: hidden;
+}
+.answer-bar {
+  display: block;
+  width: calc(var(--share) * 100%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--chart-a), var(--chart-b));
+  transform-origin: left center;
+  animation: bar-grow 0.9s var(--ease-out) backwards;
+  animation-delay: calc(0.15s + var(--i) * 0.06s);
+}
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+.answer-bar-value {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.answer-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.answer-col rect {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: col-grow 0.8s var(--ease-out) backwards;
+  animation-delay: calc(var(--i) * 0.06s);
+}
+@keyframes col-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+.answer-axis {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.answer-value {
+  fill: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  animation: motion-fade 0.4s ease-out backwards;
+  animation-delay: calc(0.5s + var(--i) * 0.06s);
+}
+.answer-trend {
+  stroke: #ff8a5b;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  animation: trend-draw 1.4s var(--ease-out) 0.5s backwards;
+}
+@keyframes trend-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+/* ---------- Cards and panels ---------- */
+.panel,
+.report-card,
+.conversation-card,
+.stat-card,
+.source-card,
+.connection-card,
+.info-card,
+.chat-report,
+.empty-state {
+  border-radius: 18px;
+  background: var(--glass);
+  border-color: var(--glass-edge);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--soft-shadow);
+}
+.report-card,
+.conversation-card,
+.stat-card,
+.source-card {
+  transition:
+    transform 0.3s var(--ease-out),
+    box-shadow 0.3s,
+    border-color 0.3s;
+}
+.report-card:hover,
+.conversation-card:hover,
+.stat-card:hover,
+.source-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(107, 92, 255, 0.4);
+  box-shadow: var(--lift-shadow);
+}
+.report-icon {
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 8px 18px -8px rgba(80, 110, 255, 0.9);
+}
+.chat-report {
+  border: 1px solid var(--glass-edge);
+}
+.badge {
+  border-radius: 999px;
+}
+.modal {
+  border-radius: 22px;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px) saturate(1.2);
+  box-shadow: 0 30px 80px -20px rgba(10, 30, 80, 0.55);
+}
+.modal-scrim {
+  backdrop-filter: blur(6px);
+}
+.settings-nav button {
+  border-radius: 12px;
+}
+.select-trigger,
+.select-popover {
+  border-radius: 12px;
+}
+.select-popover {
+  background: var(--glass-strong);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--lift-shadow);
+}
+.app-tooltip {
+  border-radius: 10px;
+  background: linear-gradient(135deg, #172a4a, #2a2468);
+  box-shadow: 0 10px 24px -10px rgba(20, 30, 80, 0.7);
+}
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  transition:
+    border-color 0.2s,
+    box-shadow 0.25s;
+}
+
+/* ---------- Scrollbars ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(107, 92, 255, 0.35) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(107, 92, 255, 0.35) padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 92, 255, 0.6) padding-box;
+}
+
+/* ---------- Sign-in ---------- */
+.auth-card {
+  border-radius: 24px;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 30px 70px -24px rgba(20, 50, 120, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-shell::before,
+  .main-shell::after,
+  .sidebar::after,
+  .composer:focus-within,
+  .new-chat {
+    animation: none !important;
+  }
+}
+
+/* ---------- Drop-down menu (the former sidebar) ---------- */
+.menu-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  height: 44px;
+  margin-right: 14px;
+  padding: 0 6px 0 14px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  background: var(--glass);
+  color: var(--ink);
+  box-shadow: var(--soft-shadow);
+  backdrop-filter: blur(10px);
+  transition:
+    transform 0.25s var(--ease-out),
+    box-shadow 0.25s,
+    border-color 0.25s;
+  order: -1;
+}
+.menu-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(107, 92, 255, 0.45);
+  box-shadow: var(--lift-shadow);
+}
+.menu-icon {
+  position: relative;
+  width: 18px;
+  height: 14px;
+}
+.menu-icon i {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transition:
+    transform 0.35s var(--ease-spring),
+    opacity 0.2s,
+    top 0.35s var(--ease-out);
+}
+.menu-icon i:nth-child(1) {
+  top: 0;
+}
+.menu-icon i:nth-child(2) {
+  top: 6px;
+}
+.menu-icon i:nth-child(3) {
+  top: 12px;
+}
+.menu-button.open .menu-icon i:nth-child(1) {
+  top: 6px;
+  transform: rotate(45deg);
+}
+.menu-button.open .menu-icon i:nth-child(2) {
+  opacity: 0;
+  transform: scaleX(0.2);
+}
+.menu-button.open .menu-icon i:nth-child(3) {
+  top: 6px;
+  transform: rotate(-45deg);
+}
+.menu-mark {
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(107, 92, 255, 0.35);
+}
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(6, 16, 34, 0.35);
+  backdrop-filter: blur(4px);
+  animation: motion-fade 0.25s ease-out both;
+}
+.workspace .sidebar.menu-panel {
+  position: fixed;
+  top: 76px;
+  left: 16px;
+  z-index: 60;
+  width: min(330px, calc(100vw / var(--ui-zoom, 1) - 32px));
+  max-height: calc(100dvh / var(--ui-zoom, 1) - 96px);
+  padding: 22px 18px 0;
+  overflow: auto;
+  border-radius: 24px;
+  border: 1px solid rgba(140, 190, 255, 0.18);
+  box-shadow:
+    0 40px 90px -20px rgba(4, 12, 30, 0.75),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-14px) scale(0.94);
+  transform-origin: 28px -10px;
+  transition:
+    opacity 0.22s ease,
+    transform 0.4s var(--ease-spring),
+    visibility 0s linear 0.4s;
+}
+.workspace .sidebar.menu-panel.open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 0.22s ease,
+    transform 0.45s var(--ease-spring),
+    visibility 0s;
+}
+.menu-panel .sidebar-bottom {
+  position: sticky;
+  bottom: 0;
+  margin-top: 16px;
+  /* Covers items scrolling underneath, blending into the menu colour. */
+  background: linear-gradient(
+    180deg,
+    rgba(14, 24, 60, 0) 0%,
+    rgba(16, 24, 62, 0.96) 22%
+  );
+}
+/* Items cascade in when the menu opens. */
+.menu-panel.open > *,
+.menu-panel.open .recent-row {
+  animation: menu-item-in 0.45s var(--ease-out) backwards;
+}
+.menu-panel.open > :nth-child(2) {
+  animation-delay: 0.05s;
+}
+.menu-panel.open > :nth-child(3) {
+  animation-delay: 0.1s;
+}
+.menu-panel.open > :nth-child(4) {
+  animation-delay: 0.15s;
+}
+.menu-panel.open .recent-row:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.menu-panel.open .recent-row:nth-child(3) {
+  animation-delay: 0.22s;
+}
+.menu-panel.open .recent-row:nth-child(4) {
+  animation-delay: 0.26s;
+}
+.menu-panel.open .recent-row:nth-child(n + 5) {
+  animation-delay: 0.3s;
+}
+@keyframes menu-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+/* The menu always shows its full contents, also on small screens. */
+@media (max-width: 760px) {
+  .workspace .sidebar.menu-panel {
+    padding: 22px 18px 0;
+  }
+  .menu-panel .sidebar-label,
+  .menu-panel .recent,
+  .menu-panel .brand-logo,
+  .menu-panel .brand-sub {
+    display: block;
+  }
+  .menu-panel .brand-compact {
+    display: none;
+  }
+  .menu-panel .brand-lockup {
+    width: 220px;
+  }
+  .menu-panel .nav-count,
+  .menu-panel .sidebar-empty,
+  .menu-panel .profile > span:not(.avatar) {
+    display: initial;
+  }
+  .menu-panel .profile > .icon-button,
+  .menu-panel .new-chat,
+  .menu-panel .nav-item,
+  .menu-panel .profile {
+    display: flex;
+  }
+  .menu-panel .new-chat,
+  .menu-panel .nav-item {
+    font-size: 0.9375rem;
+    justify-content: flex-start;
+    gap: 11px;
+    padding: 12px 14px;
+  }
+  .menu-panel .new-chat > span {
+    display: inline;
+  }
+  .menu-panel .profile {
+    margin: 20px -18px 0;
+    padding: 19px 21px;
+    justify-content: flex-start;
+  }
+}
+
+/* Hana's replies: calmer reading layout.
+   Tighter rhythm, a clear heading scale, compact tables and an avatar that
+   lines up with the card instead of floating beside it. */
+.message.assistant {
+  gap: 12px;
+  max-width: 100%;
+}
+.message.assistant .message-avatar.assistant {
+  width: 34px;
+  height: 34px;
+  margin-top: 4px;
+}
+.message.assistant .message-body {
+  padding: 14px 22px 16px;
+  border-radius: 6px 18px 18px 18px;
+}
+.message.assistant .message-author {
+  margin: 0 0 6px;
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+}
+.message.assistant .activity-timeline {
+  margin: 0 0 10px;
+}
+.message.assistant .markdown {
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.message.assistant .markdown > :first-child {
+  margin-top: 0;
+}
+.message.assistant .markdown > :last-child {
+  margin-bottom: 0;
+}
+.message.assistant .markdown p {
+  margin: 0 0 0.8em;
+}
+.message.assistant .markdown h1,
+.message.assistant .markdown h2,
+.message.assistant .markdown h3,
+.message.assistant .markdown h4 {
+  margin: 1.35em 0 0.5em;
+  color: var(--ink);
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+.message.assistant .markdown h1 {
+  font-size: 1.25rem;
+}
+.message.assistant .markdown h2 {
+  font-size: 1.125rem;
+}
+.message.assistant .markdown h3,
+.message.assistant .markdown h4 {
+  font-size: 1rem;
+}
+.message.assistant .markdown ul,
+.message.assistant .markdown ol {
+  margin: 0 0 0.9em;
+  padding-left: 1.35em;
+}
+.message.assistant .markdown li {
+  margin-bottom: 0.3em;
+  padding-left: 0.15em;
+}
+.message.assistant .markdown li::marker {
+  color: var(--brand-action, var(--muted));
+}
+.message.assistant .markdown li > p {
+  margin-bottom: 0.3em;
+}
+.message.assistant .markdown :not(pre) > code {
+  padding: 0.1em 0.4em;
+  border-radius: 6px;
+  background: var(--surface-soft);
+  font-size: 0.875em;
+}
+.message.assistant .markdown pre {
+  margin: 0 0 1em;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.message.assistant .markdown blockquote {
+  margin: 0 0 1em;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.message.assistant .markdown hr {
+  margin: 1.2em 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.message.assistant .markdown a {
+  color: var(--brand-action);
+  text-underline-offset: 2px;
+}
+
+/* Tables: compact rows, horizontal rules only, figures easy to scan. */
+.message.assistant .markdown-table-scroll {
+  margin: 14px 0 16px;
+  border-radius: 12px;
+}
+.message.assistant .markdown-table-scroll table {
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  border-collapse: collapse;
+}
+.message.assistant .markdown-table-scroll th,
+.message.assistant .markdown-table-scroll td {
+  padding: 9px 14px;
+  border-right: 0;
+}
+.message.assistant .markdown-table-scroll th {
+  min-width: 0;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.message.assistant .markdown-table-scroll tbody tr:nth-child(even) {
+  background: transparent;
+}
+.message.assistant .markdown-table-scroll tbody tr:hover {
+  background: var(--surface-soft);
+}
+.message.assistant .markdown-table-scroll td.numeric {
+  color: var(--ink);
+}
+
+/* Chart above a table: labels take only the room they need. */
+.message.assistant .answer-chart {
+  margin: 12px 0 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+}
+.message.assistant .markdown .answer-chart ol {
+  display: grid;
+  grid-template-columns: fit-content(40%) 1fr auto;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 0;
+}
+/* Rows share one set of columns, so every bar starts at the same place. */
+.message.assistant .markdown .answer-chart li {
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  margin: 0;
+  padding: 0;
+}
+.message.assistant .answer-bar-track {
+  height: 8px;
+}
+
+/* Actions under a finished reply: quiet until the reply is hovered. */
+.message.assistant .assistant-actions {
+  gap: 4px;
+  margin-top: 8px;
+  margin-left: -6px;
+  opacity: 0.55;
+}
+.message.assistant:hover .assistant-actions,
+.message.assistant .assistant-actions:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .message.assistant .assistant-actions {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  .message.assistant .message-avatar.assistant {
+    width: 28px;
+    height: 28px;
+  }
+  .message.assistant .message-body {
+    padding: 12px 14px 14px;
+  }
+}

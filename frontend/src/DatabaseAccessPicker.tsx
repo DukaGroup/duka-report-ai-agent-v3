@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { errorMessage } from "./locale";
+import { errorMessage, SERVICE_UNAVAILABLE } from "./locale";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 export type DatabaseGrant = {
@@ -46,12 +46,16 @@ export function DatabaseAccessPicker({
   onChange,
   allAccess = false,
   disabled = false,
+  technical = false,
 }: {
   value: MemberDataAccess;
   onChange: (value: MemberDataAccess) => void;
   allAccess?: boolean;
   disabled?: boolean;
+  // Devs see the actual errors; Presidents one calm message.
+  technical?: boolean;
 }) {
+  const shown = (text: string) => (technical ? text : SERVICE_UNAVAILABLE);
   const [sources, setSources] = useState<SourceCatalog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -180,7 +184,7 @@ export function DatabaseAccessPicker({
       {loading && <p role="status">Duke ngarkuar databazat…</p>}
       {error && (
         <p role="alert" className="message-warning">
-          {error}
+          {shown(error)}
         </p>
       )}
       {!loading && !error && !sources.length && (
@@ -214,7 +218,9 @@ export function DatabaseAccessPicker({
               </label>
             </legend>
             {source.error && (
-              <p className="message-warning">{errorMessage(source.error)}</p>
+              <p className="message-warning">
+                {shown(errorMessage(source.error))}
+              </p>
             )}
             {legacy(source.id) && !source.catalog_complete && (
               <p>Qasja ekzistuese ruhet. Katalogu nuk u ngarkua plotësisht.</p>
@@ -276,7 +282,7 @@ export function DatabaseAccessPicker({
                       )}
                       {companyErrors[id] && (
                         <p className="message-warning" role="alert">
-                          {companyErrors[id]}
+                          {shown(companyErrors[id])}
                         </p>
                       )}
                       {catalog && (

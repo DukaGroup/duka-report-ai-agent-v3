@@ -20,7 +20,8 @@ import {
   transitionTiming,
   type IntroMode,
 } from "./hanaSpeech";
-import { HANA_AVATAR } from "./hanaAvatar";
+import { HANA_PORTRAIT } from "./hanaAvatar";
+import { HanaEyes } from "./HanaEyes";
 
 export type { IntroMode };
 type Phase = "sky" | "moon" | "transform" | "alive" | "setting" | "leaving";
@@ -71,7 +72,6 @@ export default function HanaIntro({
     still || farewell ? "alive" : "sky",
   );
   const [talking, setTalking] = useState(false);
-  const [blink, setBlink] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const head = useRef<HTMLDivElement>(null);
   const gesture = useRef<HTMLDivElement>(null);
@@ -83,6 +83,8 @@ export default function HanaIntro({
   const stars = useMemo(() => seeded(90, 7), []);
   const sparks = useMemo(() => seeded(28, 31), []);
   const finished = phase === "setting" || phase === "leaving";
+  // Her first blink comes shortly after she starts to speak.
+  const firstBlink = transitionTiming(mode, still).speechStart + 700;
 
   useMouthSpring(
     mouth,
@@ -119,12 +121,6 @@ export default function HanaIntro({
           timers.push(window.setTimeout(() => setPhase(next), time));
       }
       timers.push(
-        window.setTimeout(() => setBlink(true), timing.speechStart + 900),
-      );
-      timers.push(
-        window.setTimeout(() => setBlink(false), timing.speechStart + 1030),
-      );
-      timers.push(
         window.setTimeout(
           () => setPhase(farewell ? "setting" : "leaving"),
           timing.speechEnd,
@@ -133,7 +129,8 @@ export default function HanaIntro({
       const plan = planSpeech(lines[0], PACE[mode]);
       const start = performance.now();
       const speechStart = timing.speechStart + 80;
-      const speechLength = Math.min(plan.total, 1450);
+      // Her natural pace; only a long name is hurried a little to fit.
+      const speechLength = Math.min(plan.total, 1600);
       const tick = (now: number) => {
         const elapsed = now - start - speechStart;
         const active = elapsed >= 0 && elapsed < speechLength;
@@ -148,7 +145,11 @@ export default function HanaIntro({
       head.current?.animate(
         [
           { transform: "none" },
-          { transform: "translateY(0.25%) rotate(-0.35deg)" },
+          {
+            transform: farewell
+              ? "translateY(0.6%) rotate(0.4deg)"
+              : "translateY(0.4%) rotate(-0.35deg)",
+          },
           { transform: "none" },
         ],
         { duration: 1150, delay: timing.speechStart, easing: "ease-in-out" },
@@ -232,12 +233,13 @@ export default function HanaIntro({
                     <div ref={inhale} className="hana-inhale">
                       <div className="hana-breathe">
                         <div
-                          className={`hana-portrait${blink ? " blink" : ""}${talking ? " talking" : ""}`}
+                          className={`hana-portrait${talking ? " talking" : ""}`}
                         >
-                          <img src={HANA_AVATAR} alt="" draggable={false} />
-                          <HanaMouth ref={mouth} />
-                          <span className="hana-lid left" />
-                          <span className="hana-lid right" />
+                          <div className="hana-face-source">
+                            <img src={HANA_PORTRAIT} alt="" draggable={false} />
+                            <HanaMouth ref={mouth} />
+                            <HanaEyes firstBlink={firstBlink} />
+                          </div>
                         </div>
                       </div>
                     </div>

@@ -8,10 +8,14 @@ import { renderToStaticMarkup } from '../frontend/node_modules/react-dom/server.
 import ts from '../frontend/node_modules/typescript/lib/typescript.js';
 
 const require = createRequire(new URL('../frontend/package.json', import.meta.url));
-const source = await readFile(new URL('../frontend/src/MarkdownContent.tsx', import.meta.url), 'utf8');
-const compiled = ts.transpileModule(source, { compilerOptions: {
-  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX,
-} }).outputText.replace(/from "([^"]+)"/g, (_, name) => `from ${JSON.stringify(pathToFileURL(require.resolve(name)).href)}`);
+const compile = async (file, local = {}) => {
+  const source = await readFile(new URL(`../frontend/src/${file}`, import.meta.url), 'utf8');
+  return ts.transpileModule(source, { compilerOptions: {
+    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX,
+  } }).outputText.replace(/from "([^"]+)"/g, (_, name) => `from ${JSON.stringify(local[name] || pathToFileURL(require.resolve(name)).href)}`);
+};
+const chart = await compile('AnswerChart.tsx');
+const compiled = await compile('MarkdownContent.tsx', { './AnswerChart': `data:text/javascript;base64,${Buffer.from(chart).toString('base64')}` });
 const { MarkdownContent } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 export const renderMarkdown = content => renderToStaticMarkup(React.createElement(MarkdownContent, { children: content }));
 export const example = `| Përshkrimi | Llogaritja ime (ALL) | Raporti i financës (ALL) | Diferenca (ALL) |

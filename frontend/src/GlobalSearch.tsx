@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { api } from "./api";
+import { SERVICE_UNAVAILABLE } from "./locale";
 
 export type SearchResult = {
   kind: string;
@@ -124,7 +125,7 @@ export function GlobalSearch({
           aria-label="Rezultatet e kërkimit"
         >
           {loading && <p role="status">Duke kërkuar…</p>}
-          {error && <p role="alert">Kërkimi dështoi. Provoni përsëri.</p>}
+          {error && <p role="alert">{SERVICE_UNAVAILABLE}</p>}
           {!loading && !error && !choices.length && (
             <p>Nuk u gjetën rezultate.</p>
           )}

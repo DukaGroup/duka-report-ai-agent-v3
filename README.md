@@ -128,7 +128,7 @@ The Account settings section and member password recovery form have been removed
 | ----------------------------- | --------------------------- | ------------------------------------------------------------------------ |
 | `ALLOWED_ORIGINS`           | localhost/127.0.0.1 on 8080 | Exact allowed browser origins                                            |
 | `SECURE_COOKIES`            | `false`                   | Use `true` behind HTTPS                                                |
-| `SESSION_HOURS`             | `24`                      | App session lifetime                                                     |
+| `SESSION_HOURS`             | `0`                       | `0` keeps sessions until logout or account revocation; 1–168 sets a fixed lifetime. Persistent browser cookies renew during use. |
 | `VOICE_ENABLED`             | `true`                    | Enable local transcription                                               |
 | `WHISPER_MODEL`             | `base`                    | Local speech model                                                       |
 | `WHISPER_LANGUAGE`          | empty                       | Auto-detect, or ISO code such as `en`/`sq`                           |

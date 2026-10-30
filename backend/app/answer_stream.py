@@ -18,7 +18,7 @@ NOTE_PHASES = ("commentary",)
 
 class AnswerStream:
     # Unlabeled text longer than this is almost certainly the answer itself.
-    HOLD = 320
+    HOLD = 160
 
     def __init__(self):
         self.segments: list[dict] = []

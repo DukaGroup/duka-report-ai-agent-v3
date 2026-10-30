@@ -9,7 +9,6 @@ import {
   Check,
   Database,
   FileText,
-  History,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -25,18 +24,25 @@ import {
   Paperclip,
   Pencil,
   Eye,
+  EyeOff,
   Plug,
   Power,
   RefreshCw,
   LayoutTemplate,
   ShieldX,
-  GitBranch,
   X,
 } from "lucide-react";
 import { GlobalSearch } from "./GlobalSearch";
 import { ChatScrollFollower } from "./chatScroll";
 import HanaIntro, { type IntroMode } from "./HanaIntro";
 import { HanaFace } from "./HanaFace";
+import {
+  HanaStage,
+  orbModeForStage,
+  stageFromActivity,
+  type StageState,
+} from "./HanaStage";
+import { HomePage } from "./HomePage";
 import { ReportProgress } from "./ReportProgress";
 import { useJustCompleted } from "./useJustCompleted";
 import { ActivityTimeline } from "./ActivityTimeline";
@@ -68,7 +74,6 @@ import {
 } from "./composerKeyboard";
 import { loadDrafts, saveDrafts } from "./drafts";
 import { RecoveryForm, MemberRecovery } from "./AccountRecovery";
-import { ChatVersions } from "./ChatVersions";
 import {
   ConversationRuns,
   pendingAssistantMessages,
@@ -77,8 +82,15 @@ import {
   runningReports,
   streamActivity,
   reportActivity,
+  visibleActivity,
 } from "./conversationRuns";
-import { label, errorMessage, auditLabel, userError } from "./locale";
+import {
+  label,
+  errorMessage,
+  auditLabel,
+  userError,
+  SERVICE_UNAVAILABLE,
+} from "./locale";
 import { recoverSubscription } from "./subscriptionRecovery";
 import { buildChatTimeline } from "./chatTimeline";
 import type {
@@ -105,9 +117,11 @@ import { DeviceNotificationSettings } from "./DeviceNotificationSettings";
 import { restoreDeviceNotifications } from "./deviceNotifications";
 import { settingsSections } from "./settings";
 import type { SettingsTab } from "./settings";
-import { HANA_AVATAR_SMALL } from "./hanaAvatar";
+import { HanaAvatar } from "./HanaAvatar";
+import { HanaOrb } from "./HanaOrb";
+import "./auth.css";
 
-type Page = "conversations" | "chat" | "reports" | "settings";
+type Page = "home" | "conversations" | "chat" | "reports" | "settings";
 function cReasoning(c: Conversation) {
   return c.reasoning_effort || "";
 }
@@ -208,6 +222,7 @@ function Auth({
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const card = useRef<HTMLDivElement>(null);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -238,107 +253,127 @@ function Auth({
   }
   if (recovering) return <RecoveryForm onBack={() => setRecovering(false)} />;
   return (
-    <div className="auth-page">
-      <span className="auth-moon" aria-hidden="true" />
-      <div className="auth-brand">
-        <Brand />
-      </div>
-      <div className="auth-card" ref={card}>
-        <span className="eyebrow"> Një pamje më e qartë e biznesit tuaj </span>
-        <h1>
-          {setup ? "Mirë se vini në hapësirën tuaj." : "Mirë se u kthyet."}
-        </h1>
-        <p>
-          {setup
-            ? "Krijoni llogarinë e administratorit. Pasi të hyni, lidhni abonimin tuaj ChatGPT ose Claude."
-            : "Hyni në llogari për të vazhduar bisedat dhe raportet tuaja."}
-        </p>
-        <form onSubmit={submit}>
-          {setup && setupTokenRequired && (
-            <label>
-              Kodi i konfigurimit
-              <input
-                name="setup_token"
-                type="password"
-                required
-                autoFocus
-                autoComplete="off"
-                maxLength={100}
-              />
-              <span className="muted">
-                Merreni kodin nga administratori i serverit.
-              </span>
-            </label>
-          )}
-          {setup && (
-            <label>
-              {" "}
-              Emri juaj{" "}
-              <input
-                name="name"
-                required
-                autoFocus={!setupTokenRequired}
-                autoComplete="name"
-                placeholder="Administratori i hapësirës"
-              />
-            </label>
-          )}
-          <label>
-            {" "}
-            Adresa e emailit{" "}
-            <input
-              name="email"
-              type="email"
-              required
-              autoFocus={!setup}
-              autoComplete="username"
-              placeholder="you@company.com"
-            />
-          </label>
-          <label>
-            {" "}
-            Fjalëkalimi{" "}
-            <input
-              name="password"
-              type="password"
-              required
-              minLength={setup ? 12 : 1}
-              autoComplete={setup ? "new-password" : "current-password"}
-              placeholder={
-                setup
-                  ? "Të paktën 12 karaktere"
-                  : "Fjalëkalimi i llogarisë suaj"
-              }
-            />
-          </label>
-          {error && (
-            <p className="error-box" role="alert">
-              {error}
+    <div className="auth-page auth-redesign">
+      <main className="auth-layout">
+        <header className="auth-brand">
+          <Brand />
+        </header>
+        <section className="auth-form-panel">
+          <div className="auth-card" ref={card}>
+            <span className="auth-kicker">HAPËSIRA JUAJ E PUNËS</span>
+            <h1>{setup ? "Mirë se vini." : "Mirë se u kthyet."}</h1>
+            <p>
+              {setup
+                ? "Krijoni llogarinë e administratorit për të nisur punën."
+                : "Hyni në llogari për të vazhduar bisedat dhe raportet tuaja."}
             </p>
-          )}
-          <button type="submit" className="button primary wide" disabled={busy}>
-            {busy ? (
-              <LoaderCircle className="spin" size={18} />
-            ) : (
-              <ArrowRight size={18} />
-            )}{" "}
-            {setup ? "Krijo hapësirën" : "Hyr"}
-          </button>
-        </form>
-        {!setup && (
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => setRecovering(true)}
-          >
-            Harrova fjalëkalimin
-          </button>
-        )}
-        <div className="auth-note">
-          <ShieldCheck size={16} /> Lidhja e abonimit kryhet përmes OpenAI ose
-          Anthropic.{" "}
-        </div>
-      </div>
+            <form onSubmit={submit}>
+              {setup && setupTokenRequired && (
+                <label>
+                  Kodi i konfigurimit
+                  <input
+                    name="setup_token"
+                    type="password"
+                    required
+                    autoFocus
+                    autoComplete="off"
+                    maxLength={100}
+                  />
+                  <span className="muted">
+                    Merreni kodin nga administratori i serverit.
+                  </span>
+                </label>
+              )}
+              {setup && (
+                <label>
+                  {" "}
+                  Emri juaj{" "}
+                  <input
+                    name="name"
+                    required
+                    autoFocus={!setupTokenRequired}
+                    autoComplete="name"
+                    placeholder="Administratori i hapësirës"
+                  />
+                </label>
+              )}
+              <label>
+                {" "}
+                Adresa e emailit{" "}
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  autoFocus={!setup}
+                  autoComplete="username"
+                  placeholder="emri@kompania.com"
+                  disabled={busy}
+                />
+              </label>
+              <div className="auth-password-heading">
+                <label htmlFor="auth-password">Fjalëkalimi</label>
+                {!setup && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => setRecovering(true)}
+                  >
+                    Harrova fjalëkalimin
+                  </button>
+                )}
+              </div>
+              <div className="auth-password-field">
+                <input
+                  id="auth-password"
+                  name="password"
+                  type={passwordVisible ? "text" : "password"}
+                  required
+                  disabled={busy}
+                  minLength={setup ? 12 : 1}
+                  autoComplete={setup ? "new-password" : "current-password"}
+                  placeholder={
+                    setup ? "Të paktën 12 karaktere" : "Fjalëkalimi juaj"
+                  }
+                />
+                <button
+                  type="button"
+                  className="auth-password-toggle"
+                  aria-label={
+                    passwordVisible
+                      ? "Fshih fjalëkalimin"
+                      : "Shfaq fjalëkalimin"
+                  }
+                  aria-pressed={passwordVisible}
+                  onClick={() => setPasswordVisible((value) => !value)}
+                >
+                  {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {error && (
+                <p className="error-box" role="alert">
+                  {error}
+                </p>
+              )}
+              <button
+                type="submit"
+                className="button primary wide"
+                disabled={busy}
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={18} />
+                ) : (
+                  <ArrowRight size={18} />
+                )}{" "}
+                {setup ? "Krijo hapësirën" : "Hyr"}
+              </button>
+            </form>
+            <div className="auth-note">
+              <ShieldCheck size={16} /> Qasje e sigurt në hapësirën e kompanisë.
+            </div>
+          </div>
+        </section>
+      </main>
       <p className="auth-footer">
         {" "}
         DUKA GROUP <span> Biseda që sjellin qartësi. </span>
@@ -352,7 +387,7 @@ export default function App() {
     [setup, setSetup] = useState(false),
     [setupTokenRequired, setSetupTokenRequired] = useState(false),
     [user, setUser] = useState<User | null>(null);
-  // After login: the full presentation the first time, a short greeting after.
+  // The first presentation runs once; later visits are greeted on the home page.
   const [intro, setIntro] = useState<IntroMode | null>(null);
   const [error, setError] = useState("");
   // While Hana says goodbye the server session is already closed, so requests
@@ -432,7 +467,7 @@ export default function App() {
         onDone={(u) => {
           setUser(u);
           setSetup(false);
-          setIntro(u.intro_pending ? "presentation" : "greeting");
+          setIntro(u.intro_pending ? "presentation" : null);
         }}
       />
     );
@@ -515,8 +550,11 @@ function Workspace({
   useEffect(() => {
     if (hanaProfileOpen) setProfileSaid(0);
   }, [hanaProfileOpen]);
-  const [page, setPage] = useState<Page>("conversations"),
-    [error, setError] = useState("");
+  const [page, setPage] = useState<Page>("home"),
+    [rawError, setError] = useState("");
+  // Presidents and managers see one calm message for every error; Devs see
+  // the actual error.
+  const error = rawError && !isDev ? SERVICE_UNAVAILABLE : rawError;
   const [subscription, setSubscription] =
       useState<Subscription>(initialSubscription),
     [login, setLogin] = useState<Login | null>(null),
@@ -567,9 +605,8 @@ function Workspace({
   const selectedModel = models.find((m) => m.model === model);
   const supportedEfforts = selectedModel?.supported_reasoning_efforts || [];
   // Only Devs choose the reasoning level; everyone else gets the default.
-  const effort = isDev && supportedEfforts.includes(reasoningEffort)
-    ? reasoningEffort
-    : "";
+  const effort =
+    isDev && supportedEfforts.includes(reasoningEffort) ? reasoningEffort : "";
   const effortLabels: Record<string, string> = {
     none: "Pa arsyetim",
     minimal: "Minimal",
@@ -643,8 +680,7 @@ function Workspace({
   const justReady = useJustCompleted(reports);
   const [report, setReport] = useState<Report | null>(null),
     [templates, setTemplates] = useState<Template[]>([]),
-    [datasets, setDatasets] = useState<Dataset[]>([]),
-    [reportForm, setReportForm] = useState(false);
+    [datasets, setDatasets] = useState<Dataset[]>([]);
   const activeReports = runningReports(reports, currentId);
   const reportBusy = activeReports.length > 0;
   const pendingMessages = pendingAssistantMessages(
@@ -654,12 +690,29 @@ function Workspace({
   );
   const pendingDescription = reportBusy
     ? reportActivity(activeReports.find((r) => r.status === "running")?.stage)
-    : (!isDev &&
-      ["Po kaloj te abonimi tjetër…", "Po arsyetoj…"].includes(activity || "")
-        ? "Po mendoj…"
-        : activity) || "Po mendoj…";
+    : visibleActivity(activity, isDev);
   const chatLocked =
     busy || reportBusy || !reportsLoaded || stoppingReports || uploading;
+  // Hana on the stage beside the chat: what she is doing and what she says.
+  const failedRecently = messages.at(-1)?.status === "failed";
+  const stage: { state: StageState; line?: string } =
+    rawError || failedRecently
+      ? {
+          state: "error",
+          line: isDev ? "Diçka nuk shkoi…" : SERVICE_UNAVAILABLE,
+        }
+      : busy || reportBusy || pendingMessages.size > 0
+        ? {
+            state: reportBusy
+              ? "report"
+              : stageFromActivity(pendingDescription),
+            line: pendingDescription,
+          }
+        : justAnswered
+          ? { state: "done" }
+          : draft.trim()
+            ? { state: "listening" }
+            : { state: "idle" };
   const reasoningControl = (
     <label className="reasoning-picker">
       <span className="reasoning-caption">Arsyetimi</span>
@@ -704,7 +757,6 @@ function Workspace({
   const [recoveryMember, setRecoveryMember] = useState<User | null>(null);
   const [deleteMember, setDeleteMember] = useState<User | null>(null);
   const [removingMember, setRemovingMember] = useState(false);
-  const [versionsOpen, setVersionsOpen] = useState(false);
   const [sourceAccess, setSourceAccess] = useState<Source | null>(null);
   const [sourceGrants, setSourceGrants] = useState<string[]>([]);
   const [editSource, setEditSource] = useState<Source | null>(null);
@@ -804,7 +856,6 @@ function Workspace({
   }, [reportTrash, deletedReports, reports]);
 
   const [deleteChat, setDeleteChat] = useState<Conversation | null>(null);
-  const [chatHistory, setChatHistory] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [searchEvent, setSearchEvent] = useState<{
     kind: string;
@@ -838,9 +889,7 @@ function Workspace({
   }, [draft, page, currentId]);
 
   const fail = (e: unknown) =>
-    setError(
-      userError((e as Error).message || "Ndodhi një gabim.", isDev),
-    );
+    setError(userError((e as Error).message || "Ndodhi një gabim.", isDev));
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -1066,7 +1115,8 @@ function Workspace({
   }, [messages, reports, busy, reportBusy, currentId, page]);
   useLayoutEffect(() => {
     const scroll = messageScroll.current;
-    if (page !== "chat" || !scroll || typeof ResizeObserver === "undefined") return;
+    if (page !== "chat" || !scroll || typeof ResizeObserver === "undefined")
+      return;
     const observer = new ResizeObserver(() => {
       scrollFollower.current.update(scroll);
       setShowJump(scrollFollower.current.showsJump(scroll));
@@ -1079,9 +1129,11 @@ function Workspace({
     if (subscriptionRequest.current) return subscriptionRequest.current;
     const request = fetchSubscription().catch((e: unknown) => {
       if (mounted.current)
+        // A failed status check (network blip, busy server) says nothing
+        // about the subscription itself: keep the last known connection and
+        // let the recovery loop re-check, instead of showing it as lost.
         setSubscription((prev) => ({
           ...prev,
-          connected: false,
           available: false,
           error: errorMessage((e as Error).message),
         }));
@@ -1183,18 +1235,12 @@ function Workspace({
       api<Conversation[]>("/conversations").then((items) => {
         replyCompletions.current.observe(items);
         setConversations(items);
-        let saved = "";
-        try {
-          saved = localStorage.getItem(`duka.currentChat.${user.id}`) || "";
-        } catch {
-          /* Optional browser storage. */
-        }
         const url = new URL(location.href);
         const requested =
           url.searchParams.get("notification_user") === user.id
             ? url.searchParams.get("conversation")
             : null;
-        const previous = items.find((c) => c.id === (requested || saved));
+        const previous = items.find((c) => c.id === requested);
         if (url.searchParams.has("notification_user")) {
           url.searchParams.delete("notification_user");
           url.searchParams.delete("conversation");
@@ -1203,7 +1249,6 @@ function Workspace({
         if (requested && !previous)
           setError("Biseda e njoftimit nuk është më e disponueshme.");
         if (previous && !activeId.current) void selectConversation(previous);
-        else if (saved === "__new__" && !activeId.current) setPage("chat");
       }),
       api<Template[]>("/report-templates").then(setTemplates),
       api<Dataset[]>("/datasets").then(setDatasets),
@@ -1554,8 +1599,7 @@ function Workspace({
     ids: string[],
     kind: "trash" | "restore" | "gone",
   ) {
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
-      return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     setLeavingReports((items) => ({
       ...items,
       ...Object.fromEntries(ids.map((id) => [id, kind])),
@@ -2113,7 +2157,7 @@ function Workspace({
     setPage(next);
     setError("");
     if (next === "reports") void loadReports().catch(fail);
-    if (next === "conversations")
+    if (next === "home" || next === "conversations")
       void api<Conversation[]>("/conversations")
         .then(setConversations)
         .catch(fail);
@@ -2125,61 +2169,6 @@ function Workspace({
     navigate("settings");
   }
 
-  async function createReport(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.currentTarget));
-    try {
-      const rows = String(data.rows).trim()
-        ? JSON.parse(String(data.rows))
-        : null;
-      if (rows && !Array.isArray(rows))
-        throw new Error(
-          "Të dhënat manuale duhet të jenë një listë JSON me rreshta.",
-        );
-      const parameters = JSON.parse(
-        String(data.parameters || "{}").trim() || "{}",
-      );
-      let conversationId = page === "chat" ? currentId : null;
-      if (page === "chat" && !conversationId) {
-        setOpeningConversation(true);
-        const next = await api<Conversation>("/conversations", {
-          method: "POST",
-          body: JSON.stringify({
-            model: model || null,
-            reasoning_effort: effort || null,
-          }),
-        });
-        conversationId = next.id;
-        setCurrentId(next.id);
-        activeId.current = next.id;
-      }
-      const result = await api<Report>("/reports", {
-        method: "POST",
-        body: JSON.stringify({
-          title: data.title,
-          template_id: data.template_id,
-          instructions: data.instructions,
-          dataset_id: data.dataset_id || null,
-          rows,
-          parameters,
-          model: model || null,
-          reasoning_effort: effort || null,
-          conversation_id: conversationId,
-        }),
-      });
-      setReportForm(false);
-      setReportTrash(false);
-      reportSelection.current = result.id;
-      setReport(result);
-      setPage("reports");
-      await loadReports();
-      setConversations(await api<Conversation[]>("/conversations"));
-    } catch (e) {
-      fail(e);
-    } finally {
-      setOpeningConversation(false);
-    }
-  }
   async function adminSubmit(
     e: FormEvent<HTMLFormElement>,
     kind: "users" | "sources" | "datasets",
@@ -2357,7 +2346,7 @@ function Workspace({
         setRetryMessageId(null);
         setDraft("");
         setPendingAttachments([]);
-        setPage("conversations");
+        setPage("home");
       }
       setConversations((items) => items.filter((c) => !selected.has(c.id)));
       setReports((items) =>
@@ -2477,6 +2466,7 @@ function Workspace({
 
   const current = conversations.find((c) => c.id === currentId);
   const caption = {
+    home: "Faqja kryesore",
     conversations: "Bisedat",
     chat: current?.title || "Bisedë e re",
     reports: "Biblioteka e raporteve",
@@ -2548,223 +2538,97 @@ function Workspace({
           );
         }}
       />
-      <aside className="sidebar">
-        <button
-          className="brand"
-          aria-label="Kthehu te bisedat"
-          data-tooltip="Kthehu te bisedat"
-          onClick={() => navigate("conversations")}
-        >
-          <Brand light />
-        </button>
-        <button
-          className="new-chat"
-          onClick={newChat}
-          disabled={uploading || openingConversation}
-        >
-          <Plus size={18} /> Bisedë e re <span>↗</span>
-        </button>
-        <nav aria-label="Navigimi kryesor">
-          <button
-            className={page === "reports" ? "nav-item selected" : "nav-item"}
-            onClick={() => navigate("reports")}
-          >
-            <FileText size={19} /> Raportet
-            <span className="nav-count">{reports.length}</span>
-          </button>
-        </nav>
-        <div className="recent">
-          <span className="sidebar-label"> BISEDAT E FUNDIT </span>
-          {conversations.map((c) => (
-            <div
-              key={c.id}
-              className={`recent-row ${currentId === c.id ? "active" : ""}`}
-            >
-              <button
-                disabled={uploading || openingConversation}
-                className={`recent-item ${currentId === c.id ? "active" : ""}`}
-                onClick={() => void selectConversation(c)}
-              >
-                <>
-                  {conversationRunning(c.id) ? (
-                    <LoaderCircle
-                      size={14}
-                      className="spin"
-                      aria-label="Duke përgatitur përgjigjen"
-                    />
-                  ) : (
-                    <MessageSquare size={14} />
-                  )}
-                </>
-                <span>{c.title}</span>
-              </button>
-              <button
-                type="button"
-                className="delete-conversation"
-                disabled={uploading || deleting}
-                aria-label={`Fshi bisedën: ${c.title}`}
-                data-tooltip="Fshi bisedën"
-                onClick={() => {
-                  setError("");
-                  setDeleteChat(c);
-                }}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))}
-          {!conversations.length && (
-            <p className="sidebar-empty"> Bisedat tuaja do të shfaqen këtu. </p>
-          )}
-        </div>
-        <div className="sidebar-bottom">
-          <button
-            className={`nav-item ${page === "settings" ? "selected" : ""}`}
-            data-tooltip="Cilësimet"
-            aria-label="Cilësimet"
-            onClick={() => navigate("settings")}
-          >
-            <Settings size={18} /> Cilësimet
-          </button>
-          <div className="profile">
-            <span className="avatar">
-              {user.name.slice(0, 1).toUpperCase()}
-            </span>
-            <span>
-              {user.name}
-              <small>{label(user.role)}</small>
-            </span>
-            <button
-              className="icon-button"
-              aria-label="Dil nga llogaria"
-              data-tooltip="Dil nga llogaria"
-              disabled={chatLocked}
-              onClick={onGoodbye}
-            >
-              <LogOut size={16} />
-            </button>
-          </div>
-        </div>
-      </aside>
       <div className="main-shell">
-        <header className={`topbar${page === "chat" ? " chat-header" : ""}`}>
-          <GlobalSearch
-            navigation={[
-              { kind: "navigation", id: "reports", title: "Raportet" },
-              { kind: "navigation", id: "conversations", title: "Bisedat" },
-              ...availableSettings.map((section) => ({
-                kind: "navigation",
-                id: section.id,
-                title: section.label,
-              })),
-            ]}
-            onSelect={(result) => {
-              if (result.kind === "conversation") {
-                searchMessage.current = result.message_id || null;
-                if (result.id === currentId && result.message_id) {
-                  const target = document.getElementById(
-                    `message-${result.message_id}`,
-                  );
-                  if (target) {
-                    scrollFollower.current.pause();
-                    target.scrollIntoView({ block: "center" });
-                    searchMessage.current = null;
+        {page !== "home" && (
+          <header className={`topbar${page === "chat" ? " chat-header" : ""}`}>
+            <button
+              type="button"
+              className="home-back"
+              aria-label="Kthehu te faqja kryesore"
+              onClick={() => navigate("home")}
+            >
+              <ArrowLeft size={17} /> <span>Faqja kryesore</span>
+            </button>
+            <GlobalSearch
+              navigation={[
+                { kind: "navigation", id: "reports", title: "Raportet" },
+                { kind: "navigation", id: "conversations", title: "Bisedat" },
+                ...availableSettings.map((section) => ({
+                  kind: "navigation",
+                  id: section.id,
+                  title: section.label,
+                })),
+              ]}
+              onSelect={(result) => {
+                if (result.kind === "conversation") {
+                  searchMessage.current = result.message_id || null;
+                  if (result.id === currentId && result.message_id) {
+                    const target = document.getElementById(
+                      `message-${result.message_id}`,
+                    );
+                    if (target) {
+                      scrollFollower.current.pause();
+                      target.scrollIntoView({ block: "center" });
+                      searchMessage.current = null;
+                    }
                   }
-                }
-                void selectConversation(
-                  conversations.find((item) => item.id === result.id) || {
+                  void selectConversation(
+                    conversations.find((item) => item.id === result.id) || {
+                      id: result.id,
+                      title: result.title,
+                      model: null,
+                      updated_at: "",
+                    },
+                  );
+                } else if (result.kind === "report") {
+                  void openReport({
                     id: result.id,
                     title: result.title,
-                    model: null,
-                    updated_at: "",
-                  },
-                );
-              } else if (result.kind === "report") {
-                void openReport({
-                  id: result.id,
-                  title: result.title,
-                  template_id: "",
-                  status: "",
-                  error: null,
-                  created_at: "",
-                });
-              } else if (result.kind === "source") openSettings("sources");
-              else if (result.kind === "member") openSettings("members");
-              else if (result.kind === "traffic" || result.kind === "log") {
-                setSearchEvent({ kind: result.kind, id: Number(result.id) });
-                openSettings(result.kind === "traffic" ? "traffic" : "logs");
-              } else if (
-                result.id === "reports" ||
-                result.id === "conversations"
-              )
-                navigate(result.id);
-              else openSettings(result.id as SettingsTab);
-            }}
-          />
-          <div className="header-title">
-            {page === "chat" ? (
-              <button
-                className="icon-button"
-                aria-label="Kthehu te bisedat"
-                data-tooltip="Kthehu te bisedat"
-                onClick={() => navigate("conversations")}
-              >
-                <ArrowLeft size={18} />
-              </button>
-            ) : (
-              <>
-                <span className="breadcrumb">Hapësira</span>
-                <span className="slash">/</span>
-              </>
-            )}
-            <span className="page-caption" data-tooltip={caption}>
-              {caption}
-            </span>
-          </div>
-          <div className="topbar-right">
-            {page === "chat" && (
-              <>
-                {isDev && (
-                  <Badge good={subscription.connected}>
-                    {subscription.connected
-                      ? "Abonimi është lidhur"
-                      : "Asnjë abonim i përdorshëm"}
-                  </Badge>
-                )}
-                {currentId && (
-                  <IconButton
-                    label="Versionet e bisedës"
-                    disabled={busy || reportBusy}
-                    onClick={() => setVersionsOpen(true)}
-                  >
-                    <GitBranch size={18} />
-                  </IconButton>
-                )}
-              </>
-            )}
-            <button
-              className="icon-button"
-              aria-label="Historiku i bisedave"
-              data-tooltip="Historiku i bisedave"
-              onClick={() => setChatHistory(true)}
-            >
-              <History size={19} />
-            </button>
-            {page === "chat" ? (
-              <IconButton
-                label="Krijo raport"
-                onClick={() => setReportForm(true)}
-                disabled={chatLocked}
-              >
-                <FileText size={18} />
-              </IconButton>
-            ) : (
-              <span className="workspace-tag">
-                <span /> Duka Group{" "}
+                    template_id: "",
+                    status: "",
+                    error: null,
+                    created_at: "",
+                  });
+                } else if (result.kind === "source") openSettings("sources");
+                else if (result.kind === "member") openSettings("members");
+                else if (result.kind === "traffic" || result.kind === "log") {
+                  setSearchEvent({ kind: result.kind, id: Number(result.id) });
+                  openSettings(result.kind === "traffic" ? "traffic" : "logs");
+                } else if (
+                  result.id === "reports" ||
+                  result.id === "conversations"
+                )
+                  navigate(result.id);
+                else openSettings(result.id as SettingsTab);
+              }}
+            />
+            <div className="header-title">
+              {page !== "chat" && (
+                <>
+                  <span className="breadcrumb">Hapësira</span>
+                  <span className="slash">/</span>
+                </>
+              )}
+              <span className="page-caption" data-tooltip={caption}>
+                {caption}
               </span>
-            )}
-          </div>
-        </header>
+            </div>
+            <div className="topbar-right">
+              {page === "chat" && isDev && (
+                <Badge good={subscription.connected}>
+                  {subscription.connected
+                    ? "Abonimi është lidhur"
+                    : "Asnjë abonim i përdorshëm"}
+                </Badge>
+              )}
+              {page !== "chat" && (
+                <span className="workspace-tag">
+                  <span /> Duka Group{" "}
+                </span>
+              )}
+            </div>
+          </header>
+        )}
         {connectionLost && (
           <div className="notice" role="status">
             Lidhja me serverin u ndërpre. Po rilidhemi automatikisht; puna e
@@ -2783,6 +2647,26 @@ function Workspace({
               <X size={17} />
             </button>
           </div>
+        )}
+        {page === "home" && (
+          <HomePage
+            user={user}
+            conversations={conversations}
+            reportCount={reports.length}
+            busy={uploading || openingConversation || deleting}
+            onNewChat={newChat}
+            onReports={() => navigate("reports")}
+            onSettings={() => navigate("settings")}
+            onLogout={onGoodbye}
+            onConversation={(conversation) =>
+              void selectConversation(conversation)
+            }
+            onDeleteConversation={(conversation) => {
+              setError("");
+              setDeleteChat(conversation);
+            }}
+            conversationRunning={conversationRunning}
+          />
         )}
         {page === "conversations" && (
           <main className="page-content conversation-library">
@@ -2926,6 +2810,7 @@ function Workspace({
         )}
         {page === "chat" && (
           <div className="chat-layout">
+            <HanaStage state={stage.state} line={stage.line} />
             <main className="chat-main">
               <div
                 ref={messageScroll}
@@ -2955,7 +2840,7 @@ function Workspace({
                       data-tooltip="Shiko profilin e Hanës"
                       onClick={() => setHanaProfileOpen(true)}
                     >
-                      <img src={HANA_AVATAR_SMALL} alt="" />
+                      <HanaAvatar />
                     </button>
                     <span className="eyebrow"> BIZNESI JUAJ NË BISEDË </span>
                     <h1>
@@ -3041,7 +2926,21 @@ function Workspace({
                                 data-tooltip="Shiko profilin e Hanës"
                                 onClick={() => setHanaProfileOpen(true)}
                               >
-                                <img src={HANA_AVATAR_SMALL} alt="" />
+                                {/* Only the reply being written moves. */}
+                                <HanaOrb
+                                  mode={
+                                    pendingMessages.has(m.id) ||
+                                    m.status === "streaming"
+                                      ? orbModeForStage(stage.state)
+                                      : m.status === "failed"
+                                        ? "error"
+                                        : "idle"
+                                  }
+                                  live={
+                                    pendingMessages.has(m.id) ||
+                                    m.status === "streaming"
+                                  }
+                                />
                               </button>
                             ) : (
                               <div className="message-avatar user">
@@ -3094,10 +2993,11 @@ function Workspace({
                                   description={pendingDescription}
                                 />
                               )}
-                              {m.role === "assistant" && (
+                              {isDev && m.role === "assistant" && (
                                 <ActivityTimeline
                                   steps={m.steps || []}
                                   active={m.status === "streaming"}
+                                  technical={isDev}
                                 />
                               )}
                               {m.content && (
@@ -3115,6 +3015,16 @@ function Workspace({
                                     : m.content}
                                 </MarkdownContent>
                               )}
+                              {m.role === "assistant" &&
+                                m.content &&
+                                !pendingMessages.has(m.id) &&
+                                !["streaming", "failed"].includes(
+                                  m.status || "",
+                                ) && (
+                                  <div className="message-actions assistant-actions">
+                                    <CopyMessageButton text={m.content} />
+                                  </div>
+                                )}
                               {m.role === "user" && (
                                 <div className="message-actions">
                                   <CopyMessageButton text={m.content} />
@@ -3157,7 +3067,7 @@ function Workspace({
                                   )}
                                 </div>
                               )}
-                              {m.status === "failed" && (
+                              {m.status === "failed" && isDev && (
                                 <span className="message-warning">
                                   {" "}
                                   Përgjigjja nuk përfundoi.{" "}
@@ -3243,7 +3153,7 @@ function Workspace({
                           data-tooltip="Shiko profilin e Hanës"
                           onClick={() => setHanaProfileOpen(true)}
                         >
-                          <img src={HANA_AVATAR_SMALL} alt="" />
+                          <HanaOrb mode="working" />
                         </button>
                         <span className="thought-bubble" aria-hidden="true">
                           <i />
@@ -3369,28 +3279,31 @@ function Workspace({
                   <div className="composer-controls">
                     <div className="composer-left">
                       {isDev && (
-                      <>
-                      <span className="model-picker">
-                        <Sparkles size={14} />
-                        <Select
-                          aria-label={`Modeli ${effectiveProviderName}`}
-                          value={model}
-                          onChange={(e) => setModel(e.target.value)}
-                          disabled={openingConversation || deleting}
-                        >
-                          {!models.length && (
-                            <option value=""> Abonimi {providerName} </option>
-                          )}
-                          {models.map((m) => (
-                            <option key={m.id} value={m.model}>
-                              {m.displayName}
-                            </option>
-                          ))}
-                        </Select>
-                      </span>
-                      {reasoningControl}
-                      <span className="composer-divider" />
-                      </>
+                        <>
+                          <span className="model-picker">
+                            <Sparkles size={14} />
+                            <Select
+                              aria-label={`Modeli ${effectiveProviderName}`}
+                              value={model}
+                              onChange={(e) => setModel(e.target.value)}
+                              disabled={openingConversation || deleting}
+                            >
+                              {!models.length && (
+                                <option value="">
+                                  {" "}
+                                  Abonimi {providerName}{" "}
+                                </option>
+                              )}
+                              {models.map((m) => (
+                                <option key={m.id} value={m.model}>
+                                  {m.displayName}
+                                </option>
+                              ))}
+                            </Select>
+                          </span>
+                          {reasoningControl}
+                          <span className="composer-divider" />
+                        </>
                       )}
                       <button
                         type="button"
@@ -3499,6 +3412,7 @@ function Workspace({
                   <>
                     <ThemeSettings />
                     <DeviceNotificationSettings
+                      technical={isDev}
                       userId={user.id}
                       enabled={systemNotifications}
                       onChange={setSystemNotifications}
@@ -4160,14 +4074,6 @@ function Workspace({
               eyebrow="NGA TË DHËNAT TE VENDIMET"
               title="Biblioteka juaj e raporteve."
               text="Një pasqyrë e qartë e rezultateve, gjetjeve dhe hapave të ardhshëm."
-              action={
-                <button
-                  className="button primary"
-                  onClick={() => setReportForm(true)}
-                >
-                  <Plus size={17} /> Krijo raport{" "}
-                </button>
-              }
             />
             <label className="library-search report-search">
               <Search size={17} />
@@ -4378,7 +4284,7 @@ function Workspace({
                     ? "Provoni një fjalë tjetër në kërkim."
                     : reportTrash
                       ? "Raportet e fshira mund t’i riktheni nga kjo pamje."
-                      : "Kërkoni raport direkt në bisedë ose përdorni një model raporti. Raportet e përfunduara ruhen këtu."
+                      : "Kërkoni raport direkt në bisedë. Raportet e përfunduara ruhen këtu."
                 }
               />
             )}
@@ -4564,33 +4470,6 @@ function Workspace({
           <MemberRecovery member={recoveryMember} />
         </Modal>
       )}
-      {versionsOpen && currentId && (
-        <Modal
-          title="Versionet e bisedës"
-          onClose={() => setVersionsOpen(false)}
-        >
-          <ChatVersions
-            id={currentId}
-            onRestore={async () => {
-              const restoredId = currentId;
-              const detail = await api<Conversation & { messages: Message[] }>(
-                `/conversations/${restoredId}`,
-              );
-              drafts.current.delete(restoredId);
-              saveDrafts(user.id, drafts.current);
-              if (activeId.current === restoredId) {
-                setMessages(detail.messages);
-                setDraft("");
-                setPendingAttachments([]);
-                setRetryMessageId(null);
-              }
-              setConversations(await api<Conversation[]>("/conversations"));
-              await loadReports();
-              setVersionsOpen(false);
-            }}
-          />
-        </Modal>
-      )}
       {report && (
         <Modal
           title={report.title}
@@ -4636,7 +4515,11 @@ function Workspace({
               </p>
             )}
             {report.status === "completed" && (
-              <ReportWorkbookPreview key={report.id} reportId={report.id} />
+              <ReportWorkbookPreview
+                key={report.id}
+                reportId={report.id}
+                technical={isDev}
+              />
             )}
             {["queued", "running"].includes(report.status) && (
               <div className="working">
@@ -4791,44 +4674,6 @@ function Workspace({
           </div>
         </Modal>
       )}
-      {chatHistory && (
-        <Modal
-          error={error}
-          title="Bisedat tuaja"
-          onClose={() => setChatHistory(false)}
-        >
-          {conversations.map((c) => (
-            <div className="history-row" key={c.id}>
-              <button
-                className="text-button history-title"
-                disabled={uploading || deleting}
-                onClick={() => {
-                  setChatHistory(false);
-                  void selectConversation(c);
-                }}
-              >
-                <MessageSquare size={16} />
-                <span>{c.title}</span>
-              </button>
-              <button
-                className="delete-conversation"
-                aria-label={`Fshi bisedën: ${c.title}`}
-                data-tooltip={`Fshi bisedën: ${c.title}`}
-                disabled={uploading || deleting}
-                onClick={() => {
-                  setChatHistory(false);
-                  setDeleteChat(c);
-                }}
-              >
-                <Trash2 size={17} />
-              </button>
-            </div>
-          ))}
-          {!conversations.length && (
-            <p className="muted"> Nuk ka ende biseda të ruajtura. </p>
-          )}
-        </Modal>
-      )}
       {deleteChat && (
         <Modal
           error={error}
@@ -4972,86 +4817,6 @@ function Workspace({
           </div>
         </Modal>
       )}
-      {reportForm && (
-        <Modal
-          error={error}
-          title="Krijo një raport"
-          onClose={() => setReportForm(false)}
-        >
-          <form onSubmit={createReport}>
-            <label>
-              {" "}
-              Titulli i raportit{" "}
-              <input
-                name="title"
-                required
-                placeholder="Pasqyra mujore e performancës"
-              />
-            </label>
-            <label>
-              {" "}
-              Modeli i raportit{" "}
-              <Select name="template_id">
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {label(t.name)}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              {" "}
-              Dataset-i{" "}
-              <Select name="dataset_id">
-                <option value=""> Përdor të dhënat manuale më poshtë </option>
-                {datasets.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                    {!d.enabled ? " — në pritje të lidhjes" : ""}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              {" "}
-              Parametrat e dataset-it (JSON){" "}
-              <textarea
-                name="parameters"
-                rows={2}
-                className="code-input"
-                placeholder={'{"schema_name": "dbo"}'}
-              />
-            </label>
-            <label>
-              {" "}
-              Të dhëna manuale (rreshta JSON){" "}
-              <textarea
-                name="rows"
-                rows={5}
-                className="code-input"
-                placeholder={'[{"month": "September", "revenue": 12500}]'}
-              />
-            </label>
-            <label>
-              {" "}
-              Ku duhet të përqendrohet raporti?{" "}
-              <textarea
-                name="instructions"
-                rows={3}
-                placeholder="Gjetjet kryesore, prirjet dhe hapat e rekomanduar…"
-              />
-            </label>
-            <p className="footnote">
-              {" "}
-              Nuk shtohen të dhëna shembull automatikisht. Pa të dhëna, raporti
-              ruhet në pritje të të dhënave.{" "}
-            </p>
-            <button className="button primary wide">
-              <FileText size={17} /> Përgatit raportin{" "}
-            </button>
-          </form>
-        </Modal>
-      )}
       {addUser && canManageMembers && (
         <Modal
           dismissOnBackdrop={false}
@@ -5097,6 +4862,7 @@ function Workspace({
               </Select>
             </label>
             <DatabaseAccessPicker
+              technical={isDev}
               value={newMemberAccess}
               onChange={setNewMemberAccess}
               allAccess={newMemberRole !== "manager"}
@@ -5117,6 +4883,7 @@ function Workspace({
           }}
         >
           <DatabaseAccessPicker
+            technical={isDev}
             value={memberAccess}
             onChange={setMemberAccess}
             allAccess={accessMember.role !== "manager"}

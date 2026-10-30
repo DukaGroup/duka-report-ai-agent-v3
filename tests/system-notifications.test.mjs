@@ -65,7 +65,7 @@ function worker({owner='alice',reading=false,existing=false,reportCount=0,ready=
 test('background push dispatches a system notification with generic Albanian text and OS sound enabled',async()=>{
   const w=worker();await w.push();
   assert.equal(w.shown.length,1);assert.equal(w.shown[0].title,'Hana');
-  assert.equal(w.shown[0].options.icon,'/brand/hana-avatar-256.webp?v=fe69cfcd1e39');
+  assert.equal(w.shown[0].options.icon,'/brand/hana-portrait-192.png?v=20261029');
   assert.match(w.shown[0].options.body,/Përgjigjja juaj është gati/);
   assert.equal(w.shown[0].options.silent,false);
   assert.equal(w.shown[0].options.tag,'duka-reply-reply-a');

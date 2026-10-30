@@ -28,8 +28,35 @@ PHASES = {"thinking": "Përgatitje e përgjigjes", "reasoning": "Arsyetim",
           "recovering": "Rifillim i punës", "switching": "Kalimi te abonimi tjetër",
           "refreshing": "Përditësim i kontekstit të bisedës"}
 
+CONFIGURATION_PHASES = frozenset(("switching", "refreshing", "recovering"))
+CONFIGURATION_TOOLS = frozenset(("read_handoff_context",))
 
-def public_step(event):
+
+def configuration_event(event):
+    return (
+        event.get("type") in ("activity", "snapshot") and event.get("activity") in CONFIGURATION_PHASES
+        or event.get("type") == "tool" and event.get("name") in CONFIGURATION_TOOLS
+    )
+
+
+def viewer_event(event, technical=False):
+    """Keep public activity while reserving step details for Devs."""
+    if technical:
+        return event
+    shown = {key: value for key, value in event.items()
+             if key not in ("step_id", "step_label", "step_kind")}
+    if not configuration_event(event):
+        return shown
+    # Snapshot text still resets an unfinished answer during failover. Dropping
+    # the event would leave stale text in a member's chat after reconnecting.
+    shown = {key: value for key, value in shown.items()
+             if key not in ("name", "provider", "from_provider", "model")}
+    return {**shown, "type": "snapshot" if event.get("type") == "snapshot" else "activity", "activity": "thinking"}
+
+
+def public_step(event, technical=True):
+    if not technical and configuration_event(event):
+        return None
     kind = event.get("type")
     if kind == "tool":
         label = TOOLS.get(event.get("name"), "Kontroll i të dhënave")
@@ -45,7 +72,9 @@ def public_step(event):
     return None
 
 
-def conversation_progress(db, conversation):
+def conversation_progress(db, conversation, technical=True):
+    if not technical:
+        return {}
     rows = db.all(
         "SELECT e.run_id,e.seq,e.event_json FROM chat_run_events e JOIN messages m ON m.id=e.run_id "
         "WHERE m.conversation_id=? AND json_extract(e.event_json,'$.type') "
@@ -53,7 +82,7 @@ def conversation_progress(db, conversation):
     result = {}
     for row in rows:
         event = json.loads(row["event_json"])
-        step = public_step(event)
+        step = public_step(event, technical=technical)
         if step:
             result.setdefault(row["run_id"], []).append({"id": event.get("step_id", str(row["seq"])), **step})
     return result

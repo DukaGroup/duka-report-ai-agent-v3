@@ -1,5 +1,25 @@
 import type { Message, Report } from "./types";
 
+/** Technical connection/model notices are Devs-only; work progress stays visible. */
+export function visibleActivity(
+  activity: string | undefined,
+  technical = false,
+): string {
+  if (!activity) return "Po mendoj…";
+  if (
+    !technical &&
+    [
+      "Po kaloj te abonimi tjetër…",
+      "Po përditësoj bisedën…",
+      "Po rifilloj hetimin…",
+      "Po rilidhem…",
+      "Po arsyetoj…",
+    ].includes(activity)
+  )
+    return "Po mendoj…";
+  return activity;
+}
+
 /** Public phase labels only; never display native reasoning text or tool names. */
 export function streamActivity(
   event: Record<string, string>,

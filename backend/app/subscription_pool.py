@@ -4,6 +4,7 @@ Native credentials never enter checkpoints. Private model thinking is deliberate
 excluded: messages, tool evidence and durable calculation/report IDs are portable.
 """
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -176,7 +177,9 @@ class SubscriptionPool:
         for account in self.candidates(provider):
             if same_provider_only and account["provider"] != provider:
                 continue
-            if self.eligible(account, ignore_limits=include_exhausted):
+            # Probe accounts whose earlier failure had no known reset time:
+            # one transient error must not report a working login as gone.
+            if self.eligible(account, ignore_limits=include_exhausted, probe_unknown=True):
                 control = self.control(account)
                 try:
                     if (await control.account())["connected"]:
@@ -532,6 +535,9 @@ class PooledRuntime:
         access_revision = revision(self.db, self.user_id)
         partial, checkpoint, data = "", None, None
         original = content
+        # A dropped native process or pipe is not a subscription problem:
+        # restart it on the same account a few times before giving up.
+        transport_retries = 0
         if self.pending_handoff:
             checkpoint, data = self.checkpoint(original, "")
             self.pending_handoff = False
@@ -608,22 +614,35 @@ class PooledRuntime:
                         complete = event
                     yield event
                 if not complete:
-                    raise ProviderError("The subscription stopped without a complete response.")
+                    raise ProviderError("The subscription stopped without a complete response.", category="transport")
                 if complete.get("status") == "completed":
                     self.pool.reset(self.account_record["id"])
                 self.turn_history.append({"request": original, "response": complete.get("text") or partial})
                 return
             except ProviderError as exc:
-                if exc.category not in ("quota", "auth", "model"):
+                transient = (
+                    exc.category == "transport"
+                    and transport_retries < 2
+                    and not self.native_stopped
+                    and self.account_record is not None
+                )
+                if exc.category not in ("quota", "auth", "model") and not transient:
                     raise
                 # The provider keeps unfinished answer text it had not shown yet.
                 partial = getattr(exc, "draft", None) or partial
                 checkpoint, data = self.checkpoint(original, partial)
-                if self.account_record and exc.category != "model":
-                    await self.pool.unavailable(self.account_record, exc)
                 previous = self.provider
                 previous_account = self.account_record["id"] if self.account_record else None
-                if not await self.select():
+                if transient:
+                    transport_retries += 1
+                    # Start a fresh process on the same account; the account
+                    # itself is fine and must not be marked unavailable.
+                    self.native_stopped = True
+                    self.tried.discard(previous_account)
+                    await asyncio.sleep(1.5 * transport_retries)
+                elif self.account_record and exc.category != "model":
+                    await self.pool.unavailable(self.account_record, exc)
+                if not await self.select(previous_account if transient else None):
                     raise ProviderError(
                         "No connected subscription can continue. All configured ChatGPT and Claude accounts are missing, exhausted, or cannot run the required model. Your conversation is saved. Devs can connect another account or retry after the limit resets."
                     ) from exc

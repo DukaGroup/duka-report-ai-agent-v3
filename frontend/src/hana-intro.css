@@ -2,7 +2,11 @@
 .hana-intro {
   --look-x: 0;
   --look-y: 0;
-  --figure: min(calc(64vh / var(--ui-zoom, 1)), 560px, calc(88vw / var(--ui-zoom, 1)));
+  --figure: min(
+    calc(64vh / var(--ui-zoom, 1)),
+    560px,
+    calc(88vw / var(--ui-zoom, 1))
+  );
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -84,11 +88,19 @@
   }
   14% {
     opacity: 0;
-    transform: translate(calc(70vw / var(--ui-zoom, 1)), calc(23vw / var(--ui-zoom, 1))) rotate(18deg);
+    transform: translate(
+        calc(70vw / var(--ui-zoom, 1)),
+        calc(23vw / var(--ui-zoom, 1))
+      )
+      rotate(18deg);
   }
   100% {
     opacity: 0;
-    transform: translate(calc(70vw / var(--ui-zoom, 1)), calc(23vw / var(--ui-zoom, 1))) rotate(18deg);
+    transform: translate(
+        calc(70vw / var(--ui-zoom, 1)),
+        calc(23vw / var(--ui-zoom, 1))
+      )
+      rotate(18deg);
   }
 }
 
@@ -463,103 +475,11 @@
     transform: scale(1.008, 1.016) translateY(-0.4%);
   }
 }
-/* The portrait is cropped at the waist; fade it out instead of a hard edge. */
-/* The portrait is a square photo; its edges fade softly into the night sky. */
-.hana-portrait {
-  -webkit-mask-image: radial-gradient(
-    ellipse 50% 54% at 50% 47%,
-    #000 58%,
-    transparent 100%
-  );
-  mask-image: radial-gradient(
-    ellipse 50% 54% at 50% 47%,
-    #000 58%,
-    transparent 100%
-  );
-}
-.hana-portrait img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  user-select: none;
-}
-/*
- * Talking: a real opening appears between her lips (with teeth and a soft
- * dark inside) while the lower lip and chin drop by the same amount.
- */
-/* A talking portrait used outside the introduction (e.g. her profile). */
+/* A talking portrait used outside the introduction (her profile). */
 .hana-face {
   position: absolute;
   inset: 0;
 }
-.hana-face > img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  user-select: none;
-}
-.hana-mouth {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
-}
-
-/* Blinking eyelids, closed only for a fraction of a second. */
-/* Eyelids (measured on the portrait): skin in her cool lighting, sliding
-   down over the eye and showing a dark lash line when closed. */
-.hana-lid {
-  position: absolute;
-  border-radius: 50% 50% 46% 46% / 72% 72% 28% 28%;
-  background: linear-gradient(
-    180deg,
-    #555261 0%,
-    #686473 45%,
-    #77717e 100%
-  );
-  box-shadow: 0 0 6px 2px rgba(104, 100, 115, 0.8);
-  transform: scaleY(0);
-  transform-origin: 50% 0;
-  transition: transform 0.07s ease-in;
-}
-.hana-lid::after {
-  content: "";
-  position: absolute;
-  left: 1%;
-  right: 1%;
-  bottom: 3%;
-  height: 36%;
-  border-bottom: 0.45em solid #16101a;
-  border-radius: 0 0 50% 50% / 0 0 100% 100%;
-  filter: blur(0.4px);
-}
-.hana-lid.left {
-  left: 36.4%;
-  top: 35.5%;
-  width: 10%;
-  height: 4.4%;
-  transform: rotate(4deg) scaleY(0);
-}
-.hana-lid.right {
-  left: 54.3%;
-  top: 35.5%;
-  width: 10%;
-  height: 4.4%;
-  transform: rotate(-4deg) scaleY(0);
-}
-.hana-portrait.blink .hana-lid.left,
-.hana-face.blink .hana-lid.left {
-  transform: rotate(4deg) scaleY(1);
-}
-.hana-portrait.blink .hana-lid.right,
-.hana-face.blink .hana-lid.right {
-  transform: rotate(-4deg) scaleY(1);
-}
-
 .hana-floaters span {
   position: absolute;
   width: 5px;
@@ -779,7 +699,10 @@
 
 @media (max-width: 760px) {
   .hana-intro {
-    --figure: min(calc(46vh / var(--ui-zoom, 1)), calc(86vw / var(--ui-zoom, 1)));
+    --figure: min(
+      calc(46vh / var(--ui-zoom, 1)),
+      calc(86vw / var(--ui-zoom, 1))
+    );
   }
   .intro-stage {
     flex-direction: column;
@@ -834,8 +757,7 @@
   animation-duration: 0.5s;
   animation-delay: 0s;
 }
-.hana-intro .hana-sway,
-.hana-intro .hana-breathe {
+.hana-intro .hana-sway {
   animation: none;
 }
 .mode-greeting .intro-speech {
@@ -901,4 +823,76 @@
 .phase-setting .intro-skip {
   opacity: 0;
   transition: opacity 0.3s;
+}
+
+/* Her portrait: a square photo framed on her face and shoulders. Mouth and
+   eyelid layers inside .hana-face-source use the photo's 0–100 units. */
+.hana-intro .hana-breathe {
+  animation: hana-presence 4.8s ease-in-out infinite;
+  transform-origin: 50% 85%;
+}
+@keyframes hana-presence {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.002, 1.004);
+  }
+}
+.hana-face {
+  overflow: hidden;
+}
+.hana-face-pose {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 60%;
+}
+/* A 72% square of the photo, from x 14 and y 2. */
+.hana-face-source {
+  position: absolute;
+  width: 138.888889%;
+  height: 138.888889%;
+  left: -19.444444%;
+  top: -2.777778%;
+}
+.hana-face-source img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+/* The talking mouth and blinking eyelids (HanaMouth, HanaEyes). */
+.hana-face-layer {
+  position: absolute;
+  pointer-events: none;
+  visibility: hidden;
+}
+.hana-face-layer canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* The intro portrait fades softly into the night sky. */
+.hana-portrait {
+  overflow: hidden;
+  border-radius: 50%;
+  -webkit-mask-image: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    #000 66%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    #000 66%,
+    transparent 100%
+  );
+}
+.hana-avatar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }

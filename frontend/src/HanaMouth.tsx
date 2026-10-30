@@ -1,470 +1,262 @@
 import {
   forwardRef,
   useEffect,
-  useId,
   useImperativeHandle,
   useRef,
   type MutableRefObject,
 } from "react";
-import { HANA_AVATAR } from "./hanaAvatar";
+import { HANA_PORTRAIT } from "./hanaAvatar";
 import { stepSpring } from "./hanaSpeech";
+import { createFaceWarp, gridMesh, loadImage, watchSize } from "./faceWarp";
+import {
+  displaceMouth,
+  innerLip,
+  LIPS,
+  mouthOutline,
+  seamY,
+  TEETH,
+  type MouthShape,
+  type Point,
+} from "./hanaFaceGeometry";
 
-/*
- * Hana's talking mouth, drawn over her portrait.
- *
- * The painted lips themselves move: thin vertical slices of the upper lip
- * lift a little and slices of the lower lip drop, most in the middle and not
- * at all at the corners, the way a jaw opens. Behind them sits the inside of
- * the mouth: a dark, softly lit interior, upper teeth that stay fixed to the
- * upper jaw (so they show more as the lower lip drops), a tongue that moves
- * with the jaw, and shadows under the upper lip and in the corners.
- *
- * All coordinates are percent of the portrait image (a 100 × 100 viewBox).
- */
-
-export type MouthShape = { open: number; round: number };
-
-// Where her lips meet in the portrait, left to right.
-// Measured on the supplied portrait, following the line between her lips.
-const SEAM: [number, number][] = [
-  [43.4, 55.76],
-  [44.3, 55.86],
-  [45.3, 55.96],
-  [46.3, 55.86],
-  [47.3, 55.66],
-  [48.3, 55.66],
-  [49.2, 55.76],
-  [50.2, 55.76],
-  [51.2, 55.76],
-  [52.1, 55.66],
-  [53.1, 55.76],
-  [54.1, 55.86],
-  [55.1, 55.96],
-  [56.1, 55.76],
-  [56.8, 55.8],
-];
-export const seamY = (x: number) => {
-  if (x <= SEAM[0][0]) return SEAM[0][1];
-  for (let i = 1; i < SEAM.length; i++) {
-    const [x0, y0] = SEAM[i - 1];
-    const [x1, y1] = SEAM[i];
-    if (x <= x1) return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
-  }
-  return SEAM.at(-1)![1];
-};
-const pt = (x: number, y: number) => `${x.toFixed(3)} ${y.toFixed(3)}`;
-
-const LEFT = 43.8;
-const RIGHT = 56.5;
-const CENTER = 50.1;
-// Largest jaw drop and upper lip lift, in percent of the portrait height.
-const MAX_DROP = 1.65;
-const MAX_LIFT = 0.22;
-
-// How much of the opening each point of the mouth gets: none at the corners,
-// most in the middle. Rounded vowels (o, u) gather it toward the centre.
-export function profile(x: number, round: number) {
-  const inset = round * 2.2;
-  const left = LEFT + inset;
-  const right = RIGHT - inset;
-  const t = (x - left) / (right - left);
-  if (t <= 0 || t >= 1) return 0;
-  return Math.pow(Math.sin(Math.PI * t), 1.05 - 0.45 * round);
-}
-
-const SLICE_FROM = 42.5;
-const SLICE_TO = 57.7;
-const LOWER_SLICES = 120;
-const UPPER_SLICES = 56;
-const slices = (count: number) =>
-  Array.from({ length: count }, (_, index) => {
-    const width = (SLICE_TO - SLICE_FROM) / count;
-    const x = SLICE_FROM + index * width;
-    return { x, width, center: x + width / 2 };
-  });
-const LOWER = slices(LOWER_SLICES);
-const UPPER = slices(UPPER_SLICES);
-
-// The painted dark line where the lips meet stays in place (it belongs to the
-// closed mouth); only the lips on either side of it move.
-const LINE = 0.17;
-const seamPoints = (offset: number) =>
-  SEAM.map(([x, y]) => pt(x, y + offset)).join("L");
-// The lower lip and the skin just under it.
-const LOWER_CLIP = `M42.7 ${55.76 + LINE}L${seamPoints(LINE)}L57.4 ${55.8 + LINE}L57.1 57.8L55.3 59.3L50.1 60L45 59.3L43 57.8Z`;
-// The upper lip and a little of the skin above it.
-const UPPER_CLIP = `M42.7 ${55.76 - LINE}L${seamPoints(-LINE)}L57.4 ${55.8 - LINE}L57.1 54.8L54 53.2L50.1 53.5L46 53.2L43 54.8Z`;
-
-function edge(
-  from: number,
-  to: number,
-  steps: number,
-  y: (x: number) => number,
-) {
-  return Array.from({ length: steps + 1 }, (_, i) => {
-    const x = from + ((to - from) * i) / steps;
-    return pt(x, y(x));
-  });
-}
-
-export function mouthGeometry({ open, round }: MouthShape) {
-  const drop = (x: number) => open * MAX_DROP * profile(x, round);
-  const lift = (x: number) => open * MAX_LIFT * profile(x, round);
-  // Slightly larger than the gap so the moving lips overlap its edges, and
-  // thinning to nothing toward the corners, where the lips stay closed.
-  const reach = (x: number) => Math.min(1, profile(x, 0) * 3.5);
-  const overlap = LINE + 0.04;
-  const top = edge(
-    LEFT,
-    RIGHT,
-    32,
-    (x) => seamY(x) - lift(x) - overlap * reach(x),
-  );
-  const bottom = edge(
-    LEFT,
-    RIGHT,
-    32,
-    (x) => seamY(x) + drop(x) + overlap * reach(x),
-  ).reverse();
-  const cavity = `M${top.join("L")}L${bottom.join("L")}Z`;
-  // The inner edges of both lips, softly darkened where they turn inward.
-  const upperEdge = `M${edge(LEFT + 0.5, RIGHT - 0.5, 28, (x) => seamY(x) - LINE - lift(x)).join("L")}`;
-  const lowerEdge = `M${edge(LEFT + 0.5, RIGHT - 0.5, 28, (x) => seamY(x) + LINE + drop(x)).join("L")}`;
-  const centerY = seamY(CENTER);
-  const centerDrop = drop(CENTER);
-  return {
-    cavity,
-    upperEdge,
-    lowerEdge,
-    // The tongue rests low and moves down with the jaw.
-    tongueY: centerY + centerDrop * 0.82 + 0.2,
-    tongueRy: 0.35 + centerDrop * 0.18,
-    // Teeth and the inside only show once the mouth is really open.
-    interior: Math.min(1, open * 3),
-    teeth: Math.min(0.85, Math.max(0, (open - 0.2) / 0.45)),
-    lower: LOWER.map((slice) => drop(slice.center)),
-    upper: UPPER.map((slice) => -lift(slice.center)),
-  };
-}
-
-// Upper incisors and the teeth next to them: fixed to the upper jaw, edges
-// curving up toward the sides like a real dental arch.
-const TEETH_HALF = 4.7;
-const GAP_OFFSETS = [-3.6, -2.45, -1.25, 0, 1.25, 2.45, 3.6];
-const teethBottom = (x: number) => {
-  const d = Math.abs(x - CENTER) / TEETH_HALF;
-  // Each tooth's biting edge is slightly rounded, so the edge dips between them.
-  const notch = GAP_OFFSETS.reduce(
-    (sum, offset) =>
-      sum + 0.05 * Math.exp(-Math.pow((x - CENTER - offset) / 0.26, 2)),
-    0,
-  );
-  return seamY(x) + 0.6 - 0.9 * Math.pow(d, 2.2) - notch;
-};
-const TEETH = (() => {
-  const from = CENTER - TEETH_HALF;
-  const to = CENTER + TEETH_HALF;
-  const top = edge(from, to, 20, (x) => seamY(x) - 1.5);
-  const bottom = edge(from, to, 90, teethBottom).reverse();
-  return `M${top.join("L")}L${bottom.join("L")}Z`;
-})();
-// Faint gaps between the teeth, wider apart toward the sides.
-const TOOTH_GAPS = GAP_OFFSETS.map((offset) => {
-  const x = CENTER + offset;
-  return {
-    d: `M${pt(x, seamY(x) - 1.5)}L${pt(x + offset * 0.02, teethBottom(x) - 0.03)}`,
-    opacity: offset === 0 ? 0.12 : Math.abs(offset) > 3 ? 0.06 : 0.09,
-  };
-});
-
+export type { MouthShape };
 export type MouthHandle = { set: (shape: MouthShape) => void };
 
-export const HanaMouth = forwardRef<MouthHandle, { initial?: MouthShape }>(
-  function HanaMouth({ initial = { open: 0, round: 0 } }, ref) {
-    const id = useId().replace(/:/g, "");
-    const cavity = useRef<SVGPathElement>(null);
-    const cavityClip = useRef<SVGPathElement>(null);
-    const upperEdge = useRef<SVGPathElement>(null);
-    const lowerEdge = useRef<SVGPathElement>(null);
-    const edges = useRef<SVGGElement>(null);
-    const tongue = useRef<SVGEllipseElement>(null);
-    const inside = useRef<SVGGElement>(null);
-    const teeth = useRef<SVGGElement>(null);
-    const lower = useRef<(SVGGElement | null)[]>([]);
-    const upper = useRef<(SVGGElement | null)[]>([]);
-    const first = mouthGeometry(initial);
+/*
+ * Hana's talking mouth, in two layers over her portrait:
+ *
+ * - underneath, the inside of the mouth (canvas 2D): a dark cavity, the
+ *   tongue, lower teeth riding on the jaw, upper teeth fixed to the skull,
+ *   the shadow the upper lip casts on them, and deep corners;
+ * - on top, her own lips, chin and cheeks (WebGL): the photograph as a mesh
+ *   split along the line between the lips. The jaw drops the lower lip and
+ *   the chin together and the upper lip lifts slightly, so the skin
+ *   stretches like skin instead of sliding in strips.
+ *
+ * Teeth are never faded in: they show exactly where the lips part over
+ * them, as in a real mouth.
+ */
 
-    useImperativeHandle(ref, () => ({
-      set(shape) {
-        const g = mouthGeometry(shape);
-        cavity.current?.setAttribute("d", g.cavity);
-        cavityClip.current?.setAttribute("d", g.cavity);
-        upperEdge.current?.setAttribute("d", g.upperEdge);
-        lowerEdge.current?.setAttribute("d", g.lowerEdge);
-        edges.current?.setAttribute("opacity", g.interior.toFixed(3));
-        tongue.current?.setAttribute("cy", g.tongueY.toFixed(3));
-        tongue.current?.setAttribute("ry", g.tongueRy.toFixed(3));
-        inside.current?.setAttribute("opacity", g.interior.toFixed(3));
-        teeth.current?.setAttribute("opacity", g.teeth.toFixed(3));
-        g.lower.forEach((y, i) =>
-          lower.current[i]?.setAttribute(
-            "transform",
-            `translate(0 ${y.toFixed(3)})`,
-          ),
-        );
-        g.upper.forEach((y, i) =>
-          upper.current[i]?.setAttribute(
-            "transform",
-            `translate(0 ${y.toFixed(3)})`,
-          ),
-        );
-      },
-    }));
-
-    const ids = {
-      cavity: `${id}-cavity`,
-      lowerClip: `${id}-lower`,
-      upperClip: `${id}-upper`,
-      lowerMask: `${id}-lower-mask`,
-      upperMask: `${id}-upper-mask`,
-      soft: `${id}-soft`,
-      blur: `${id}-blur`,
-      depth: `${id}-depth`,
-      sides: `${id}-sides`,
-      enamel: `${id}-enamel`,
-      teethSides: `${id}-teeth-sides`,
-      slice: (kind: string, i: number) => `${id}-${kind}-${i}`,
-    };
-    const portrait = (kind: "lower" | "upper", i: number) => (
-      <g clipPath={`url(#${ids.slice(kind, i)})`}>
-        <g
-          clipPath={`url(#${kind === "lower" ? ids.lowerClip : ids.upperClip})`}
-        >
-          <image
-            href={HANA_AVATAR}
-            x="0"
-            y="0"
-            width="100"
-            height="100"
-            preserveAspectRatio="none"
-          />
-        </g>
-      </g>
-    );
-
-    return (
-      <svg
-        className="hana-mouth"
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        <defs>
-          <clipPath id={ids.cavity}>
-            <path ref={cavityClip} d={first.cavity} />
-          </clipPath>
-          <clipPath id={ids.lowerClip}>
-            <path d={LOWER_CLIP} />
-          </clipPath>
-          <clipPath id={ids.upperClip}>
-            <path d={UPPER_CLIP} />
-          </clipPath>
-          {LOWER.map((slice, i) => (
-            <clipPath key={`l${i}`} id={ids.slice("lower", i)}>
-              <rect
-                x={slice.x - 0.02}
-                y="53"
-                width={slice.width + 0.04}
-                height="10"
-              />
-            </clipPath>
-          ))}
-          {UPPER.map((slice, i) => (
-            <clipPath key={`u${i}`} id={ids.slice("upper", i)}>
-              <rect
-                x={slice.x - 0.02}
-                y="51"
-                width={slice.width + 0.04}
-                height="6.5"
-              />
-            </clipPath>
-          ))}
-          <filter id={ids.soft} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1" />
-          </filter>
-          <filter id={ids.blur} x="-30%" y="-80%" width="160%" height="260%">
-            <feGaussianBlur stdDeviation="0.28" />
-          </filter>
-          <mask id={ids.lowerMask}>
-            <ellipse
-              cx={CENTER}
-              cy="56.8"
-              rx="8.5"
-              ry="3.5"
-              fill="#fff"
-              filter={`url(#${ids.soft})`}
-            />
-          </mask>
-          <mask id={ids.upperMask}>
-            <ellipse
-              cx={CENTER}
-              cy="54.8"
-              rx="8.5"
-              ry="2.7"
-              fill="#fff"
-              filter={`url(#${ids.soft})`}
-            />
-          </mask>
-          {/* Darker deep inside, a little warmer toward the lips. */}
-          <linearGradient
-            id={ids.depth}
-            gradientUnits="userSpaceOnUse"
-            x1={CENTER}
-            y1="54.7"
-            x2={CENTER}
-            y2="58.2"
-          >
-            <stop offset="0" stopColor="#180f19" />
-            <stop offset="0.5" stopColor="#251724" />
-            <stop offset="1" stopColor="#392331" />
-          </linearGradient>
-          <linearGradient
-            id={ids.sides}
-            gradientUnits="userSpaceOnUse"
-            x1={LEFT}
-            y1="0"
-            x2={RIGHT}
-            y2="0"
-          >
-            <stop offset="0" stopColor="#140405" stopOpacity="0.85" />
-            <stop offset="0.25" stopColor="#140405" stopOpacity="0" />
-            <stop offset="0.75" stopColor="#140405" stopOpacity="0" />
-            <stop offset="1" stopColor="#140405" stopOpacity="0.85" />
-          </linearGradient>
-          {/* Enamel: shaded where the lip covers it, soft ivory at the edge. */}
-          <linearGradient
-            id={ids.enamel}
-            gradientUnits="userSpaceOnUse"
-            x1={CENTER}
-            y1="54.4"
-            x2={CENTER}
-            y2="56.9"
-          >
-            <stop offset="0" stopColor="#92929e" />
-            <stop offset="0.35" stopColor="#b8bcc5" />
-            <stop offset="0.85" stopColor="#d2d5dc" />
-            <stop offset="1" stopColor="#b1b3be" />
-          </linearGradient>
-          <linearGradient
-            id={ids.teethSides}
-            gradientUnits="userSpaceOnUse"
-            x1={CENTER - TEETH_HALF}
-            y1="0"
-            x2={CENTER + TEETH_HALF}
-            y2="0"
-          >
-            <stop offset="0" stopColor="#3a1214" stopOpacity="0.95" />
-            <stop offset="0.25" stopColor="#3a1214" stopOpacity="0.25" />
-            <stop offset="0.42" stopColor="#3a1214" stopOpacity="0" />
-            <stop offset="0.58" stopColor="#3a1214" stopOpacity="0" />
-            <stop offset="0.75" stopColor="#3a1214" stopOpacity="0.25" />
-            <stop offset="1" stopColor="#3a1214" stopOpacity="0.95" />
-          </linearGradient>
-        </defs>
-
-        {/* Inside of the mouth. */}
-        <g ref={inside} opacity={first.interior}>
-          <path ref={cavity} d={first.cavity} fill={`url(#${ids.depth})`} />
-          <g clipPath={`url(#${ids.cavity})`}>
-            <ellipse
-              ref={tongue}
-              cx={CENTER}
-              cy={first.tongueY}
-              rx="4.4"
-              ry={first.tongueRy}
-              fill="#6d4a5b"
-              opacity="0.45"
-              filter={`url(#${ids.blur})`}
-            />
-            <g ref={teeth} opacity={first.teeth}>
-              <path d={TEETH} fill={`url(#${ids.enamel})`} />
-              {TOOTH_GAPS.map((gap, i) => (
-                <path
-                  key={i}
-                  d={gap.d}
-                  stroke="#9e8e85"
-                  strokeWidth="0.09"
-                  strokeLinecap="round"
-                  opacity={gap.opacity}
-                  fill="none"
-                />
-              ))}
-              <path d={TEETH} fill={`url(#${ids.teethSides})`} />
-            </g>
-            <rect
-              x="40"
-              y="51"
-              width="22"
-              height="12"
-              fill={`url(#${ids.sides})`}
-            />
-          </g>
-        </g>
-
-        {/* The lips, moved slice by slice. */}
-        <g mask={`url(#${ids.lowerMask})`}>
-          {LOWER.map((_, i) => (
-            <g
-              key={i}
-              ref={(el) => {
-                lower.current[i] = el;
-              }}
-              transform={`translate(0 ${first.lower[i].toFixed(3)})`}
-            >
-              {portrait("lower", i)}
-            </g>
-          ))}
-        </g>
-        <g mask={`url(#${ids.upperMask})`}>
-          {UPPER.map((_, i) => (
-            <g
-              key={i}
-              ref={(el) => {
-                upper.current[i] = el;
-              }}
-              transform={`translate(0 ${first.upper[i].toFixed(3)})`}
-            >
-              {portrait("upper", i)}
-            </g>
-          ))}
-        </g>
-        {/* Where each lip turns inward it darkens a little; this softens the
-            line between the lips and the inside of the mouth. */}
-        <g
-          ref={edges}
-          opacity={first.interior}
-          fill="none"
-          stroke="#5a1c1f"
-          strokeLinecap="round"
-          filter={`url(#${ids.blur})`}
-        >
-          <path
-            ref={upperEdge}
-            d={first.upperEdge}
-            strokeWidth="0.25"
-            strokeOpacity="0.2"
-          />
-          <path
-            ref={lowerEdge}
-            d={first.lowerEdge}
-            strokeWidth="0.3"
-            strokeOpacity="0.18"
-          />
-        </g>
-      </svg>
-    );
+const { region } = LIPS;
+const MESH = gridMesh(region, 84, [
+  {
+    // Upper half: from the top of the region down to the lip line, with
+    // rows bunched toward the lips where the detail is.
+    rows: 30,
+    y: (x, t) => region.y + (seamY(x) - region.y) * (1 - (1 - t) ** 1.7),
+    shade: (x, y) => innerLip(x, y, "upper"),
   },
-);
+  {
+    rows: 50,
+    y: (x, t) => seamY(x) + (region.y + region.height - seamY(x)) * t ** 1.7,
+    shade: (x, y) => innerLip(x, y, "lower"),
+  },
+]);
+const SIDES = ["upper", "lower"] as const;
+
+function movedMesh(shape: MouthShape, out: Float32Array) {
+  for (let i = 0; i < MESH.band.length; i++) {
+    const x = MESH.source[i * 2],
+      y = MESH.source[i * 2 + 1];
+    const [dx, dy] = displaceMouth(x, y, SIDES[MESH.band[i]], shape);
+    out[i * 2] = x + dx;
+    out[i * 2 + 1] = y + dy;
+  }
+  return out;
+}
+
+/** The inside of the mouth, drawn only where the lips have parted. */
+function drawInterior(canvas: HTMLCanvasElement, shape: MouthShape) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (shape.open < 0.004) return;
+  const sx = canvas.width / region.width,
+    sy = canvas.height / region.height;
+  ctx.setTransform(sx, 0, 0, sy, -region.x * sx, -region.y * sy);
+  const u = TEETH.unit;
+  const { top, bottom } = mouthOutline(shape);
+  const cx = LIPS.center;
+  const seam = seamY(cx);
+  const middle = Math.floor(top.length / 2);
+  const upperLip = top[middle][1];
+  const lowerLip = bottom[middle][1];
+  const outline = new Path2D();
+  [...top, ...bottom.slice().reverse()].forEach(([x, y], i) =>
+    i ? outline.lineTo(x, y) : outline.moveTo(x, y),
+  );
+  outline.closePath();
+  ctx.save();
+  ctx.clip(outline);
+  const span = LIPS.right - LIPS.left;
+
+  // The cavity: darkest deep inside, warmer toward the lips.
+  const cavity = ctx.createRadialGradient(cx, (seam + lowerLip) / 2, 0, cx, seam, 3.4 * u);
+  cavity.addColorStop(0, "#110709");
+  cavity.addColorStop(0.55, "#2a1216");
+  cavity.addColorStop(1, "#4b2328");
+  ctx.fillStyle = cavity;
+  ctx.fillRect(LIPS.left - u, upperLip - u, span + 2 * u, 4 * u);
+
+  // The tongue rests low, behind the lower teeth, and moves with the jaw.
+  // It fades out softly at every edge; it is never outlined.
+  ctx.save();
+  ctx.translate(cx, lowerLip + 0.15 * u);
+  ctx.scale(2.3 * u, (0.5 + shape.open * 0.3) * u);
+  const tongue = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  tongue.addColorStop(0, "rgba(150, 76, 88, 0.75)");
+  tongue.addColorStop(0.6, "rgba(118, 54, 64, 0.45)");
+  tongue.addColorStop(1, "rgba(80, 34, 42, 0)");
+  ctx.fillStyle = tongue;
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+
+  // Lower teeth ride on the jaw and only just peek over the lower lip, in
+  // the lip's shadow and darker toward the sides.
+  const lowerTop = lowerLip - (0.05 + shape.open * 0.09) * u;
+  const lowerTeeth = new Path2D();
+  for (let i = 0; i <= 24; i++) {
+    const x = cx - 1.9 * u + (3.8 * u * i) / 24;
+    const y = lowerTop + 0.2 * u * ((x - cx) / (1.9 * u)) ** 2 + (seamY(x) - seam);
+    i ? lowerTeeth.lineTo(x, y) : lowerTeeth.moveTo(x, y);
+  }
+  lowerTeeth.lineTo(cx + 1.9 * u, lowerLip + 0.6 * u);
+  lowerTeeth.lineTo(cx - 1.9 * u, lowerLip + 0.6 * u);
+  lowerTeeth.closePath();
+  const lower = ctx.createLinearGradient(0, lowerTop, 0, lowerLip + 0.2 * u);
+  lower.addColorStop(0, "rgba(186, 178, 172, 0.55)");
+  lower.addColorStop(1, "rgba(100, 84, 82, 0.2)");
+  ctx.fillStyle = lower;
+  ctx.fill(lowerTeeth);
+  const lowerSides = ctx.createLinearGradient(cx - 1.9 * u, 0, cx + 1.9 * u, 0);
+  lowerSides.addColorStop(0, "rgba(30, 10, 12, 0.9)");
+  lowerSides.addColorStop(0.35, "rgba(30, 10, 12, 0)");
+  lowerSides.addColorStop(0.65, "rgba(30, 10, 12, 0)");
+  lowerSides.addColorStop(1, "rgba(30, 10, 12, 0.9)");
+  ctx.fillStyle = lowerSides;
+  ctx.fill(lowerTeeth);
+
+  // Upper teeth with a softly rounded biting edge that curves up toward the
+  // sides, like a dental arch.
+  const teeth = new Path2D();
+  const half = TEETH.half;
+  for (let i = 0; i <= 48; i++) {
+    const x = cx - half + (2 * half * i) / 48;
+    i ? teeth.lineTo(x, seamY(x) - 0.8 * u) : teeth.moveTo(x, seamY(x) - 0.8 * u);
+  }
+  for (let i = 48; i >= 0; i--) {
+    const x = cx - half + (2 * half * i) / 48;
+    teeth.lineTo(x, TEETH.edge(x));
+  }
+  teeth.closePath();
+  const enamel = ctx.createLinearGradient(0, seam - 0.4 * u, 0, TEETH.edge(cx));
+  enamel.addColorStop(0, "#9b938e");
+  enamel.addColorStop(0.55, "#d9d2ca");
+  enamel.addColorStop(0.9, "#cdc6be");
+  // The biting edge is slightly translucent.
+  enamel.addColorStop(1, "#b4b2b4");
+  ctx.fillStyle = enamel;
+  ctx.fill(teeth);
+  // Faint, soft gaps between the teeth.
+  ctx.lineWidth = 0.03 * u;
+  for (const offset of TEETH.gaps) {
+    const x = cx + offset;
+    ctx.strokeStyle = `rgba(110, 92, 86, ${offset === 0 ? 0.16 : 0.1})`;
+    ctx.beginPath();
+    ctx.moveTo(x, seamY(x) - 0.6 * u);
+    ctx.lineTo(x + offset * 0.02, TEETH.edge(x) - 0.02 * u);
+    ctx.stroke();
+  }
+  // Side teeth sit deeper in the mouth, so they fall into shadow.
+  const sides = ctx.createLinearGradient(cx - half, 0, cx + half, 0);
+  sides.addColorStop(0, "rgba(30, 10, 12, 0.85)");
+  sides.addColorStop(0.3, "rgba(30, 10, 12, 0.15)");
+  sides.addColorStop(0.5, "rgba(30, 10, 12, 0)");
+  sides.addColorStop(0.7, "rgba(30, 10, 12, 0.15)");
+  sides.addColorStop(1, "rgba(30, 10, 12, 0.85)");
+  ctx.fillStyle = sides;
+  ctx.fill(teeth);
+
+  // The upper lip shades the top of the opening.
+  const shade = ctx.createLinearGradient(0, upperLip, 0, upperLip + 0.45 * u);
+  shade.addColorStop(0, "rgba(36, 10, 12, 0.6)");
+  shade.addColorStop(1, "rgba(36, 10, 12, 0)");
+  ctx.fillStyle = shade;
+  ctx.fillRect(LIPS.left - u, upperLip - 0.5 * u, span + 2 * u, u);
+  // Deep shadow in the corners.
+  for (const [x, y] of [top[0], top[top.length - 1]] as Point[]) {
+    const corner = ctx.createRadialGradient(x, y, 0, x, y, 1.5 * u);
+    corner.addColorStop(0, "rgba(18, 5, 7, 0.95)");
+    corner.addColorStop(1, "rgba(18, 5, 7, 0)");
+    ctx.fillStyle = corner;
+    ctx.fillRect(x - 1.6 * u, y - 1.6 * u, 3.2 * u, 3.2 * u);
+  }
+  ctx.restore();
+}
+
+/** Hana's mouth; place it inside a box that spans the whole portrait. */
+export const HanaMouth = forwardRef<MouthHandle>(function HanaMouth(_, ref) {
+  const box = useRef<HTMLDivElement>(null);
+  const inside = useRef<HTMLCanvasElement>(null);
+  const face = useRef<HTMLCanvasElement>(null);
+  const render = useRef<((moved: Float32Array, shade: number) => void) | null>(null);
+  const size = useRef<ReturnType<typeof watchSize> | null>(null);
+  const shape = useRef<MouthShape>({ open: 0, round: 0 });
+  const moved = useRef(new Float32Array(MESH.source.length));
+
+  const draw = () => {
+    const s = shape.current;
+    const visible = s.open > 0.004 || s.round > 0.01;
+    if (box.current) box.current.style.visibility = visible ? "visible" : "hidden";
+    if (!visible || !inside.current) return;
+    size.current?.check();
+    drawInterior(inside.current, s);
+    render.current?.(movedMesh(s, moved.current), s.open);
+  };
+
+  useImperativeHandle(ref, () => ({
+    set(next) {
+      shape.current = next;
+      draw();
+    },
+  }));
+
+  useEffect(() => {
+    if (!box.current || !face.current || !inside.current) return;
+    let cancelled = false;
+    size.current = watchSize(box.current, [face.current, inside.current], draw);
+    loadImage(HANA_PORTRAIT)
+      .then((image) => {
+        if (cancelled || !face.current) return;
+        render.current = createFaceWarp(face.current, image, region, MESH);
+        draw();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      size.current?.stop();
+      render.current = null;
+    };
+  }, []);
+
+  return (
+    <div
+      ref={box}
+      className="hana-face-layer"
+      style={{
+        left: `${region.x}%`,
+        top: `${region.y}%`,
+        width: `${region.width}%`,
+        height: `${region.height}%`,
+      }}
+      aria-hidden="true"
+    >
+      <canvas ref={inside} />
+      <canvas ref={face} />
+    </div>
+  );
+});
 
 /**
  * Follows a target mouth shape with a soft spring every frame, so the jaw has
@@ -484,7 +276,7 @@ export function useMouthSpring(
     let drawn = { open: -1, round: -1 };
     let previous = performance.now();
     // Quick enough to keep up with her speaking pace, still without snapping.
-    const stiffness = { open: 40, round: 26 };
+    const stiffness = { open: 30, round: 20 };
     const step = (now: number) => {
       const dt = Math.min(0.05, (now - previous) / 1000);
       previous = now;

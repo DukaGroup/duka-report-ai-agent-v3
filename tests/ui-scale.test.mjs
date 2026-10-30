@@ -13,13 +13,13 @@ const { zoomFor } = await import(`data:text/javascript;base64,${Buffer.from(comp
 
 test('laptops keep the normal size; larger screens grow the interface', () => {
   assert.equal(zoomFor(1366, 768), 1);
-  assert.equal(zoomFor(1440, 900), 1);
-  assert.equal(zoomFor(1920, 1080), 1.25);
-  assert.equal(zoomFor(2560, 1440), 1.6);
-  assert.equal(zoomFor(3840, 2160), 1.6);
+  assert.equal(zoomFor(1440, 900), 1.1);
+  assert.equal(zoomFor(1920, 1080), 1.35);
+  assert.equal(zoomFor(2560, 1440), 1.8);
+  assert.equal(zoomFor(3840, 2160), 2);
 });
 
 test('a short, wide window is limited by its height so nothing gets cut off', () => {
-  assert.equal(zoomFor(2560, 900), 1.0);
-  assert.equal(zoomFor(1920, 1000), 1.15);
+  assert.equal(zoomFor(2560, 900), 1.1);
+  assert.equal(zoomFor(1920, 1000), 1.25);
 });

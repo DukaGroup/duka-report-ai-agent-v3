@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,12 @@ HEADERS = {"X-Duka-Request": "1", "Origin": "http://localhost:8080"}
 
 
 @pytest.fixture
-def app(tmp_path):
+def app(tmp_path, monkeypatch):
+    # App fixtures must never inherit an operator's live database credentials.
+    # Individual tests can still set their own environment after setup.
+    for key in tuple(os.environ):
+        if key.startswith(("SQLSERVER_", "HANA_")):
+            monkeypatch.delenv(key)
     fixture = Path(__file__).parent / "fake_codex.py"
     fixture.chmod(0o755)
     settings = Settings(

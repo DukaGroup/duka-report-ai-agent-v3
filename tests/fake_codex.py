@@ -120,6 +120,12 @@ for line in sys.stdin:
             emit({"method": "item/agentMessage/delta", "params": {"threadId": thread_id, "turnId": turn_id, "delta": quota.get("partial", "UNFINISHED FIXTURE")}})
             emit({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "failed", "error": {"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}}}})
             continue
+        crash_path = account_path.parent / "crash-once"
+        if crash_path.exists():
+            # The native process dies mid-answer; the subscription itself is fine.
+            crash_path.unlink()
+            emit({"method": "item/agentMessage/delta", "params": {"threadId": thread_id, "turnId": turn_id, "delta": "PARTIAL BEFORE CRASH"}})
+            os._exit(1)
         if params.get("outputSchema") and (account_path.parent / "hold-reports").exists():
             held_turns[thread_id] = turn_id
             continue

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";
 import "./motion.css";
+import "./modern.css";
 import { initializeTheme } from "./theme";
 import { initializeUiScale } from "./uiScale";
 

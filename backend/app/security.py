@@ -8,6 +8,8 @@ from fastapi import HTTPException, Request, Response
 
 COOKIE = "duka_session"
 PASSWORD_SCHEME = "scrypt-v2"
+PERSISTENT_SESSION_EXPIRY = 253402300799.0  # End of year 9999; explicit revocation still wins.
+PERSISTENT_COOKIE_SECONDS = 400 * 24 * 3600
 
 
 async def password_work(state, function, *args):
@@ -59,8 +61,33 @@ def with_introduction(db, user):
     return {**user, "intro_pending": not seen}
 
 
+def set_session_cookie(response: Response, settings, token):
+    response.set_cookie(
+        COOKIE,
+        token,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="strict",
+        max_age=PERSISTENT_COOKIE_SECONDS if settings.session_hours == 0 else settings.session_hours * 3600,
+        path="/",
+    )
+
+
+def make_existing_sessions_persistent(db):
+    """Keep still-valid sessions when an installation adopts persistent login."""
+    db.execute(
+        "UPDATE sessions SET expires_at=? WHERE expires_at>? AND expires_at<?",
+        (PERSISTENT_SESSION_EXPIRY, time.time(), PERSISTENT_SESSION_EXPIRY),
+    )
+
+
 def create_session(db, settings, response: Response, user_id, expected_hash=None):
     token = secrets.token_urlsafe(32)
+    expires_at = (
+        PERSISTENT_SESSION_EXPIRY
+        if settings.session_hours == 0
+        else time.time() + settings.session_hours * 3600
+    )
     with db.connect() as c:
         c.execute("BEGIN IMMEDIATE")
         user = c.execute("SELECT password_hash FROM users WHERE id=? AND active=1", (user_id,)).fetchone()
@@ -68,16 +95,8 @@ def create_session(db, settings, response: Response, user_id, expected_hash=None
             raise HTTPException(401, "Account credentials changed. Sign in again.")
         c.execute("DELETE FROM sessions WHERE expires_at <= ?", (time.time(),))
         c.execute("INSERT INTO sessions VALUES(?,?,?)",
-                  (token_hash(token), user_id, time.time() + settings.session_hours * 3600))
-    response.set_cookie(
-        COOKIE,
-        token,
-        httponly=True,
-        secure=settings.secure_cookies,
-        samesite="strict",
-        max_age=settings.session_hours * 3600,
-        path="/",
-    )
+                  (token_hash(token), user_id, expires_at))
+    set_session_cookie(response, settings, token)
 
 
 def current_user(request: Request):
@@ -89,6 +108,7 @@ def current_user(request: Request):
     if not user:
         raise HTTPException(401, "Sign in to your workspace first.")
     request.state.traffic_user_id = user["id"]
+    request.state.session_token = token
     return user
 
 

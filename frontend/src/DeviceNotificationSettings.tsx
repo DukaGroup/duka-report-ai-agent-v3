@@ -5,15 +5,18 @@ import {
   enableDeviceNotifications,
   supportsDeviceNotifications,
 } from "./deviceNotifications";
+import { SERVICE_UNAVAILABLE } from "./locale";
 
 export function DeviceNotificationSettings({
   userId,
   enabled,
   onChange,
+  technical = false,
 }: {
   userId: string;
   enabled: boolean;
   onChange: (enabled: boolean) => void;
+  technical?: boolean;
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -72,7 +75,7 @@ export function DeviceNotificationSettings({
       )}
       {error && (
         <p className="error-banner" role="alert">
-          {error}
+          {technical ? error : SERVICE_UNAVAILABLE}
         </p>
       )}
     </section>

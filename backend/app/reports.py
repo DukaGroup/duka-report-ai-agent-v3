@@ -36,7 +36,7 @@ For s.table and s.reference_table, formats maps actual fields to 'percent', 'dec
 s.chart(dataset,category,measures,title,chart_type='column',currency=None,currency_column=None) creates line/column/bar/area using 1–4 numeric source fields. It shows at most 1000 categories with an explicit scope note; all source rows remain in Excel. Separate money, counts and percentages into suitable charts. Chart placement and text/table rows advance automatically, preventing overlaps.
 Select one actual currency for metrics/charts when datasets contain several; iterate report.currencies(index) and label currencies separately. Never combine EUR/USD with ALL. If more than one currency column exists, select the actual currency_column explicitly.
 Only use field names from the dataset descriptors. Translate all authored titles, labels and explanations into Albanian; preserve exact source column identifiers in helper arguments. Follow available template colors/structure and column ordering; output text stays readable without merged cells crossing tables.
-Lead the main output with headline metrics, comparison tables and charts; text appears only as short labels or one-line notes, never paragraphs. Keep required supporting breakdowns. Do not create duplicate dashboards. Use s.narrative() only when the report text is short; otherwise prefer s.heading and metrics/tables.
+Lead the main output with the title, headline metrics and charts at the top, then comparison tables; text appears only as short labels or one-line notes, never paragraphs. Keep required supporting breakdowns. Do not create duplicate dashboards. Use s.narrative() only when the report text is short; otherwise prefer s.heading and metrics/tables.
 All reports must preserve the requested scope throughout narrative, metrics, tables, charts and source sheets. Never add excluded records or unsolicited reconciliation datasets. Use model-authored captured results as supplied; no backend accounting rule selects or recalculates them. Decide any presentation arithmetic explicitly in your script and avoid aggregating non-additive measures. Disclose missing historical evidence without certifying a reconstruction as an original export.
 For example: def build(report):\n    s = report.sheet('Sales review')\n    s.title()\n    s.metric(0, 'revenue', 'Sales', currency='ALL')\n    s.narrative()
 For normal reports, reuse or author a custom layout using report.sheet and the helpers above. report.default_layout() is a compatibility helper; use it only when the user explicitly requests the standard/legacy layout.
@@ -193,6 +193,8 @@ async def generate_report(db, manager, report_id, user_id, analyses=()):
                     "figures (e.g. '- Tirana: 1.234.567 ALL (42,1%)'), no paragraphs. "
                     "limitations: only real data gaps or assumptions that change the numbers, one short line each, "
                     "at most 3; empty list when there are none. "
+                    "workbook layout: put the charts at the TOP of the main sheet, directly under the title and "
+                    "headline metrics and before any table, so the graphics are the first thing seen. "
                     "workbook analyses: scope and query_explanation are compact technical specs in "
                     "'Label: value; Label: value' form (e.g. 'Periudha: 01.10.2026–28.10.2026; Kompania: X; "
                     "Dokumente: fatura shitje, kreditnota; Data bazë: data e postimit; TVSH: pa TVSH; Rreshta: 1 245'), "

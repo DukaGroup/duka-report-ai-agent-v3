@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import Markdown, { type Components } from "react-markdown";
+import { AnswerChart, chartFromTable } from "./AnswerChart";
 import remarkGfm from "remark-gfm";
 
 type HastNode = {
@@ -171,7 +172,24 @@ export function MarkdownContent({
   status.current = reportStatus;
   const checksReports = !!reportStatus;
   const components = useMemo<Components>(() => {
-    const base = celebrate ? figureComponents : baseComponents;
+    const figures = celebrate ? figureComponents : baseComponents;
+    // Once the reply is complete, a table of figures gets a chart above it.
+    const base: Components = streaming
+      ? figures
+      : {
+          ...figures,
+          table: ({ node, ...props }) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const chart = node ? chartFromTable(node as any) : null;
+            const Table = baseComponents.table as (p: typeof props) => ReactNode;
+            return (
+              <>
+                {chart && <AnswerChart data={chart} />}
+                {Table(props)}
+              </>
+            );
+          },
+        };
     if (!checksReports) return base;
     return {
       ...base,
@@ -193,7 +211,7 @@ export function MarkdownContent({
         );
       },
     };
-  }, [celebrate, checksReports]);
+  }, [celebrate, checksReports, streaming]);
   return (
     <div className={`markdown${streaming ? " streaming" : ""}`}>
       <Markdown

@@ -4,11 +4,22 @@ import type { ProgressStep } from "./types";
 export function ActivityTimeline({
   steps,
   active,
+  technical = false,
 }: {
   steps: ProgressStep[];
   active: boolean;
+  technical?: boolean;
 }) {
-  if (!steps.length) return null;
+  // Protect history already loaded in an open browser as well as new replies.
+  if (!technical || !steps.length) return null;
+  const visibleSteps: ProgressStep[] = [];
+  let previousLabel: string | null = null;
+  for (const step of steps) {
+    const label = step.label.trim().replace(/\s+/g, " ");
+    if (label === previousLabel) continue;
+    visibleSteps.push(step);
+    previousLabel = label;
+  }
   return (
     // Closed by default, even while Hana works: the steps show only when the
     // user opens them.
@@ -17,12 +28,12 @@ export function ActivityTimeline({
         {/* Points right when closed and turns down when opened. */}
         <ChevronRight size={14} className="activity-chevron" />
         {active ? "Hapat e punës" : "Shiko hapat e punës"}{" "}
-        <span>{steps.length}</span>
+        <span>{visibleSteps.length}</span>
       </summary>
       <ol>
-        {steps.map((step, index) => (
+        {visibleSteps.map((step, index) => (
           <li key={step.id}>
-            {active && index === steps.length - 1 ? (
+            {active && index === visibleSteps.length - 1 ? (
               <LoaderCircle size={13} className="spin" />
             ) : (
               <CircleCheck size={13} />

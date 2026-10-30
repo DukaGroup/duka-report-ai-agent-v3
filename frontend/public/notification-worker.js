@@ -92,7 +92,7 @@ self.addEventListener("push", (event) => {
               : owned.reportCount
                 ? "Raporti juaj është gati për t’u hapur ose shkarkuar."
                 : "Përgjigjja juaj është gati. Shtypni këtu për të hapur bisedën.",
-           icon: "/brand/hana-avatar-256.webp?v=fe69cfcd1e39",
+           icon: "/brand/hana-portrait-192.png?v=20261029",
           lang: "sq",
           tag: "duka-reply-" + data.messageId,
           renotify: false,

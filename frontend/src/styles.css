@@ -558,14 +558,6 @@ select:focus {
   border-color: var(--brand-blue);
   box-shadow: 0 0 0 3px var(--surface-tint);
 }
-.welcome-symbol img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  /* Framed on her face (the portrait also shows her shoulders). */
-  transform: scale(1.6) translateY(3%);
-}
 .eyebrow {
   font-size: 0.75rem;
   letter-spacing: 1.8px;
@@ -867,17 +859,10 @@ select:focus {
 }
 .message-avatar.assistant {
   overflow: hidden;
-  background: #e5edf7;
+  background: transparent;
   padding: 0;
-  border: 1px solid transparent;
-}
-.message-avatar.assistant img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  /* Framed on her face (the portrait also shows her shoulders). */
-  transform: scale(1.6) translateY(3%);
+  border: 0;
+  border-radius: 50%;
 }
 .message-avatar.user {
   background: var(--surface-tint);
@@ -1732,10 +1717,13 @@ td small {
   border-radius: 22px;
   background: #1c2a3d;
 }
-/* Zoomed toward her face so her mouth is visible when she talks. */
-.hana-profile-portrait .hana-face {
-  transform: scale(1.55) translateY(1%);
-  transform-origin: 50% 47%;
+/* Closer on her face, so her mouth is clear when she talks: a 52% square
+   of the photo, from x 24 and y 14. */
+.hana-profile-portrait .hana-face-source {
+  width: 192.307692%;
+  height: 192.307692%;
+  left: -46.153846%;
+  top: -26.923077%;
 }
 .hana-profile-says {
   min-height: 1.5em;

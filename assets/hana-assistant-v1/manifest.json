@@ -1,0 +1,31 @@
+{
+  "character": "Hana",
+  "asset_type": "raster character artwork, not a rigged 3D model",
+  "generator": "built-in image_gen tool",
+  "integrated_into_app": true,
+  "files": {
+    "hana-waist-up.png": {
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "transparent_background": true,
+      "sha256": "6fdba5c7a004d49a8a50143c374cec43afe5c15fb1cf2981c925fe084910bf26"
+    },
+    "source-render.png": {
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "transparent_background": true,
+      "sha256": "88b76a292811f81ac7bc1acb50477b63a6f0d1ae9fc95c0a6640fd2b2ccd6e08"
+    }
+  },
+  "animation": {
+    "type": "layered 2D rig",
+    "renderer": "frontend/src/HanaPuppet.tsx",
+    "pivots_and_layers": "frontend/src/hanaRig.ts",
+    "gestures": "frontend/src/hanaMotion.ts",
+    "notes": "animation-notes.md",
+    "finger_articulation": false,
+    "depth_rotation": false
+  }
+}

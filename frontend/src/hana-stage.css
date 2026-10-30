@@ -1,0 +1,129 @@
+/* Hana beside the chat: her speech bubble above the orb. */
+.hana-stage {
+  flex: 0 0 clamp(248px, 25vw, 340px);
+  position: relative;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background:
+    radial-gradient(
+      ellipse at 50% 65%,
+      rgba(63, 152, 201, 0.12),
+      transparent 65%
+    ),
+    var(--page-bg);
+}
+.stage-center {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+}
+.stage-bubble {
+  width: calc(100% - 48px);
+  padding: 18px 20px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 16px;
+  background: var(--glass-strong);
+  color: var(--ink);
+  position: relative;
+}
+.stage-bubble-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.stage-live {
+  width: 6px;
+  height: 6px;
+  background: #319c88;
+  border-radius: 50%;
+}
+.stage-bubble p {
+  min-height: 2.6em;
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.stage-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  vertical-align: -0.1em;
+  margin-left: 2px;
+  background: currentColor;
+  animation: stage-caret 1s steps(1) infinite;
+}
+@keyframes stage-caret {
+  50% {
+    opacity: 0;
+  }
+}
+.stage-dots {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  gap: 3px;
+}
+.stage-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: stage-caret 1.3s ease-in-out infinite;
+}
+.stage-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.stage-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+.stage-orb {
+  width: min(220px, 64%);
+  filter: drop-shadow(0 18px 40px rgba(8, 35, 64, 0.35));
+}
+@media (max-width: 760px) {
+  .chat-layout {
+    flex-direction: column;
+  }
+  .hana-stage {
+    flex: 0 0 128px;
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .stage-center {
+    flex-direction: row;
+    justify-content: center;
+    gap: 16px;
+    padding: 12px 16px;
+  }
+  .stage-bubble {
+    width: min(100%, 320px);
+    padding: 12px 14px;
+  }
+  .stage-bubble p {
+    min-height: 0;
+    margin-top: 6px;
+    font-size: 13px;
+  }
+  .stage-orb {
+    flex: 0 0 100px;
+    width: 100px;
+    order: -1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hana-stage * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

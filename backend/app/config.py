@@ -9,7 +9,8 @@ class Settings:
     frontend_dir: Path = Path(os.getenv("FRONTEND_DIR", "frontend/dist")).resolve()
     codex_binary: str = os.getenv("CODEX_BINARY", "codex")
     claude_binary: str | None = os.getenv("CLAUDE_BINARY") or None
-    session_hours: int = int(os.getenv("SESSION_HOURS", "24"))
+    # Zero keeps app sessions until logout or account revocation.
+    session_hours: int = int(os.getenv("SESSION_HOURS", "0"))
     production: bool = os.getenv("APP_ENV", "development").lower() == "production"
     require_setup_token: bool = os.getenv("REQUIRE_SETUP_TOKEN", "false").lower() == "true"
     secure_cookies: bool = os.getenv("SECURE_COOKIES", "false").lower() == "true"
@@ -115,8 +116,8 @@ class Settings:
     def prepare(self):
         from .deployment_security import validate_web_settings
         validate_web_settings(self)
-        if not 1 <= self.session_hours <= 168:
-            raise ValueError("SESSION_HOURS must be between 1 and 168.")
+        if not 0 <= self.session_hours <= 168:
+            raise ValueError("SESSION_HOURS must be 0 (persistent) or between 1 and 168.")
         if self.turn_timeout < 0:
             raise ValueError("TURN_TIMEOUT_SECONDS must be nonnegative; 0 disables the response time limit.")
         if not 1 <= self.database_query_timeout <= 7200:

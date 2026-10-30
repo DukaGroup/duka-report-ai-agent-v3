@@ -1,0 +1,229 @@
+/* Sign-in: one centred card on a quiet, softly lit page. */
+.auth-redesign {
+  padding: 32px 24px 22px;
+  background:
+    radial-gradient(
+      ellipse 60% 45% at 50% 0%,
+      rgba(87, 146, 204, 0.16),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 50% 100%,
+      rgba(49, 156, 136, 0.07),
+      transparent 70%
+    ),
+    var(--page-bg);
+  gap: 20px;
+}
+/* The floating blobs from the old layout would fight the centred card. */
+.auth-redesign::before,
+.auth-redesign::after {
+  display: none;
+}
+.auth-layout {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  margin: 0 auto;
+}
+.auth-redesign .auth-brand {
+  flex-shrink: 0;
+  justify-content: center;
+}
+.auth-redesign .auth-brand .brand-lockup {
+  width: 190px;
+  align-items: center;
+  text-align: center;
+}
+.auth-redesign .auth-brand .brand-sub {
+  white-space: nowrap;
+}
+.auth-kicker {
+  display: block;
+  color: #5792cc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.17em;
+  line-height: 1.6;
+}
+.auth-form-panel {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.auth-redesign .auth-card {
+  width: 420px;
+  max-width: 100%;
+  margin: 0;
+  padding: 40px 40px 30px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow:
+    0 1px 2px rgba(15, 40, 70, 0.04),
+    0 24px 60px -28px rgba(15, 45, 80, 0.28);
+  backdrop-filter: none;
+}
+.auth-redesign .auth-card h1 {
+  font-size: 33px;
+  font-weight: 550;
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+  margin: 12px 0 10px;
+}
+.auth-redesign .auth-card > p {
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0 0 28px;
+  color: var(--muted);
+}
+.auth-redesign .auth-card form {
+  gap: 16px;
+}
+.auth-redesign .auth-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.auth-redesign .auth-card input {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  border-radius: 9px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: none;
+}
+.auth-redesign .auth-card input:focus {
+  outline: 2px solid rgba(87, 146, 204, 0.55);
+  outline-offset: 2px;
+}
+.auth-redesign .auth-card input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.auth-password-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  margin-bottom: -9px;
+}
+.auth-redesign .auth-password-heading .text-button {
+  margin: 0;
+  padding: 4px 0;
+  min-height: 28px;
+  font-size: 11px;
+  color: #5792cc;
+}
+.auth-password-field {
+  position: relative;
+}
+.auth-redesign .auth-password-field input {
+  padding-right: 48px;
+}
+.auth-password-toggle {
+  position: absolute;
+  right: 4px;
+  top: 3px;
+  bottom: 3px;
+  width: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+.auth-password-toggle:hover {
+  background: var(--surface-tint);
+  color: var(--ink);
+}
+.auth-redesign .auth-card form > .button {
+  display: flex;
+  justify-content: center;
+  flex-direction: row-reverse;
+  gap: 10px;
+  min-height: 48px;
+  margin-top: 7px;
+  border-radius: 9px;
+  background: #123b60;
+  border: 1px solid #123b60;
+  color: white;
+  box-shadow: none;
+  font-size: 13px;
+}
+.auth-redesign .auth-card form > .button:hover {
+  background: #1d527f;
+}
+.auth-redesign .auth-card .auth-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 25px;
+  padding-top: 21px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.auth-note svg {
+  flex-shrink: 0;
+}
+.auth-redesign .auth-footer {
+  width: min(420px, 100%);
+  align-self: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  flex-shrink: 0;
+}
+/* Recovery uses the same readable spacing without requiring the hero panel. */
+.auth-page:not(.auth-redesign) .auth-card {
+  padding: 36px;
+  border: 1px solid var(--line);
+}
+@media (max-width: 520px) {
+  .auth-redesign {
+    min-height: calc(100dvh / var(--ui-zoom, 1));
+    padding: 24px 16px 18px;
+  }
+  .auth-layout {
+    justify-content: flex-start;
+    padding-top: 4vh;
+    gap: 22px;
+  }
+  .auth-redesign .auth-brand .brand-lockup {
+    width: 160px;
+  }
+  .auth-redesign .auth-card {
+    padding: 28px 22px 22px;
+    border-radius: 16px;
+  }
+  .auth-redesign .auth-card h1 {
+    font-size: 27px;
+  }
+  .auth-redesign .auth-card > p {
+    margin-bottom: 24px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-redesign * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

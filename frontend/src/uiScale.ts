@@ -3,8 +3,8 @@ import type { CSSProperties } from "react";
 
 /*
  * The whole interface grows on large screens so text and controls are never
- * tiny. Up to about 1440 × 860 everything is shown at its normal size; above
- * that it scales with the screen (up to 1.6×), using CSS zoom on the page.
+ * tiny. It starts growing above laptop sizes and scales up to 2× on very
+ * large screens, using CSS zoom on the page.
  *
  * Under zoom, screen coordinates (getBoundingClientRect, mouse positions) are
  * real pixels while CSS lengths are multiplied by the zoom. Anything placed
@@ -12,9 +12,9 @@ import type { CSSProperties } from "react";
  * divided by `--ui-zoom`.
  */
 
-const BASE_WIDTH = 1440;
-const BASE_HEIGHT = 860;
-const MAX_ZOOM = 1.6;
+const BASE_WIDTH = 1280;
+const BASE_HEIGHT = 800;
+const MAX_ZOOM = 2;
 
 let zoom = 1;
 let initialized = false;
@@ -67,7 +67,12 @@ export const zoomedPlatform: Platform = {
 
 export function screenBoundary() {
   if (zoom === 1) return {};
-  const rect = { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+  const rect = {
+    x: 0,
+    y: 0,
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
   return { boundary: rect, rootBoundary: rect };
 }
 

@@ -524,37 +524,6 @@
     opacity: 1;
   }
 }
-.message.working .message-avatar.assistant {
-  animation: motion-think-glow 1.8s ease-in-out infinite;
-}
-/* Looking up and to the side, then back: a person thinking. */
-@keyframes motion-think {
-  0%,
-  100% {
-    transform: rotate(0deg) translateY(0);
-  }
-  20% {
-    transform: rotate(-7deg) translateY(-1px);
-  }
-  45% {
-    transform: rotate(-7deg) translateY(-1px);
-  }
-  60% {
-    transform: rotate(5deg) translateY(0);
-  }
-  80% {
-    transform: rotate(0deg) translateY(0);
-  }
-}
-@keyframes motion-think-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(66, 118, 196, 0.45);
-  }
-  50% {
-    box-shadow: 0 0 0 5px rgba(66, 118, 196, 0);
-  }
-}
 .message.working .thinking-dots > i {
   animation: motion-wave 1.1s ease-in-out infinite;
 }
@@ -719,35 +688,6 @@
     transform: scaleY(1);
   }
 }
-.message.speaking .message-avatar.assistant {
-  animation: motion-speak-glow 1.6s ease-in-out infinite;
-}
-/* Small nods, the way people move their head while talking. */
-@keyframes motion-speak {
-  0%,
-  100% {
-    transform: rotate(0deg) translateY(0);
-  }
-  25% {
-    transform: rotate(-2deg) translateY(-1px);
-  }
-  50% {
-    transform: rotate(1deg) translateY(0.5px);
-  }
-  75% {
-    transform: rotate(-1deg) translateY(-0.5px);
-  }
-}
-@keyframes motion-speak-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 1px rgba(87, 146, 204, 0.35);
-  }
-  50% {
-    box-shadow: 0 0 0 4px rgba(87, 146, 204, 0.12);
-  }
-}
-
 /* Reply text flows in word by word while Hana writes. */
 .markdown.streaming .stream-word {
   animation: motion-word 0.42s ease-out backwards;

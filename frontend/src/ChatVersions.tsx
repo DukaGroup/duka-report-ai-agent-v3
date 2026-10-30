@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { SERVICE_UNAVAILABLE } from "./locale";
 
 type Version = {
   id: string;
@@ -10,9 +11,12 @@ type Version = {
 export function ChatVersions({
   id,
   onRestore,
+  technical = false,
 }: {
   id: string;
   onRestore: () => Promise<void>;
+  // Devs see the actual error; everyone else one calm message.
+  technical?: boolean;
 }) {
   const [versions, setVersions] = useState<Version[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,7 +84,7 @@ export function ChatVersions({
       ))}
       {error && (
         <p role="alert" className="error-box">
-          {error}
+          {technical ? error : SERVICE_UNAVAILABLE}
         </p>
       )}
       {!!versions.length && (
