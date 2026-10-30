@@ -10,7 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { Brand } from "./Brand";
-import { HanaFace } from "./HanaFace";
+import { HanaSlot } from "./HanaFace";
+import { UserAvatar } from "./UserAvatar";
 import { label } from "./locale";
 import type { Conversation, User } from "./types";
 import "./home.css";
@@ -22,7 +23,10 @@ function greeting(name: string) {
   return `${salutation}, ${name.trim().split(/\s+/)[0]}! Si mund t'ju ndihmoj sot?`;
 }
 
-/** The workspace landing page. Hana speaks once each time the page is opened. */
+/**
+ * The workspace landing page. Hana speaks once each time the page is opened;
+ * while her introduction is still flying in (`hanaArriving`) she waits.
+ */
 export function HomePage({
   user,
   conversations,
@@ -35,6 +39,7 @@ export function HomePage({
   onConversation,
   onDeleteConversation,
   conversationRunning,
+  hanaArriving = false,
 }: {
   user: User;
   conversations: Conversation[];
@@ -47,22 +52,21 @@ export function HomePage({
   onConversation: (conversation: Conversation) => void;
   onDeleteConversation: (conversation: Conversation) => void;
   conversationRunning: (id: string) => boolean;
+  hanaArriving?: boolean;
 }) {
   const line = useMemo(() => greeting(user.name), [user.name]);
   return (
     <main className="home-page">
       <div className="home-content">
         <header className="home-header">
-          <Brand light />
-          <span className="home-header-caption">HAPËSIRA JUAJ E PUNËS</span>
+          <Brand />
+          <span className="home-header-caption">
+            <span className="home-live-dot" aria-hidden="true" />
+            HANA
+          </span>
         </header>
         <div className="home-columns">
-          <section className="home-navigation" aria-label="Hapësira e punës">
-            <div className="home-intro-copy">
-              <span className="home-kicker">DUKA GROUP</span>
-              <h1>Mirë se u kthyet, {user.name.trim().split(/\s+/)[0]}.</h1>
-              <p>Zgjidhni një bisedë për ta vazhduar, ose nisni një të re.</p>
-            </div>
+          <section className="home-navigation" aria-label="Fillimi">
             <div className="home-actions">
               <button
                 className="home-new-chat"
@@ -122,15 +126,13 @@ export function HomePage({
             </section>
           </section>
           <section className="home-greeting" aria-label="Përshëndetja e Hanës">
-            <div
+            <HanaSlot
               className="home-portrait"
-              role="img"
-              aria-label="Portreti i Hanës"
-            >
-              <HanaFace line={line} delay={180} />
-            </div>
-            <span className="home-greeting-name">HANA</span>
-            <p>{line}</p>
+              line={line}
+              delay={180}
+              awaiting={hanaArriving}
+            />
+            <p className={hanaArriving ? "is-waiting" : undefined}>{line}</p>
           </section>
         </div>
         <footer className="home-footer">
@@ -138,9 +140,11 @@ export function HomePage({
             <Settings size={18} /> Cilësimet
           </button>
           <div className="home-account">
-            <span className="home-account-initial">
-              {user.name.slice(0, 1).toUpperCase()}
-            </span>
+            <UserAvatar
+              className="home-account-initial"
+              name={user.name}
+              seed={user.id}
+            />
             <span className="home-account-label">
               {user.name}
               <small>{label(user.role)}</small>

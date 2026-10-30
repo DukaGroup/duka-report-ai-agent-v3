@@ -4,8 +4,8 @@ export type IntroMode = "presentation" | "greeting" | "farewell";
 
 /** Moonrise, transformation and greeting have separate time budgets. */
 export function transitionTiming(mode: IntroMode, still = false) {
-  const rise = still || mode === "farewell" ? 0 : 700;
-  const transformation = still ? 0 : mode === "farewell" ? 1000 : 500;
+  const rise = still || mode === "farewell" ? 0 : 1300;
+  const transformation = still ? 0 : mode === "farewell" ? 1000 : 1200;
   const speechStart = mode === "farewell" ? 0 : rise + transformation;
   const speechEnd = speechStart + 1700;
   return {

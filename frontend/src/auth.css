@@ -1,85 +1,123 @@
-/* Sign-in: one centred card on a quiet, softly lit page. */
-.auth-redesign {
+/* Sign-in: the night sky of Hana's moonrise, Hana on the left, the card on
+   the right. The colours match .hana-intro so her arrival is seamless. */
+.auth-page.auth-redesign {
+  --ink: #eef3ff;
+  --muted: #a3b6d8;
+  --line: rgba(160, 195, 255, 0.2);
+  --surface: rgba(255, 255, 255, 0.06);
+  --surface-tint: rgba(255, 255, 255, 0.1);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   padding: 32px 24px 22px;
+  color: var(--ink);
   background:
-    radial-gradient(
-      ellipse 60% 45% at 50% 0%,
-      rgba(87, 146, 204, 0.16),
-      transparent 70%
-    ),
-    radial-gradient(
-      ellipse 50% 40% at 50% 100%,
-      rgba(49, 156, 136, 0.07),
-      transparent 70%
-    ),
-    var(--page-bg);
+    radial-gradient(120% 90% at 50% 110%, #1d3a6b 0%, transparent 60%),
+    radial-gradient(80% 60% at 15% 0%, #1a2350 0%, transparent 70%),
+    linear-gradient(180deg, #050816 0%, #0b1433 55%, #13265a 100%);
+  background-size: auto;
+  animation: none;
   gap: 20px;
 }
-/* The floating blobs from the old layout would fight the centred card. */
 .auth-redesign::before,
 .auth-redesign::after {
   display: none;
 }
+.auth-redesign .auth-sky {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.auth-sky span {
+  position: absolute;
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+  opacity: 0.2;
+  animation: intro-twinkle 3.2s ease-in-out var(--delay) infinite;
+}
 .auth-layout {
   flex: 1;
-  width: 100%;
+  width: min(1040px, 100%);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 28px;
+  gap: clamp(24px, 6vw, 96px);
   margin: 0 auto;
 }
-.auth-redesign .auth-brand {
-  flex-shrink: 0;
+.auth-hana {
+  flex: 0 1 auto;
+  display: flex;
   justify-content: center;
 }
-.auth-redesign .auth-brand .brand-lockup {
-  width: 190px;
-  align-items: center;
-  text-align: center;
-}
-.auth-redesign .auth-brand .brand-sub {
-  white-space: nowrap;
-}
-.auth-kicker {
-  display: block;
-  color: #5792cc;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.17em;
-  line-height: 1.6;
+.auth-hana-slot {
+  width: min(
+    400px,
+    calc(42vw / var(--ui-zoom, 1)),
+    calc(62vh / var(--ui-zoom, 1))
+  );
 }
 .auth-form-panel {
-  width: 100%;
+  flex: 0 0 auto;
   display: flex;
   justify-content: center;
 }
 .auth-redesign .auth-card {
-  width: 420px;
+  position: relative;
+  width: 400px;
   max-width: 100%;
   margin: 0;
-  padding: 40px 40px 30px;
+  padding: 36px 36px 32px;
   border: 1px solid var(--line);
-  border-radius: 20px;
-  background: var(--surface);
+  border-radius: 22px;
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.09),
+    rgba(255, 255, 255, 0.035)
+  );
   box-shadow:
-    0 1px 2px rgba(15, 40, 70, 0.04),
-    0 24px 60px -28px rgba(15, 45, 80, 0.28);
-  backdrop-filter: none;
+    0 30px 80px -30px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  animation: auth-card-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* A thin lit edge along the top of the card. */
+.auth-redesign .auth-card::before {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(160, 215, 255, 0.9),
+    transparent
+  );
+}
+@keyframes auth-card-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+    filter: blur(4px);
+  }
+}
+.auth-redesign .auth-card .brand-lockup {
+  display: flex;
+  width: 168px;
+  margin-bottom: 26px;
 }
 .auth-redesign .auth-card h1 {
-  font-size: 33px;
-  font-weight: 550;
-  letter-spacing: -0.045em;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   line-height: 1.15;
-  margin: 12px 0 10px;
-}
-.auth-redesign .auth-card > p {
-  font-size: 13px;
-  line-height: 1.7;
-  margin: 0 0 28px;
-  color: var(--muted);
+  margin: 0 0 24px;
+  color: #fff;
 }
 .auth-redesign .auth-card form {
   gap: 16px;
@@ -96,21 +134,25 @@
   width: 100%;
   min-height: 48px;
   margin: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   padding: 12px 14px;
   border: 1px solid var(--line);
-  background: var(--surface);
+  background: rgba(6, 12, 34, 0.55);
   color: var(--ink);
   font-size: 13px;
   box-shadow: none;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 .auth-redesign .auth-card input:focus {
-  outline: 2px solid rgba(87, 146, 204, 0.55);
-  outline-offset: 2px;
+  outline: none;
+  border-color: rgba(140, 200, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(110, 170, 255, 0.2);
 }
 .auth-redesign .auth-card input::placeholder {
   color: var(--muted);
-  opacity: 0.7;
+  opacity: 0.6;
 }
 .auth-password-heading {
   display: flex;
@@ -125,7 +167,7 @@
   padding: 4px 0;
   min-height: 28px;
   font-size: 11px;
-  color: #5792cc;
+  color: #8fc4ff;
 }
 .auth-password-field {
   position: relative;
@@ -157,68 +199,49 @@
   flex-direction: row-reverse;
   gap: 10px;
   min-height: 48px;
-  margin-top: 7px;
-  border-radius: 9px;
-  background: #123b60;
-  border: 1px solid #123b60;
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 0;
+  background: linear-gradient(90deg, #3f6dff, #8a5cff);
   color: white;
-  box-shadow: none;
+  box-shadow: 0 14px 30px -14px rgba(100, 110, 255, 0.95);
   font-size: 13px;
+  transition:
+    filter 0.2s,
+    transform 0.2s;
 }
-.auth-redesign .auth-card form > .button:hover {
-  background: #1d527f;
-}
-.auth-redesign .auth-card .auth-note {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  margin-top: 25px;
-  padding-top: 21px;
-  border-top: 1px solid var(--line);
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-.auth-note svg {
-  flex-shrink: 0;
-}
-.auth-redesign .auth-footer {
-  width: min(420px, 100%);
-  align-self: center;
-  justify-content: center;
-  gap: 10px;
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  flex-shrink: 0;
+.auth-redesign .auth-card form > .button:hover:not(:disabled) {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
 }
 /* Recovery uses the same readable spacing without requiring the hero panel. */
 .auth-page:not(.auth-redesign) .auth-card {
   padding: 36px;
   border: 1px solid var(--line);
 }
-@media (max-width: 520px) {
+@media (max-width: 760px) {
   .auth-redesign {
     min-height: calc(100dvh / var(--ui-zoom, 1));
-    padding: 24px 16px 18px;
+    padding: 20px 16px 18px;
   }
   .auth-layout {
+    flex-direction: column;
     justify-content: flex-start;
-    padding-top: 4vh;
-    gap: 22px;
+    gap: 8px;
   }
-  .auth-redesign .auth-brand .brand-lockup {
-    width: 160px;
+  .auth-hana-slot {
+    width: min(200px, calc(30vh / var(--ui-zoom, 1)));
   }
   .auth-redesign .auth-card {
-    padding: 28px 22px 22px;
-    border-radius: 16px;
+    padding: 26px 22px 22px;
+    border-radius: 18px;
+  }
+  .auth-redesign .auth-card .brand-lockup {
+    width: 140px;
+    margin-bottom: 18px;
   }
   .auth-redesign .auth-card h1 {
-    font-size: 27px;
-  }
-  .auth-redesign .auth-card > p {
-    margin-bottom: 24px;
+    font-size: 24px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -226,4 +249,51 @@
     transition: none !important;
     animation: none !important;
   }
+}
+/* Light theme: Hana's sky at dawn, with a frosted white card. */
+:root[data-theme="light"] .auth-page.auth-redesign {
+  --ink: #082340;
+  --muted: #5d7189;
+  --line: rgba(36, 92, 147, 0.18);
+  --surface: rgba(255, 255, 255, 0.7);
+  --surface-tint: rgba(36, 92, 147, 0.08);
+  background:
+    radial-gradient(120% 90% at 50% 110%, #d6e6fa 0%, transparent 60%),
+    radial-gradient(80% 60% at 15% 0%, #e4e2fb 0%, transparent 70%),
+    linear-gradient(180deg, #f6f9fd 0%, #edf3fb 55%, #e1ecf9 100%);
+}
+:root[data-theme="light"] .auth-sky span {
+  background: #8fb4e0;
+  box-shadow: none;
+}
+:root[data-theme="light"] .auth-redesign .auth-card {
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.92),
+    rgba(255, 255, 255, 0.72)
+  );
+  box-shadow:
+    0 30px 80px -34px rgba(8, 35, 64, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+:root[data-theme="light"] .auth-redesign .auth-card::before {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(87, 146, 204, 0.8),
+    transparent
+  );
+}
+:root[data-theme="light"] .auth-redesign .auth-card h1 {
+  color: var(--ink);
+}
+:root[data-theme="light"] .auth-redesign .auth-card input {
+  background: #fff;
+}
+:root[data-theme="light"] .auth-redesign .auth-card input:focus {
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 3px rgba(87, 146, 204, 0.2);
+}
+:root[data-theme="light"] .auth-redesign .auth-password-heading .text-button {
+  color: var(--brand-action);
 }

@@ -24,7 +24,6 @@ export function Brand({ light = false }: { light?: boolean }) {
         height="192"
         alt="Duka Group"
       />
-      <span className="brand-sub">HAPËSIRA E RAPORTEVE</span>
     </span>
   );
 }

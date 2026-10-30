@@ -104,3 +104,35 @@ export function HanaFace({
     </div>
   );
 }
+
+/**
+ * Hana framed as she appears after the moonrise: a glowing, softly masked
+ * circle. Her introduction flies into this slot and lands exactly on it, so
+ * while `awaiting` she stays hidden and the flying Hana takes her place.
+ */
+export function HanaSlot({
+  line,
+  delay,
+  awaiting = false,
+  className = "",
+}: {
+  line?: string;
+  delay?: number;
+  awaiting?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`hana-slot${awaiting ? " is-awaiting" : ""} ${className}`}
+      role="img"
+      aria-label="Hana"
+    >
+      <span className="hana-slot-orbit" aria-hidden="true" />
+      <span className="hana-slot-orbit inner" aria-hidden="true" />
+      <div className="hana-halo" />
+      <div className="hana-slot-portrait">
+        <HanaFace line={awaiting ? undefined : line} delay={delay} />
+      </div>
+    </div>
+  );
+}

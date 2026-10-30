@@ -9,14 +9,14 @@ const { syllables, planSpeech, mouthAt, PACE, stepSpring, transitionTiming } = a
 
 const split = (word) => syllables(word).map(([a, b]) => word.slice(a, b)).join('-');
 
-test('intro has 0.7-second moonrise and half-second transformation without changing logout', () => {
+test('intro has 1.3-second moonrise and 1.2-second transformation without changing logout', () => {
   for (const mode of ['presentation','greeting','farewell']) {
     const timing=transitionTiming(mode);
-    assert.equal(timing.rise,mode==='farewell'?0:700);
-    assert.equal(timing.transformation,mode==='farewell'?1000:500);
+    assert.equal(timing.rise,mode==='farewell'?0:1300);
+    assert.equal(timing.transformation,mode==='farewell'?1000:1200);
     assert.equal(timing.speechEnd-timing.speechStart,1700);
-    assert.equal(timing.speechStart,mode==='farewell'?0:1200);
-    assert.equal(timing.total,mode==='farewell'?2700:3150);
+    assert.equal(timing.speechStart,mode==='farewell'?0:2500);
+    assert.equal(timing.total,mode==='farewell'?2700:4450);
     assert.deepEqual(transitionTiming(mode,true),{rise:0,transformation:0,speechStart:0,speechEnd:1700,total:1700});
   }
 });

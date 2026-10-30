@@ -12,12 +12,19 @@
   z-index: 1000;
   overflow: hidden;
   color: #eef3ff;
+  animation: intro-fade-in 0.3s ease-out both;
+  font-family: inherit;
+}
+/* The night sky is its own layer so it can fade while Hana flies on. */
+.hana-intro::before {
+  content: "";
+  position: absolute;
+  inset: 0;
   background:
     radial-gradient(120% 90% at 50% 110%, #1d3a6b 0%, transparent 60%),
     radial-gradient(80% 60% at 15% 0%, #1a2350 0%, transparent 70%),
     linear-gradient(180deg, #050816 0%, #0b1433 55%, #13265a 100%);
-  animation: intro-fade-in 0.3s ease-out both;
-  font-family: inherit;
+  transition: opacity 0.75s ease-in-out;
 }
 .hana-intro.phase-leaving {
   animation: intro-fade-out 0.25s ease-in forwards;
@@ -147,7 +154,10 @@
   flex-shrink: 0;
   transition: transform 1s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.hana-intro:not(.phase-alive):not(.phase-leaving) .intro-scene {
+.hana-intro.phase-sky .intro-scene,
+.hana-intro.phase-moon .intro-scene,
+.hana-intro.phase-transform .intro-scene,
+.hana-intro:not(.is-docking).phase-setting .intro-scene {
   transform: translateX(calc(var(--figure) * 0.32));
 }
 .hana-intro.still .intro-scene {
@@ -193,12 +203,13 @@
   box-shadow: 0 0 24px 4px rgba(255, 246, 214, 0.5);
 }
 .phase-moon .intro-moon {
-  animation: intro-moon-rise 0.6s cubic-bezier(0.2, 0.75, 0.25, 1) forwards;
+  animation: intro-moon-rise 1.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+.phase-arriving .intro-moon,
 .phase-transform .intro-moon {
   opacity: 1;
   transform: none;
-  animation: intro-moon-become 0.55s ease-in forwards;
+  animation: intro-moon-become 1.2s ease-in-out forwards;
 }
 .phase-alive .intro-moon,
 .phase-leaving .intro-moon {
@@ -220,19 +231,27 @@
     opacity: 1;
   }
 }
+/* The moon brightens and dissolves in place while Hana opens out of it. */
 @keyframes intro-moon-become {
   0% {
-    transform: scale(1);
+    opacity: 1;
+    transform: none;
     filter: brightness(1);
   }
-  45% {
-    transform: scale(1.25) rotate(-12deg);
-    filter: brightness(1.5);
+  35% {
+    opacity: 1;
+    transform: scale(1.05);
+    filter: brightness(1.3);
+  }
+  70% {
+    opacity: 0.3;
+    transform: scale(1.1);
+    filter: brightness(1.55);
   }
   100% {
-    transform: scale(2.3) rotate(-30deg);
-    filter: brightness(3);
     opacity: 0;
+    transform: scale(1.13);
+    filter: brightness(1.6);
   }
 }
 .moon-crater {
@@ -281,9 +300,11 @@
   );
   transform: translateX(-12%);
 }
+/* The crescent fills to a full moon as it settles. */
 .phase-moon .moon-shadow {
-  animation: intro-phase 0.55s ease-in-out 0.05s forwards;
+  animation: intro-phase 0.9s ease-in-out 0.4s forwards;
 }
+.phase-arriving .moon-shadow,
 .phase-transform .moon-shadow {
   transform: translateX(-130%);
 }
@@ -306,21 +327,22 @@
   opacity: 0;
   pointer-events: none;
 }
+.phase-arriving .intro-flash,
 .phase-transform .intro-flash {
-  animation: intro-flash 0.6s ease-out 0.12s both;
+  animation: intro-flash 0.9s ease-out 0.25s both;
 }
 @keyframes intro-flash {
   0% {
     opacity: 0;
-    transform: scale(0.4);
+    transform: scale(0.7);
   }
-  35% {
-    opacity: 1;
-    transform: scale(1.3);
+  45% {
+    opacity: 0.7;
+    transform: scale(1.05);
   }
   100% {
     opacity: 0;
-    transform: scale(1.8);
+    transform: scale(1.45);
   }
 }
 
@@ -339,8 +361,9 @@
   box-shadow: 0 0 10px #ffe9a8;
   opacity: 0;
 }
+.phase-arriving .intro-burst span,
 .phase-transform .intro-burst span {
-  animation: intro-spark 0.5s ease-out calc(0.12s + var(--delay) * 0.5) both;
+  animation: intro-spark 0.9s ease-out calc(0.35s + var(--delay) * 0.5) both;
 }
 @keyframes intro-spark {
   0% {
@@ -363,8 +386,9 @@
   opacity: 0;
   pointer-events: none;
 }
+.phase-arriving .intro-hana,
 .phase-transform .intro-hana {
-  animation: intro-reveal 0.55s cubic-bezier(0.3, 0.7, 0.2, 1) 0.12s both;
+  animation: intro-reveal 0.9s cubic-bezier(0.33, 0, 0.2, 1) 0.3s both;
 }
 .phase-alive .intro-hana,
 .phase-leaving .intro-hana {
@@ -374,22 +398,22 @@
 .phase-leaving .intro-hana {
   animation: intro-hana-leave 0.25s ease-in forwards;
 }
+/* Hana fades in inside the moon's own circle (23% is the moon's radius),
+   then the circle widens to her full portrait. Only opacity, transform and
+   clip-path move, which keeps the frame rate steady. */
 @keyframes intro-reveal {
   0% {
     opacity: 0;
-    clip-path: circle(0% at 50% 50%);
-    filter: brightness(2.2) saturate(0);
-    transform: scale(0.85);
-  }
-  40% {
-    opacity: 1;
     clip-path: circle(23% at 50% 50%);
-    filter: brightness(1.6) saturate(0.4);
+    transform: scale(0.98);
+  }
+  30% {
+    opacity: 1;
+    clip-path: circle(27% at 50% 50%);
   }
   100% {
     opacity: 1;
     clip-path: circle(100% at 50% 50%);
-    filter: none;
     transform: none;
   }
 }
@@ -710,7 +734,10 @@
     padding-top: 56px;
     gap: 4px;
   }
-  .hana-intro:not(.phase-alive):not(.phase-leaving) .intro-scene {
+  .hana-intro.phase-sky .intro-scene,
+  .hana-intro.phase-moon .intro-scene,
+  .hana-intro.phase-transform .intro-scene,
+  .hana-intro:not(.is-docking).phase-setting .intro-scene {
     transform: translateY(calc(18vh / var(--ui-zoom, 1)));
   }
   .intro-speech::before {
@@ -745,17 +772,10 @@
   }
 }
 
-/* A 0.7-second rise, half a second becoming Hana, then a 1.7-second greeting. */
+/* A 1.3-second rise, 1.2 seconds becoming Hana, then a 1.7-second greeting.
+   When she starts to speak she glides aside to make room for her words. */
 .hana-intro .intro-scene {
-  transition-duration: 0.2s;
-}
-.hana-intro.phase-moon .intro-moon {
-  animation-duration: 0.7s;
-}
-.hana-intro.phase-transform .intro-moon,
-.hana-intro.phase-transform .intro-hana {
-  animation-duration: 0.5s;
-  animation-delay: 0s;
+  transition: transform 0.9s cubic-bezier(0.45, 0, 0.2, 1);
 }
 .hana-intro .hana-sway {
   animation: none;
@@ -895,4 +915,169 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
+}
+
+/* The place Hana lands after her introduction (login and home pages). It is
+   framed exactly like .intro-scene so the flight ends without a jump. */
+.hana-slot {
+  position: relative;
+  aspect-ratio: 1;
+}
+.hana-slot .hana-halo {
+  animation: intro-halo 4s ease-in-out infinite alternate;
+}
+.hana-slot-portrait {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  -webkit-mask-image: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    #000 66%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    #000 66%,
+    transparent 100%
+  );
+}
+/* Two thin orbits circle her once she has landed. */
+.hana-slot-orbit {
+  position: absolute;
+  inset: -4%;
+  border-radius: 50%;
+  border: 1px solid rgba(140, 190, 255, 0.22);
+  border-top-color: rgba(160, 220, 255, 0.85);
+  border-right-color: rgba(190, 150, 255, 0.5);
+  pointer-events: none;
+  transition: opacity 0.8s ease-out 0.2s;
+  animation: hana-orbit 14s linear infinite;
+}
+.hana-slot-orbit.inner {
+  inset: 3%;
+  border-color: rgba(140, 190, 255, 0.1);
+  border-bottom-color: rgba(255, 231, 166, 0.6);
+  animation-duration: 22s;
+  animation-direction: reverse;
+}
+.hana-slot-orbit::after {
+  content: "";
+  position: absolute;
+  top: 14.6%;
+  right: 14.6%;
+  width: 6px;
+  height: 6px;
+  margin: -3px -3px 0 0;
+  border-radius: 50%;
+  background: #bfe6ff;
+  box-shadow: 0 0 12px 2px rgba(130, 200, 255, 0.9);
+}
+.hana-slot-orbit.inner::after {
+  top: auto;
+  right: auto;
+  bottom: 14.6%;
+  left: 14.6%;
+  margin: 0 0 -3px -3px;
+  background: #ffe7a6;
+  box-shadow: 0 0 12px 2px rgba(255, 220, 140, 0.85);
+}
+@keyframes hana-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Opacity, not visibility: her blinking eyelids make themselves visible. */
+.hana-slot.is-awaiting > * {
+  opacity: 0;
+}
+/* The halo's breathing animation sets its own opacity, so stop it as well. */
+.hana-slot.is-awaiting .hana-halo {
+  animation: none;
+}
+.hana-slot.is-awaiting .hana-slot-orbit {
+  opacity: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hana-slot-orbit,
+  .hana-slot .hana-halo {
+    animation: none;
+  }
+}
+
+/* Opening: after greeting, Hana flies into her place on the page below while
+   the sky and her words fade away (see flyTo in HanaIntro). */
+.phase-docking::before,
+.phase-docking .intro-sky,
+.phase-descending::before,
+.phase-descending .intro-sky,
+.phase-arriving::before,
+.phase-arriving .intro-sky {
+  opacity: 0;
+}
+.intro-sky {
+  transition: opacity 0.6s ease-in-out;
+}
+.phase-docking .intro-speech {
+  opacity: 1;
+  transform: none;
+  animation: intro-fade-out 0.3s ease-in forwards;
+}
+.phase-docking .intro-hana {
+  opacity: 1;
+}
+.phase-docking .hana-floaters {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.phase-docking,
+.phase-descending,
+.phase-arriving {
+  pointer-events: none;
+}
+
+/* Sign-out: Hana becomes the crescent moon, which stays in the sky, then
+   sinks into the sign-in page and turns back into Hana as it settles. */
+.hana-intro.mode-farewell.is-docking:not(.phase-alive) {
+  animation: none;
+}
+.is-docking.phase-setting .intro-moon {
+  animation: intro-moon-appear 0.45s ease-out 0.3s both;
+}
+@keyframes intro-moon-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.phase-descending .intro-moon {
+  display: block;
+  opacity: 1;
+  transform: none;
+}
+.phase-descending .moon-shadow {
+  animation: intro-phase 0.8s ease-in-out 0.1s forwards;
+}
+.phase-descending .intro-hana {
+  opacity: 0;
+}
+
+/* While the session is checked, the sky of the coming moonrise is already up. */
+.opening-sky {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 50% 110%, #1d3a6b 0%, transparent 60%),
+    radial-gradient(80% 60% at 15% 0%, #1a2350 0%, transparent 70%),
+    linear-gradient(180deg, #050816 0%, #0b1433 55%, #13265a 100%);
+}
+
+/* A quiet intro has no speech bubble: the moon rises in the centre. */
+.hana-intro.is-quiet .intro-scene {
+  transform: none;
 }

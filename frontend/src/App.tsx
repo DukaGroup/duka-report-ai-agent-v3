@@ -35,7 +35,7 @@ import {
 import { GlobalSearch } from "./GlobalSearch";
 import { ChatScrollFollower } from "./chatScroll";
 import HanaIntro, { type IntroMode } from "./HanaIntro";
-import { HanaFace } from "./HanaFace";
+import { HanaFace, HanaSlot } from "./HanaFace";
 import {
   HanaStage,
   orbModeForStage,
@@ -118,6 +118,7 @@ import { restoreDeviceNotifications } from "./deviceNotifications";
 import { settingsSections } from "./settings";
 import type { SettingsTab } from "./settings";
 import { HanaAvatar } from "./HanaAvatar";
+import { UserAvatar } from "./UserAvatar";
 import { HanaOrb } from "./HanaOrb";
 import "./auth.css";
 
@@ -210,13 +211,27 @@ function Modal({
   );
 }
 
+// Fixed star positions for the sign-in sky, so they never jump between renders.
+const AUTH_STARS = Array.from({ length: 70 }, (_, index) => {
+  const at = (n: number) =>
+    (((Math.sin(index * 12.9898 + n * 78.233) * 43758.5453) % 1) + 1) % 1;
+  return {
+    x: at(1) * 100,
+    y: at(2) * 100,
+    size: 1 + at(3) * 2.2,
+    delay: at(4) * 4,
+  };
+});
+
 function Auth({
   setup,
   setupTokenRequired,
+  hanaArriving,
   onDone,
 }: {
   setup: boolean;
   setupTokenRequired: boolean;
+  hanaArriving: boolean;
   onDone: (u: User) => void;
 }) {
   const [error, setError] = useState(""),
@@ -254,19 +269,29 @@ function Auth({
   if (recovering) return <RecoveryForm onBack={() => setRecovering(false)} />;
   return (
     <div className="auth-page auth-redesign">
+      <div className="auth-sky" aria-hidden="true">
+        {AUTH_STARS.map((star, index) => (
+          <span
+            key={index}
+            style={
+              {
+                left: `${star.x}%`,
+                top: `${star.y}%`,
+                "--size": `${star.size}px`,
+                "--delay": `${star.delay}s`,
+              } as CSSProperties
+            }
+          />
+        ))}
+      </div>
       <main className="auth-layout">
-        <header className="auth-brand">
-          <Brand />
-        </header>
+        <section className="auth-hana">
+          <HanaSlot className="auth-hana-slot" awaiting={hanaArriving} />
+        </section>
         <section className="auth-form-panel">
           <div className="auth-card" ref={card}>
-            <span className="auth-kicker">HAPËSIRA JUAJ E PUNËS</span>
-            <h1>{setup ? "Mirë se vini." : "Mirë se u kthyet."}</h1>
-            <p>
-              {setup
-                ? "Krijoni llogarinë e administratorit për të nisur punën."
-                : "Hyni në llogari për të vazhduar bisedat dhe raportet tuaja."}
-            </p>
+            <Brand />
+            <h1>{setup ? "Krijo llogarinë" : "Hyni në llogari"}</h1>
             <form onSubmit={submit}>
               {setup && setupTokenRequired && (
                 <label>
@@ -368,18 +393,83 @@ function Auth({
                 {setup ? "Krijo hapësirën" : "Hyr"}
               </button>
             </form>
-            <div className="auth-note">
-              <ShieldCheck size={16} /> Qasje e sigurt në hapësirën e kompanisë.
-            </div>
           </div>
         </section>
       </main>
-      <p className="auth-footer">
-        {" "}
-        DUKA GROUP <span> Biseda që sjellin qartësi. </span>
-      </p>
     </div>
   );
+}
+
+type IntroState = {
+  mode: IntroMode;
+  name: string;
+  // Where Hana lands on the page below when she is done (see HanaIntro).
+  dock?: string;
+  // Skip the greeting and fly straight to `dock`.
+  quiet?: boolean;
+};
+
+const HOME_SLOT = ".home-portrait";
+const OPENED_KEY = "duka.opened";
+
+// The moonrise plays when the app is opened, not on every refresh: session
+// storage survives a reload but is cleared once the tab or window is closed.
+function firstOpening() {
+  try {
+    if (sessionStorage.getItem(OPENED_KEY)) return false;
+    sessionStorage.setItem(OPENED_KEY, "1");
+  } catch {
+    // Without storage the intro simply plays each time.
+  }
+  return true;
+}
+const SIGN_IN_SLOT = ".auth-hana-slot";
+const SIGNED_OUT_KEY = "duka.signedOut";
+const VIEW_KEY = "duka.view";
+
+// Where the member is in the workspace, so a refresh reopens the same page.
+// Kept per tab: a new tab, or signing in again, starts on the home page.
+type SavedView = {
+  userId: string;
+  page: Page;
+  settingsTab: SettingsTab;
+  conversationId: string | null;
+};
+function savedView(userId: string): SavedView | null {
+  try {
+    const view = JSON.parse(sessionStorage.getItem(VIEW_KEY) || "null");
+    return view?.userId === userId ? view : null;
+  } catch {
+    return null;
+  }
+}
+function saveView(view: SavedView) {
+  try {
+    sessionStorage.setItem(VIEW_KEY, JSON.stringify(view));
+  } catch {
+    // Without storage a refresh simply starts on the home page.
+  }
+}
+
+// Signing out marks this tab, so signing back in while it is still open plays
+// the intro again. A freshly opened tab starts unmarked: its moonrise has
+// already played before the sign-in page.
+function markSignedOut() {
+  try {
+    sessionStorage.setItem(SIGNED_OUT_KEY, "1");
+    sessionStorage.removeItem(VIEW_KEY);
+  } catch {
+    // Without storage, signing back in simply skips the intro.
+  }
+}
+function returningAfterSignOut() {
+  try {
+    if (!sessionStorage.getItem(SIGNED_OUT_KEY)) return false;
+    sessionStorage.removeItem(SIGNED_OUT_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export default function App() {
@@ -387,8 +477,10 @@ export default function App() {
     [setup, setSetup] = useState(false),
     [setupTokenRequired, setSetupTokenRequired] = useState(false),
     [user, setUser] = useState<User | null>(null);
-  // The first presentation runs once; later visits are greeted on the home page.
-  const [intro, setIntro] = useState<IntroMode | null>(null);
+  // Opening the app starts with the moonrise; Hana then lands on the sign-in
+  // page, or greets a signed-in member and flies into the home page.
+  const [intro, setIntro] = useState<IntroState | null>(null);
+  const opened = useRef(false);
   const [error, setError] = useState("");
   // While Hana says goodbye the server session is already closed, so requests
   // fail as "signed out". The goodbye still plays to the end before we leave.
@@ -398,6 +490,7 @@ export default function App() {
     if (!user) return;
     return onSessionEnded(user.id, () => {
       if (sayingGoodbye.current) return;
+      markSignedOut();
       setUser(null);
       setError("");
     });
@@ -416,9 +509,26 @@ export default function App() {
             setSetup(r.needs_setup);
             setSetupTokenRequired(Boolean(r.setup_token_required));
             setUser(r.user);
-            // A refresh shows no greeting; an unfinished first presentation resumes.
-            if (r.user?.intro_pending)
-              setIntro((current) => current ?? "presentation");
+            if (!opened.current) {
+              opened.current = true;
+              if (firstOpening())
+                setIntro(
+                  r.user
+                    ? {
+                        mode: r.user.intro_pending
+                          ? "presentation"
+                          : "greeting",
+                        name: r.user.name,
+                        dock: HOME_SLOT,
+                      }
+                    : {
+                        mode: "presentation",
+                        name: "",
+                        dock: SIGN_IN_SLOT,
+                        quiet: true,
+                      },
+                );
+            }
             setError("");
           }
           return true;
@@ -437,16 +547,33 @@ export default function App() {
       stop();
     };
   }, []);
-  if (loading)
-    return (
-      <div className="loading-screen">
-        <Brand />
-        <LoaderCircle className="spin" />
-        <p> Duke hapur hapësirën… </p>
-      </div>
-    );
-  if (error && !user)
-    return (
+  // After the goodbye the sign-in page appears below Hana; the server session
+  // is closed (again, if the first request failed) and other tabs sign out.
+  const leaving = useRef<string | null>(null);
+  function land() {
+    const id = leaving.current;
+    if (!id) return;
+    leaving.current = null;
+    markSignedOut();
+    setUser(null);
+    setError("");
+    void (logoutRequest.current ?? Promise.resolve(false))
+      .then(
+        (closed) =>
+          closed ||
+          api("/auth/logout", { method: "POST" }).catch(() => undefined),
+      )
+      .finally(() => {
+        sayingGoodbye.current = false;
+        logoutRequest.current = null;
+        endSession(id);
+      });
+  }
+  const hanaArriving = Boolean(intro?.dock);
+  let page: ReactNode;
+  if (loading) page = <div className="opening-sky" aria-busy="true" />;
+  else if (error && !user)
+    page = (
       <div className="loading-screen">
         <p role="alert">{error}</p>
         <p>Po provojmë lidhjen përsëri automatikisht…</p>
@@ -459,58 +586,64 @@ export default function App() {
         </button>
       </div>
     );
-  if (!user)
-    return (
+  else if (!user)
+    page = (
       <Auth
         setup={setup}
         setupTokenRequired={setupTokenRequired}
+        hanaArriving={hanaArriving}
         onDone={(u) => {
           setUser(u);
           setSetup(false);
-          setIntro(u.intro_pending ? "presentation" : null);
+          const returning = returningAfterSignOut();
+          setIntro(
+            u.intro_pending
+              ? { mode: "presentation", name: u.name, dock: HOME_SLOT }
+              : returning
+                ? { mode: "greeting", name: u.name, dock: HOME_SLOT }
+                : null,
+          );
         }}
       />
     );
+  else
+    page = (
+      <>
+        <TooltipLayer />
+        <Workspace
+          key={user.id}
+          user={user}
+          hanaArriving={hanaArriving}
+          onLogout={() => endSession(user.id)}
+          onGoodbye={() => {
+            sayingGoodbye.current = true;
+            leaving.current = user.id;
+            setIntro({ mode: "farewell", name: user.name, dock: SIGN_IN_SLOT });
+            logoutRequest.current = api("/auth/logout", { method: "POST" })
+              .then(() => true)
+              .catch(() => false);
+          }}
+          onShowIntro={() =>
+            setIntro({ mode: "presentation", name: user.name })
+          }
+        />
+      </>
+    );
   return (
     <>
-      <TooltipLayer />
-      <Workspace
-        key={user.id}
-        user={user}
-        onLogout={() => endSession(user.id)}
-        onGoodbye={() => {
-          sayingGoodbye.current = true;
-          setIntro("farewell");
-          logoutRequest.current = api("/auth/logout", { method: "POST" })
-            .then(() => true)
-            .catch(() => false);
-        }}
-        onShowIntro={() => setIntro("presentation")}
-      />
-      {intro && (
+      {page}
+      {intro && !loading && (
         <HanaIntro
-          name={user.name}
-          mode={intro}
+          name={intro.name}
+          mode={intro.mode}
+          dock={intro.dock}
+          quiet={intro.quiet}
+          onLanding={land}
           onDone={() => {
             setIntro(null);
-            // Hana has finished; make sure the server session is closed, then leave.
-            if (intro === "farewell") {
-              void (logoutRequest.current ?? Promise.resolve(false))
-                .then(
-                  (closed) =>
-                    closed ||
-                    api("/auth/logout", { method: "POST" }).catch(
-                      () => undefined,
-                    ),
-                )
-                .finally(() => {
-                  sayingGoodbye.current = false;
-                  logoutRequest.current = null;
-                  endSession(user.id);
-                });
-              return;
-            }
-            if (intro === "presentation" && user.intro_pending) {
+            // Hana has finished; make sure the sign-out has happened.
+            if (intro.mode === "farewell") return land();
+            if (intro.mode === "presentation" && user?.intro_pending) {
               setUser({ ...user, intro_pending: false });
               // Seen once per member; a failed save only means it shows again.
               void api("/auth/introduction", { method: "POST" }).catch(
@@ -526,11 +659,13 @@ export default function App() {
 
 function Workspace({
   user,
+  hanaArriving,
   onLogout,
   onGoodbye,
   onShowIntro,
 }: {
   user: User;
+  hanaArriving: boolean;
   onLogout: () => void;
   onGoodbye: () => void;
   onShowIntro: () => void;
@@ -550,7 +685,12 @@ function Workspace({
   useEffect(() => {
     if (hanaProfileOpen) setProfileSaid(0);
   }, [hanaProfileOpen]);
-  const [page, setPage] = useState<Page>("home"),
+  // Read once: later saves must not replace the chat that is still reopening.
+  const [restored] = useState(() => savedView(user.id));
+  const reopening = useRef(
+    restored?.page === "chat" ? restored.conversationId : null,
+  );
+  const [page, setPage] = useState<Page>(restored?.page ?? "home"),
     [rawError, setError] = useState("");
   // Presidents and managers see one calm message for every error; Devs see
   // the actual error.
@@ -737,7 +877,12 @@ function Workspace({
     [sources, setSources] = useState<Source[]>([]),
     [adminDatasets, setAdminDatasets] = useState<Dataset[]>([]),
     [audit, setAudit] = useState<Audit[]>([]);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(() =>
+    restored &&
+    settingsSections(user.role).some((s) => s.id === restored.settingsTab)
+      ? restored.settingsTab
+      : "appearance",
+  );
   const availableSettings = settingsSections(user.role);
   const settingsScroll = useRef<HTMLElement>(null);
   const [addUser, setAddUser] = useState(false),
@@ -1249,6 +1394,16 @@ function Workspace({
         if (requested && !previous)
           setError("Biseda e njoftimit nuk është më e disponueshme.");
         if (previous && !activeId.current) void selectConversation(previous);
+        else if (reopening.current) {
+          const open = items.find((c) => c.id === reopening.current);
+          if (!open) {
+            reopening.current = null;
+            setPage("home");
+          } else if (!activeId.current)
+            void selectConversation(open).finally(() => {
+              reopening.current = null;
+            });
+        }
       }),
       api<Template[]>("/report-templates").then(setTemplates),
       api<Dataset[]>("/datasets").then(setDatasets),
@@ -1256,6 +1411,14 @@ function Workspace({
       loadReports(),
     ]).catch(fail);
   }, [user]);
+  useEffect(() => {
+    saveView({
+      userId: user.id,
+      page,
+      settingsTab,
+      conversationId: currentId ?? reopening.current,
+    });
+  }, [user.id, page, settingsTab, currentId]);
   useEffect(() => {
     if (
       page === "settings" &&
@@ -2666,14 +2829,13 @@ function Workspace({
               setDeleteChat(conversation);
             }}
             conversationRunning={conversationRunning}
+            hanaArriving={hanaArriving}
           />
         )}
         {page === "conversations" && (
           <main className="page-content conversation-library">
             <PageHeading
-              eyebrow="HAPËSIRA JUAJ E BISEDAVE"
               title="Bisedat tuaja."
-              text="Hapni një bisedë për të vazhduar aty ku e latë, ose nisni një të re."
               action={
                 <button
                   className="button primary"
@@ -2842,17 +3004,10 @@ function Workspace({
                     >
                       <HanaAvatar />
                     </button>
-                    <span className="eyebrow"> BIZNESI JUAJ NË BISEDË </span>
                     <h1>
                       {" "}
                       Një pyetje për <br /> një pamje më të qartë.{" "}
                     </h1>
-                    <p>
-                      {" "}
-                      Diskutoni një ide, analizoni shifrat ose ktheni{" "}
-                      <br className="desktop-break" /> një pyetje në raport.
-                      Filloni këtu.{" "}
-                    </p>
                     <div className="suggestions">
                       {[
                         {
@@ -2888,18 +3043,26 @@ function Workspace({
                         </button>
                       ))}
                     </div>
-                    <div className="welcome-note">
-                      <ShieldCheck size={15} />{" "}
-                      {isDev
-                        ? `Mundësuar nga abonimi i përbashkët ${providerName}.`
-                        : "Shihni vetëm të dhënat ku keni qasje."}
-                    </div>
+                    {isDev && (
+                      <div className="welcome-note">
+                        <ShieldCheck size={15} /> Mundësuar nga abonimi i
+                        përbashkët {providerName}.
+                      </div>
+                    )}
                   </section>
                 ) : (
                   <div className="messages">
                     {chatTimeline.map((entry) => {
                       if (entry.kind === "message") {
                         const m = entry.message;
+                        // Others see only Hana's orb and her thinking dots
+                        // until the first words of the reply arrive.
+                        const thinkingOnly =
+                          !isDev &&
+                          m.role === "assistant" &&
+                          !m.content &&
+                          (pendingMessages.has(m.id) ||
+                            m.status === "streaming");
                         return (
                           <article
                             key={entry.key}
@@ -2915,7 +3078,7 @@ function Workspace({
                               m.content
                                 ? " speaking"
                                 : ""
-                            }`}
+                            }${thinkingOnly ? " thinking-only" : ""}`}
                             id={`message-${m.id}`}
                           >
                             {m.role === "assistant" ? (
@@ -2943,9 +3106,11 @@ function Workspace({
                                 />
                               </button>
                             ) : (
-                              <div className="message-avatar user">
-                                {user.name.slice(0, 1)}
-                              </div>
+                              <UserAvatar
+                                className="message-avatar user"
+                                name={user.name}
+                                seed={user.id}
+                              />
                             )}
                             {m.role === "assistant" && (
                               <span
@@ -2966,120 +3131,129 @@ function Workspace({
                                 <i />
                               </span>
                             )}
-                            <div className="message-body">
-                              <div className="message-author">
-                                {m.role === "assistant" ? (
-                                  <button
-                                    type="button"
-                                    className="assistant-name"
-                                    data-tooltip="Shiko profilin e Hanës"
-                                    onClick={() => setHanaProfileOpen(true)}
-                                  >
-                                    Hana
-                                  </button>
-                                ) : (
-                                  <>
-                                    {user.name} <span>Ju</span>
-                                  </>
-                                )}
-                              </div>
-                              {!!m.attachments?.length && (
-                                <div className="message-attachments">
-                                  {m.attachments.map((a) => attachmentChip(a))}
-                                </div>
-                              )}
-                              {pendingMessages.has(m.id) && (
-                                <ThinkingStatus
-                                  description={pendingDescription}
-                                />
-                              )}
-                              {isDev && m.role === "assistant" && (
-                                <ActivityTimeline
-                                  steps={m.steps || []}
-                                  active={m.status === "streaming"}
-                                  technical={isDev}
-                                />
-                              )}
-                              {m.content && (
-                                <MarkdownContent
-                                  streaming={
-                                    m.role === "assistant" &&
-                                    m.status === "streaming"
-                                  }
-                                  celebrate={justAnswered === m.id}
-                                  reportStatus={reportStatus}
-                                >
-                                  {m.role === "assistant" &&
-                                  m.status === "failed"
-                                    ? userError(m.content, isDev)
-                                    : m.content}
-                                </MarkdownContent>
-                              )}
-                              {m.role === "assistant" &&
-                                m.content &&
-                                !pendingMessages.has(m.id) &&
-                                !["streaming", "failed"].includes(
-                                  m.status || "",
-                                ) && (
-                                  <div className="message-actions assistant-actions">
-                                    <CopyMessageButton text={m.content} />
-                                  </div>
-                                )}
-                              {m.role === "user" && (
-                                <div className="message-actions">
-                                  <CopyMessageButton text={m.content} />
-                                  {!chatLocked && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        className="icon-button"
-                                        aria-label="Ndrysho mesazhin"
-                                        data-tooltip="Ndrysho mesazhin dhe rinis bisedën"
-                                        onClick={() => {
-                                          setRetryMessageId(m.id);
-                                          setDraft(m.content);
-                                          setPendingAttachments(
-                                            m.attachments || [],
-                                          );
-                                        }}
-                                      >
-                                        <Pencil size={16} aria-hidden="true" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="icon-button"
-                                        aria-label="Ridërgo"
-                                        data-tooltip="Ridërgo dhe rinis bisedën nga ky mesazh"
-                                        onClick={() =>
-                                          void send(
-                                            m.content,
-                                            m.id,
-                                            m.attachments || [],
-                                          )
-                                        }
-                                      >
-                                        <RotateCcw
-                                          size={16}
-                                          aria-hidden="true"
-                                        />
-                                      </button>
-                                    </>
+                            {thinkingOnly ? (
+                              <span className="sr-only" role="status">
+                                {pendingDescription}
+                              </span>
+                            ) : (
+                              <div className="message-body">
+                                <div className="message-author">
+                                  {m.role === "assistant" ? (
+                                    <button
+                                      type="button"
+                                      className="assistant-name"
+                                      data-tooltip="Shiko profilin e Hanës"
+                                      onClick={() => setHanaProfileOpen(true)}
+                                    >
+                                      Hana
+                                    </button>
+                                  ) : (
+                                    user.name
                                   )}
                                 </div>
-                              )}
-                              {m.status === "failed" && isDev && (
-                                <span className="message-warning">
-                                  {" "}
-                                  Përgjigjja nuk përfundoi.{" "}
-                                </span>
-                              )}
-                              {m.status === "interrupted" && (
-                                <span className="message-warning">
-                                  {" "}
-                                  Përgjigjja u ndërpre.{" "}
-                                </span>
-                              )}
-                            </div>
+                                {!!m.attachments?.length && (
+                                  <div className="message-attachments">
+                                    {m.attachments.map((a) =>
+                                      attachmentChip(a),
+                                    )}
+                                  </div>
+                                )}
+                                {pendingMessages.has(m.id) && (
+                                  <ThinkingStatus
+                                    description={pendingDescription}
+                                  />
+                                )}
+                                {isDev && m.role === "assistant" && (
+                                  <ActivityTimeline
+                                    steps={m.steps || []}
+                                    active={m.status === "streaming"}
+                                    technical={isDev}
+                                  />
+                                )}
+                                {m.content && (
+                                  <MarkdownContent
+                                    streaming={
+                                      m.role === "assistant" &&
+                                      m.status === "streaming"
+                                    }
+                                    celebrate={justAnswered === m.id}
+                                    reportStatus={reportStatus}
+                                  >
+                                    {m.role === "assistant" &&
+                                    m.status === "failed"
+                                      ? userError(m.content, isDev)
+                                      : m.content}
+                                  </MarkdownContent>
+                                )}
+                                {m.role === "assistant" &&
+                                  m.content &&
+                                  !pendingMessages.has(m.id) &&
+                                  !["streaming", "failed"].includes(
+                                    m.status || "",
+                                  ) && (
+                                    <div className="message-actions assistant-actions">
+                                      <CopyMessageButton text={m.content} />
+                                    </div>
+                                  )}
+                                {m.role === "user" && (
+                                  <div className="message-actions">
+                                    <CopyMessageButton text={m.content} />
+                                    {!chatLocked && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="icon-button"
+                                          aria-label="Ndrysho mesazhin"
+                                          data-tooltip="Ndrysho mesazhin dhe rinis bisedën"
+                                          onClick={() => {
+                                            setRetryMessageId(m.id);
+                                            setDraft(m.content);
+                                            setPendingAttachments(
+                                              m.attachments || [],
+                                            );
+                                          }}
+                                        >
+                                          <Pencil
+                                            size={16}
+                                            aria-hidden="true"
+                                          />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="icon-button"
+                                          aria-label="Ridërgo"
+                                          data-tooltip="Ridërgo dhe rinis bisedën nga ky mesazh"
+                                          onClick={() =>
+                                            void send(
+                                              m.content,
+                                              m.id,
+                                              m.attachments || [],
+                                            )
+                                          }
+                                        >
+                                          <RotateCcw
+                                            size={16}
+                                            aria-hidden="true"
+                                          />
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                                {m.status === "failed" && isDev && (
+                                  <span className="message-warning">
+                                    {" "}
+                                    Përgjigjja nuk përfundoi.{" "}
+                                  </span>
+                                )}
+                                {m.status === "interrupted" && (
+                                  <span className="message-warning">
+                                    {" "}
+                                    Përgjigjja u ndërpre.{" "}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </article>
                         );
                       }
@@ -3364,12 +3538,6 @@ function Workspace({
                     </button>
                   </div>
                 </form>
-                <div className="composer-footer">
-                  <span>
-                    {" "}
-                    Verifikoni shifrat e rëndësishme me të dhënat burimore.{" "}
-                  </span>
-                </div>
               </div>
             </main>
           </div>
@@ -3377,11 +3545,7 @@ function Workspace({
 
         {page === "settings" && (
           <main className="page-content settings-page" ref={settingsScroll}>
-            <PageHeading
-              eyebrow="CILËSIMET E HAPËSIRËS"
-              title="Cilësimet"
-              text="Preferencat tuaja dhe kontrollet e hapësirës, në një vend."
-            />
+            <PageHeading title="Cilësimet" />
             <div className="settings-layout">
               <nav
                 className="settings-nav"
@@ -3423,7 +3587,6 @@ function Workspace({
                   <section className="settings-section">
                     <PageHeading
                       level={2}
-                      eyebrow="ABONIMET E PËRBASHKËTA TË HAPËSIRËS"
                       title="Modeli"
                       text="Lidhni ChatGPT dhe Claude për të gjithë anëtarët. Zgjidhni ofruesin për bisedat dhe raportet e reja; qasja në të dhëna mbetet e veçantë për çdo anëtar."
                     />
@@ -3587,7 +3750,6 @@ function Workspace({
                   <section className="settings-section">
                     <PageHeading
                       level={2}
-                      eyebrow="BAZA E RAPORTEVE TUAJA"
                       title="Burimet e të dhënave tuaja."
                       text="Menaxhoni lidhje SQL Server dhe SAP HANA. Çdo server mund të ketë shumë databaza."
                       action={
@@ -4071,9 +4233,8 @@ function Workspace({
         {page === "reports" && (
           <main className="page-content">
             <PageHeading
-              eyebrow="NGA TË DHËNAT TE VENDIMET"
+              eyebrow="HAPËSIRA E RAPORTEVE"
               title="Biblioteka juaj e raporteve."
-              text="Një pasqyrë e qartë e rezultateve, gjetjeve dhe hapave të ardhshëm."
             />
             <label className="library-search report-search">
               <Search size={17} />
@@ -5126,9 +5287,9 @@ function PageHeading({
   action,
   level = 1,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
-  text: string;
+  text?: string;
   action?: ReactNode;
   level?: 1 | 2;
 }) {
@@ -5136,9 +5297,9 @@ function PageHeading({
   return (
     <div className="page-heading">
       <div>
-        <span className="eyebrow">{eyebrow}</span>
+        {eyebrow && <span className="eyebrow">{eyebrow}</span>}
         <Heading>{title}</Heading>
-        <p>{text}</p>
+        {text && <p>{text}</p>}
       </div>
       {action}
     </div>
