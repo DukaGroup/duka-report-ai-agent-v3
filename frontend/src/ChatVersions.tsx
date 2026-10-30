@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ErrorNotice } from "./ErrorNotice";
 import { api } from "./api";
 import { SERVICE_UNAVAILABLE } from "./locale";
 
@@ -83,9 +84,9 @@ export function ChatVersions({
         </label>
       ))}
       {error && (
-        <p role="alert" className="error-box">
+        <ErrorNotice onDismiss={() => setError("")}>
           {technical ? error : SERVICE_UNAVAILABLE}
-        </p>
+        </ErrorNotice>
       )}
       {!!versions.length && (
         <button

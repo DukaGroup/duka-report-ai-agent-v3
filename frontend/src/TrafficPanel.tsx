@@ -9,6 +9,7 @@ import {
   Play,
   X,
 } from "lucide-react";
+import { ErrorNotice } from "./ErrorNotice";
 import { api } from "./api";
 import { Select } from "./Select";
 import { IconButton } from "./IconButton";
@@ -240,11 +241,7 @@ export function TrafficPanel({ eventId }: { eventId?: number }) {
           për listë dhe 20 000 karaktere për tekst; skedarët binarë nuk
           regjistrohen.
         </p>
-        {error && (
-          <p className="error-box" role="alert">
-            {error}
-          </p>
-        )}
+        {error && <ErrorNotice onDismiss={() => setError("")}>{error}</ErrorNotice>}
         <div className="table-scroll">
           <table>
             <thead>
@@ -353,9 +350,9 @@ export function TrafficPanel({ eventId }: { eventId?: number }) {
           {detailLoading ? (
             <p role="status">Duke ngarkuar përmbajtjen…</p>
           ) : detailError ? (
-            <p className="error-box" role="alert">
+            <ErrorNotice onDismiss={() => setDetailError("")}>
               {detailError}
-            </p>
+            </ErrorNotice>
           ) : selected.payload == null ? (
             <p>
               Kjo ngjarje ka vetëm metadata. Përmbajtja nuk ishte regjistruar;

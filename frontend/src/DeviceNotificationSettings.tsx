@@ -5,6 +5,7 @@ import {
   enableDeviceNotifications,
   supportsDeviceNotifications,
 } from "./deviceNotifications";
+import { ErrorNotice } from "./ErrorNotice";
 import { SERVICE_UNAVAILABLE } from "./locale";
 
 export function DeviceNotificationSettings({
@@ -74,9 +75,9 @@ export function DeviceNotificationSettings({
         </p>
       )}
       {error && (
-        <p className="error-banner" role="alert">
+        <ErrorNotice className="error-banner" onDismiss={() => setError("")}>
           {technical ? error : SERVICE_UNAVAILABLE}
-        </p>
+        </ErrorNotice>
       )}
     </section>
   );

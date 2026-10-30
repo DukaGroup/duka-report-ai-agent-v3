@@ -115,11 +115,13 @@ export function HanaSlot({
   delay,
   awaiting = false,
   className = "",
+  onProgress,
 }: {
   line?: string;
   delay?: number;
   awaiting?: boolean;
   className?: string;
+  onProgress?: (characters: number) => void;
 }) {
   return (
     <div
@@ -131,7 +133,11 @@ export function HanaSlot({
       <span className="hana-slot-orbit inner" aria-hidden="true" />
       <div className="hana-halo" />
       <div className="hana-slot-portrait">
-        <HanaFace line={awaiting ? undefined : line} delay={delay} />
+        <HanaFace
+          line={awaiting ? undefined : line}
+          delay={delay}
+          onProgress={onProgress}
+        />
       </div>
     </div>
   );

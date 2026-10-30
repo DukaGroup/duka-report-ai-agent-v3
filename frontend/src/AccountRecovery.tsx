@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { ErrorNotice } from "./ErrorNotice";
 import { api } from "./api";
 import { errorMessage } from "./locale";
 import type { User } from "./types";
@@ -81,11 +82,7 @@ export function MemberRecovery({ member }: { member: User }) {
           autoComplete="new-password"
         />
       </label>
-      {error && (
-        <p role="alert" className="error-box">
-          {error}
-        </p>
-      )}
+      {error && <ErrorNotice onDismiss={() => setError("")}>{error}</ErrorNotice>}
       {done && (
         <p role="status">
           Fjalëkalimi u rivendos. Jepjani privatisht anëtarit.

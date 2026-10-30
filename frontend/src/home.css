@@ -550,3 +550,26 @@
   color: var(--ink);
   background: rgba(8, 35, 64, 0.06);
 }
+/* Right after signing in, her words appear as she says them. */
+.home-greeting p.home-speech {
+  min-height: 7.5em;
+  display: grid;
+  align-items: center;
+}
+.home-speech > span {
+  animation: home-sentence 0.3s ease-out both;
+}
+.home-unsaid {
+  opacity: 0;
+}
+@keyframes home-sentence {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (max-width: 760px) {
+  .home-greeting p.home-speech {
+    min-height: 6em;
+  }
+}

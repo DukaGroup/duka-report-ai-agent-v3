@@ -7,6 +7,7 @@ import {
   Play,
   RefreshCw,
 } from "lucide-react";
+import { ErrorNotice } from "./ErrorNotice";
 import { api } from "./api";
 import { IconButton } from "./IconButton";
 import { errorMessage } from "./locale";
@@ -185,9 +186,9 @@ export function SystemLogsPanel({ eventId }: { eventId?: number }) {
         </label>
       </div>
       {error && (
-        <p role="alert" className="error">
+        <ErrorNotice className="error" onDismiss={() => setError("")}>
           {error}
-        </p>
+        </ErrorNotice>
       )}
       <div className="table-scroll">
         <table>

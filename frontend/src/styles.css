@@ -579,56 +579,6 @@ select:focus {
   line-height: 1.9;
   margin-bottom: 8px;
 }
-.suggestions {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  text-align: left;
-}
-.suggestions button {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  position: relative;
-  background: var(--surface);
-  border: 1px solid var(--surface-tint);
-  border-radius: 9px;
-  text-align: left;
-  padding: 18px 15px;
-  min-height: 146px;
-  color: var(--muted);
-}
-.suggestions button:hover {
-  border-color: var(--muted);
-  background: var(--surface-soft);
-}
-.suggestions button strong {
-  font-size: 0.875rem;
-  color: var(--ink);
-  margin: 14px 0 8px;
-  font-weight: 550;
-}
-.suggestions button span {
-  font-size: 0.8125rem;
-  color: var(--muted);
-  line-height: 1.6;
-  max-width: 140px;
-}
-.suggestions button > svg:last-child {
-  position: absolute;
-  right: 12px;
-  bottom: 14px;
-  width: 13px;
-}
-.welcome-note {
-  margin-top: 25px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
 .text-button {
   font-size: 0.8125rem;
   font-weight: 550;
@@ -2002,16 +1952,6 @@ textarea {
   .chat-welcome > p {
     font-size: 1.0625rem;
   }
-  .suggestions button {
-    min-height: 165px;
-    padding: 22px 19px;
-  }
-  .suggestions button strong {
-    font-size: 0.9375rem;
-  }
-  .suggestions button span {
-    font-size: 0.875rem;
-  }
   .composer-wrap {
     padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
@@ -2132,41 +2072,10 @@ textarea {
   .chat-welcome > p {
     font-size: 0.875rem;
   }
-  .suggestions {
-    grid-template-columns: 1fr;
-    gap: 9px;
-  }
-  .suggestions button {
-    min-height: 0;
-    padding: 13px 35px 13px 42px;
-    display: block;
-  }
-  .suggestions button > svg:first-child {
-    position: absolute;
-    left: 14px;
-    top: 17px;
-    width: 17px;
-  }
-  .suggestions button strong {
-    display: block;
-    margin: 0 0 5px;
-    font-size: 0.8125rem;
-  }
-  .suggestions button span {
-    font-size: 0.75rem;
-    max-width: none;
-  }
-  .suggestions button > svg:last-child {
-    bottom: 23px;
-  }
   .welcome-symbol {
     width: 48px;
     height: 48px;
     margin-bottom: 18px;
-  }
-  .welcome-note {
-    margin-top: 18px;
-    font-size: 0.75rem;
   }
   .composer-wrap {
     padding: 7px 13px max(10px, env(safe-area-inset-bottom));
@@ -2350,16 +2259,6 @@ textarea {
   .chat-welcome > p {
     font-size: 0.875rem;
     margin-bottom: 18px;
-  }
-  .suggestions button {
-    min-height: 120px;
-    padding: 14px;
-  }
-  .suggestions button strong {
-    margin: 10px 0 6px;
-  }
-  .welcome-note {
-    margin-top: 15px;
   }
 }
 
@@ -4565,5 +4464,68 @@ textarea {
   }
   .global-search-results {
     max-height: calc(50vh / var(--ui-zoom, 1));
+  }
+}
+
+/* Errors close themselves after ten seconds (ErrorNotice). */
+.error-notice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  overflow: hidden;
+}
+.error-notice-body {
+  flex: 1;
+  min-width: 0;
+}
+.workbook-preview-error .error-notice-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.error-notice-close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin: -3px -4px -3px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+}
+.error-notice-close:hover,
+.error-notice-close:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.error-notice-timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: currentColor;
+  opacity: 0.35;
+  transform-origin: left;
+  animation: error-countdown var(--error-timeout, 10s) linear forwards;
+}
+.error-notice.is-paused .error-notice-timer {
+  animation-play-state: paused;
+}
+@keyframes error-countdown {
+  to {
+    transform: scaleX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .error-notice-timer {
+    display: none;
   }
 }

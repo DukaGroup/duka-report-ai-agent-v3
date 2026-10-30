@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import {
   ArrowDownToLine,
@@ -32,6 +32,7 @@ import {
   ShieldX,
   X,
 } from "lucide-react";
+import { ErrorNotice } from "./ErrorNotice";
 import { GlobalSearch } from "./GlobalSearch";
 import { ChatScrollFollower } from "./chatScroll";
 import HanaIntro, { type IntroMode } from "./HanaIntro";
@@ -164,6 +165,7 @@ function Modal({
   children,
   onClose,
   error,
+  onDismissError,
   className,
   dismissOnBackdrop = true,
 }: {
@@ -171,6 +173,7 @@ function Modal({
   children: ReactNode;
   onClose: () => void;
   error?: string;
+  onDismissError?: () => void;
   className?: string;
   dismissOnBackdrop?: boolean;
 }) {
@@ -200,11 +203,7 @@ function Modal({
             <X size={20} />
           </button>
         </div>
-        {error && (
-          <p className="error-box" role="alert">
-            {error}
-          </p>
-        )}
+        {error && <ErrorNotice onDismiss={onDismissError}>{error}</ErrorNotice>}
         {children}
       </section>
     </div>
@@ -376,9 +375,7 @@ function Auth({
                 </button>
               </div>
               {error && (
-                <p className="error-box" role="alert">
-                  {error}
-                </p>
+                <ErrorNotice onDismiss={() => setError("")}>{error}</ErrorNotice>
               )}
               <button
                 type="submit"
@@ -424,7 +421,6 @@ function firstOpening() {
   return true;
 }
 const SIGN_IN_SLOT = ".auth-hana-slot";
-const SIGNED_OUT_KEY = "duka.signedOut";
 const VIEW_KEY = "duka.view";
 
 // Where the member is in the workspace, so a refresh reopens the same page.
@@ -451,24 +447,13 @@ function saveView(view: SavedView) {
   }
 }
 
-// Signing out marks this tab, so signing back in while it is still open plays
-// the intro again. A freshly opened tab starts unmarked: its moonrise has
-// already played before the sign-in page.
+// Signing out forgets the saved page, so signing back in starts at home.
+// The moonrise does not play again: it belongs to opening the app.
 function markSignedOut() {
   try {
-    sessionStorage.setItem(SIGNED_OUT_KEY, "1");
     sessionStorage.removeItem(VIEW_KEY);
   } catch {
-    // Without storage, signing back in simply skips the intro.
-  }
-}
-function returningAfterSignOut() {
-  try {
-    if (!sessionStorage.getItem(SIGNED_OUT_KEY)) return false;
-    sessionStorage.removeItem(SIGNED_OUT_KEY);
-    return true;
-  } catch {
-    return false;
+    // Without storage a refresh simply starts on the home page.
   }
 }
 
@@ -570,6 +555,9 @@ export default function App() {
       });
   }
   const hanaArriving = Boolean(intro?.dock);
+  // After signing in, Hana presents herself once on the home page.
+  const [presentHome, setPresentHome] = useState(false);
+  const presented = useCallback(() => setPresentHome(false), []);
   let page: ReactNode;
   if (loading) page = <div className="opening-sky" aria-busy="true" />;
   else if (error && !user)
@@ -595,13 +583,11 @@ export default function App() {
         onDone={(u) => {
           setUser(u);
           setSetup(false);
-          const returning = returningAfterSignOut();
+          setPresentHome(true);
           setIntro(
             u.intro_pending
               ? { mode: "presentation", name: u.name, dock: HOME_SLOT }
-              : returning
-                ? { mode: "greeting", name: u.name, dock: HOME_SLOT }
-                : null,
+              : null,
           );
         }}
       />
@@ -626,6 +612,8 @@ export default function App() {
           onShowIntro={() =>
             setIntro({ mode: "presentation", name: user.name })
           }
+          present={presentHome}
+          onPresented={presented}
         />
       </>
     );
@@ -663,12 +651,17 @@ function Workspace({
   onLogout,
   onGoodbye,
   onShowIntro,
+  present,
+  onPresented,
 }: {
   user: User;
   hanaArriving: boolean;
   onLogout: () => void;
   onGoodbye: () => void;
   onShowIntro: () => void;
+  // Just signed in: Hana presents what she does on the home page.
+  present: boolean;
+  onPresented: () => void;
 }) {
   const isDev = user.role === "devs";
   const canManageMembers = isDev || user.role === "president";
@@ -2799,17 +2792,9 @@ function Workspace({
           </div>
         )}
         {error && (
-          <div className="global-error" role="alert">
-            <span>{error}</span>
-            <button
-              className="icon-button"
-              aria-label="Mbyll gabimin"
-              data-tooltip="Mbyll gabimin"
-              onClick={() => setError("")}
-            >
-              <X size={17} />
-            </button>
-          </div>
+          <ErrorNotice className="global-error" onDismiss={() => setError("")}>
+            {error}
+          </ErrorNotice>
         )}
         {page === "home" && (
           <HomePage
@@ -2830,6 +2815,8 @@ function Workspace({
             }}
             conversationRunning={conversationRunning}
             hanaArriving={hanaArriving}
+            present={present}
+            onPresented={onPresented}
           />
         )}
         {page === "conversations" && (
@@ -3008,47 +2995,6 @@ function Workspace({
                       {" "}
                       Një pyetje për <br /> një pamje më të qartë.{" "}
                     </h1>
-                    <div className="suggestions">
-                      {[
-                        {
-                          icon: MessageSquare,
-                          title: "Nis një bisedë",
-                          text: "Më ndihmo me një pyetje biznesi.",
-                          prompt:
-                            "Përshëndetje! Më ndihmo të analizoj një pyetje biznesi.",
-                        },
-                        {
-                          icon: FileText,
-                          title: "Përgatit një raport",
-                          text: "Planifikojmë së bashku një raport drejtues.",
-                          prompt:
-                            "Më ndihmo të planifikoj një raport drejtues. Çfarë të dhënash duhen?",
-                        },
-                        {
-                          icon: Database,
-                          title: "Eksploro të dhënat",
-                          text: "Çfarë mund të mësojmë nga të dhënat tona?",
-                          prompt:
-                            "Zbulo tabelat e databazës dhe më sugjero raporte të dobishme që mund të krijojmë.",
-                        },
-                      ].map((s) => (
-                        <button
-                          key={s.title}
-                          onClick={() => setDraft(s.prompt)}
-                        >
-                          <s.icon size={20} />
-                          <strong>{s.title}</strong>
-                          <span>{s.text}</span>
-                          <ArrowRight size={16} />
-                        </button>
-                      ))}
-                    </div>
-                    {isDev && (
-                      <div className="welcome-note">
-                        <ShieldCheck size={15} /> Mundësuar nga abonimi i
-                        përbashkët {providerName}.
-                      </div>
-                    )}
                   </section>
                 ) : (
                   <div className="messages">
@@ -3640,10 +3586,10 @@ function Workspace({
                       </p>
                     </section>
                     {!subscription.available && (
-                      <p className="error-box">
+                      <ErrorNotice>
                         {errorMessage(subscription.error || "")} Lidhja do të
                         provohet përsëri automatikisht sapo rrjeti të jetë gati.
-                      </p>
+                      </ErrorNotice>
                     )}
                     <section className="panel">{reasoningControl}</section>
                     <div className="info-grid">
@@ -4517,6 +4463,7 @@ function Workspace({
         <Modal
           title={`Databazat: ${databaseBrowser.name}`}
           error={error}
+          onDismissError={() => setError("")}
           onClose={() => setDatabaseBrowser(null)}
         >
           <p className="footnote">
@@ -4560,6 +4507,7 @@ function Workspace({
         <Modal
           title="Të hiqet lidhja?"
           error={error}
+          onDismissError={() => setError("")}
           onClose={() => {
             if (!sourceActions[deleteSource.id]) setDeleteSource(null);
           }}
@@ -4594,6 +4542,7 @@ function Workspace({
         <Modal
           title="Të hiqet anëtari?"
           error={error}
+          onDismissError={() => setError("")}
           onClose={() => {
             if (!removingMember) setDeleteMember(null);
           }}
@@ -4636,6 +4585,7 @@ function Workspace({
           title={report.title}
           onClose={closeReport}
           error={error}
+          onDismissError={() => setError("")}
           className="report-preview-modal"
         >
           <section className="report-detail">
@@ -4671,9 +4621,7 @@ function Workspace({
               </IconButton>
             </div>
             {report.error && (
-              <p className="error-box">
-                {userError(report.error || "", isDev)}
-              </p>
+              <ErrorNotice>{userError(report.error || "", isDev)}</ErrorNotice>
             )}
             {report.status === "completed" && (
               <ReportWorkbookPreview
@@ -4770,6 +4718,7 @@ function Workspace({
       {login && (
         <Modal
           error={error}
+          onDismissError={() => setError("")}
           title={`Lidhni llogarinë ${login.provider === "claude" ? "Claude" : "ChatGPT"}`}
           onClose={() => setLogin(null)}
         >
@@ -4838,6 +4787,7 @@ function Workspace({
       {deleteChat && (
         <Modal
           error={error}
+          onDismissError={() => setError("")}
           title="Të fshihet përgjithmonë biseda?"
           dismissOnBackdrop={false}
           onClose={() => {
@@ -4873,6 +4823,7 @@ function Workspace({
       {conversationDeleteRequest && (
         <Modal
           error={error}
+          onDismissError={() => setError("")}
           title="Të fshihen përgjithmonë bisedat?"
           dismissOnBackdrop={false}
           onClose={() => {
@@ -4908,6 +4859,7 @@ function Workspace({
         <Modal
           title="Të fshihet raporti?"
           error={error}
+          onDismissError={() => setError("")}
           onClose={() => {
             if (!deletingReport) setDeleteReport(null);
           }}
@@ -4943,6 +4895,7 @@ function Workspace({
               : "Të fshihen raportet e zgjedhura?"
           }
           error={error}
+          onDismissError={() => setError("")}
           dismissOnBackdrop={false}
           onClose={() => {
             if (!deletingSelectedReports) setReportDeleteRequest(null);
@@ -4982,6 +4935,7 @@ function Workspace({
         <Modal
           dismissOnBackdrop={false}
           error={error}
+          onDismissError={() => setError("")}
           title="Shto një anëtar"
           onClose={() => {
             if (!savingAdmin) setAddUser(false);
@@ -5039,6 +4993,7 @@ function Workspace({
         <Modal
           title={`Qasja: ${accessMember.name}`}
           error={error}
+          onDismissError={() => setError("")}
           onClose={() => {
             if (!savingAccess) setAccessMember(null);
           }}
@@ -5073,6 +5028,7 @@ function Workspace({
       {sourceAccess && (
         <Modal
           error={error}
+          onDismissError={() => setError("")}
           title={`Qasja në databazë: ${sourceAccess.name}`}
           onClose={() => setSourceAccess(null)}
         >
@@ -5113,6 +5069,7 @@ function Workspace({
           className="source-config-modal"
           dismissOnBackdrop={false}
           error={error}
+          onDismissError={() => setError("")}
           title={
             editSource
               ? "Konfiguro burimin e të dhënave"
@@ -5160,6 +5117,7 @@ function Workspace({
       {addDataset && (
         <Modal
           error={error}
+          onDismissError={() => setError("")}
           title="Përcakto një dataset opsional"
           onClose={() => {
             if (!savingAdmin) setAddDataset(false);
@@ -5229,6 +5187,7 @@ function Workspace({
       {grant && (
         <Modal
           error={error}
+          onDismissError={() => setError("")}
           title={`Jep qasje te ${grant.name}`}
           onClose={() => setGrant(null)}
         >

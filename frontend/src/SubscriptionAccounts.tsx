@@ -9,6 +9,7 @@ import {
   Unplug,
   X,
 } from "lucide-react";
+import { ErrorNotice } from "./ErrorNotice";
 import { api } from "./api";
 import type { Login, Provider } from "./types";
 import { Select } from "./Select";
@@ -122,11 +123,7 @@ export function SubscriptionAccounts({
         automatikisht; pa një abonim të përdorshëm, përgjigjja ndalet me një
         mesazh gabimi.
       </p>
-      {error && (
-        <p role="alert" className="error-box">
-          {error}
-        </p>
-      )}
+      {error && <ErrorNotice onDismiss={() => setError("")}>{error}</ErrorNotice>}
       {(["chatgpt", "claude"] as Provider[]).map((provider) => (
         <section
           className="panel"

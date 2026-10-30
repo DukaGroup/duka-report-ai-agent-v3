@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   RotateCcw,
 } from "lucide-react";
+import { ErrorNotice } from "./ErrorNotice";
 import { api } from "./api";
 import { SERVICE_UNAVAILABLE } from "./locale";
 
@@ -335,14 +336,18 @@ export function ReportWorkbookPreview({ reportId, technical = false }: { reportI
           <textarea aria-label="Përmbajtja e plotë e qelizës" readOnly value={selectedCell?.raw || ""} rows={1} />
         </div>
       )}
-      {addressError && <p className="workbook-address-error" role="alert">{addressError}</p>}
+      {addressError && (
+        <ErrorNotice className="workbook-address-error" onDismiss={() => setAddressError("")}>
+          {addressError}
+        </ErrorNotice>
+      )}
       {error && (
-        <div className="workbook-preview-error" role="alert">
+        <ErrorNotice className="workbook-preview-error" onDismiss={() => setError("")}>
           <span>{technical ? error : SERVICE_UNAVAILABLE}</span>
           <button type="button" className="button outline small" onClick={() => setRetry((n) => n + 1)}>
             <RotateCcw size={15} /> Provo përsëri
           </button>
-        </div>
+        </ErrorNotice>
       )}
       {loading && <div className="workbook-preview-loading" role="status"><LoaderCircle size={20} className="spin" /> Po hapet fleta…</div>}
       {!loading && !error && sheet && visible && (

@@ -341,36 +341,6 @@
 }
 
 /* ---------- Chat ---------- */
-.chat-welcome .suggestions button {
-  position: relative;
-  border-radius: 18px;
-  background: var(--glass);
-  border: 1px solid var(--glass-edge);
-  backdrop-filter: blur(10px);
-  box-shadow: var(--soft-shadow);
-  transition:
-    transform 0.3s var(--ease-out),
-    box-shadow 0.3s,
-    border-color 0.3s;
-}
-.chat-welcome .suggestions button:hover {
-  transform: translateY(-5px);
-  border-color: rgba(107, 92, 255, 0.45);
-  box-shadow: var(--lift-shadow);
-}
-.chat-welcome .suggestions button > svg:first-child {
-  width: 38px;
-  height: 38px;
-  padding: 9px;
-  border-radius: 12px;
-  background: var(--accent-grad);
-  color: #fff;
-  box-shadow: 0 8px 18px -8px rgba(80, 110, 255, 0.9);
-  transition: transform 0.35s var(--ease-spring);
-}
-.chat-welcome .suggestions button:hover > svg:first-child {
-  transform: rotate(-8deg) scale(1.08);
-}
 .welcome-symbol {
   border: 0;
   box-shadow:

@@ -17,6 +17,7 @@ test-results/
 outputs/
 *.duka-backup
 *.backup-key
+./docs/ai-harness-guide.md
 # Deployment certificate material stays outside the GitHub source checkout.
 *.key
 *.pem

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   FileText,
@@ -23,9 +23,32 @@ function greeting(name: string) {
   return `${salutation}, ${name.trim().split(/\s+/)[0]}! Si mund t'ju ndihmoj sot?`;
 }
 
+/** What Hana says, one sentence after another, right after signing in. */
+function introduction(name: string) {
+  const first = name.trim().split(/\s+/)[0];
+  return [
+    `Përshëndetje, ${first}! Unë jam Hana, asistentja juaj për të dhënat e Duka Group.`,
+    "Ju përgjigjem në shqip për shitjet, bilancet, klientët dhe furnitorët e kompanive ku keni qasje.",
+    "Llogaris totale e krahasime me saktësi dhe krijoj raporte Excel me tabela e grafikë.",
+    "Lexoj edhe skedarët që më dërgoni: Excel, CSV, PDF ose Word.",
+    `Me çfarë mund të të ndihmoj sot, ${first}?`,
+  ];
+}
+
+// Her breath between two sentences.
+const SENTENCE_PAUSE = 450;
+// Without speech (reduced motion) each sentence stays long enough to read.
+const READING_PACE = 55;
+
+const reducedMotion = () =>
+  typeof window !== "undefined" &&
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
 /**
  * The workspace landing page. Hana speaks once each time the page is opened;
  * while her introduction is still flying in (`hanaArriving`) she waits.
+ * With `present` (just signed in) she introduces herself instead, sentence by
+ * sentence, and ends by asking how she can help. Later visits only greet.
  */
 export function HomePage({
   user,
@@ -40,6 +63,8 @@ export function HomePage({
   onDeleteConversation,
   conversationRunning,
   hanaArriving = false,
+  present = false,
+  onPresented,
 }: {
   user: User;
   conversations: Conversation[];
@@ -53,8 +78,38 @@ export function HomePage({
   onDeleteConversation: (conversation: Conversation) => void;
   conversationRunning: (id: string) => boolean;
   hanaArriving?: boolean;
+  present?: boolean;
+  onPresented?: () => void;
 }) {
-  const line = useMemo(() => greeting(user.name), [user.name]);
+  const greetingLine = useMemo(() => greeting(user.name), [user.name]);
+  const sentences = useMemo(() => introduction(user.name), [user.name]);
+  const still = useMemo(reducedMotion, []);
+  // Just signed in, she introduces herself instead of the usual greeting.
+  const [sentence, setSentence] = useState<number | null>(present ? 0 : null);
+  const [said, setSaid] = useState(0);
+  const line = sentence === null ? greetingLine : sentences[sentence];
+
+  // Shown once per sign-in; the owner forgets the request once it is taken.
+  useEffect(() => {
+    if (present) onPresented?.();
+  }, [present, onPresented]);
+
+  // When she has finished a sentence, she goes on to the next one.
+  useEffect(() => {
+    if (sentence === null || sentence === sentences.length - 1) return;
+    if (said < sentences[sentence].length) return;
+    const timer = window.setTimeout(
+      () => {
+        setSaid(0);
+        setSentence(sentence + 1);
+      },
+      still
+        ? sentences[sentence].length * READING_PACE
+        : SENTENCE_PAUSE,
+    );
+    return () => clearTimeout(timer);
+  }, [sentence, said, sentences, still]);
+
   return (
     <main className="home-page">
       <div className="home-content">
@@ -129,10 +184,25 @@ export function HomePage({
             <HanaSlot
               className="home-portrait"
               line={line}
-              delay={180}
+              delay={sentence ? 120 : 180}
               awaiting={hanaArriving}
+              onProgress={sentence === null ? undefined : setSaid}
             />
-            <p className={hanaArriving ? "is-waiting" : undefined}>{line}</p>
+            {sentence === null ? (
+              <p className={hanaArriving ? "is-waiting" : undefined}>{line}</p>
+            ) : (
+              <p
+                className={`home-speech${hanaArriving ? " is-waiting" : ""}`}
+                aria-live="polite"
+              >
+                <span key={sentence}>
+                  {line.slice(0, said)}
+                  <span className="home-unsaid" aria-hidden="true">
+                    {line.slice(said)}
+                  </span>
+                </span>
+              </p>
+            )}
           </section>
         </div>
         <footer className="home-footer">
